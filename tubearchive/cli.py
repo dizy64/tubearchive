@@ -10,6 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from tubearchive import __version__
 from tubearchive.core.detector import detect_metadata
 from tubearchive.core.merger import Merger
 from tubearchive.core.scanner import scan_videos
@@ -85,7 +86,7 @@ def create_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog="tubearchive",
-        description="다양한 기기의 4K 영상을 표준화하여 병합합니다.",
+        description=f"다양한 기기의 4K 영상을 표준화하여 병합합니다. (v{__version__})",
         epilog=(
             "예시:\n"
             "  tubearchive video1.mp4 video2.mov -o merged.mp4  # 병합\n"
@@ -93,6 +94,12 @@ def create_parser() -> argparse.ArgumentParser:
             "  tubearchive --upload-only merged.mp4             # 업로드만"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "-V", "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
 
     parser.add_argument(
