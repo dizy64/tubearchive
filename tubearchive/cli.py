@@ -9,6 +9,7 @@ from pathlib import Path
 from tubearchive.core.merger import Merger
 from tubearchive.core.scanner import scan_videos
 from tubearchive.core.transcoder import Transcoder
+from tubearchive.utils.progress import MultiProgressBar
 
 logger = logging.getLogger(__name__)
 
@@ -158,13 +159,18 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     # 2. 트랜스코딩
     logger.info("Starting transcoding...")
     transcoded_paths: list[Path] = []
+    progress = MultiProgressBar(total_files=len(video_files))
 
     with Transcoder() as transcoder:
         for vf in video_files:
-            logger.info(f"Transcoding: {vf.path.name}")
+            progress.start_file(vf.path.name)
+
+            def on_progress(percent: int) -> None:
+                progress.update_file_progress(percent)
+
             output_path = transcoder.transcode_video(vf)
             transcoded_paths.append(output_path)
-            logger.info(f"  -> {output_path.name}")
+            progress.finish_file()
 
     # 3. 병합
     logger.info("Merging videos...")
