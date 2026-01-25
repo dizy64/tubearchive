@@ -7,6 +7,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 from tubearchive.ffmpeg.profiles import EncodingProfile
+from tubearchive.utils.progress import ProgressInfo
+
+# 콜백 타입: 기존 (int) 또는 새로운 (ProgressInfo)
+ProgressCallback = Callable[[int], None] | Callable[[ProgressInfo], None]
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +174,7 @@ class FFmpegExecutor:
         cmd: list[str],
         total_duration: float,
         progress_callback: Callable[[int], None] | None = None,
+        progress_info_callback: Callable[[ProgressInfo], None] | None = None,
     ) -> None:
         """
         FFmpeg 명령 실행.
@@ -177,7 +182,8 @@ class FFmpegExecutor:
         Args:
             cmd: FFmpeg 명령어 리스트
             total_duration: 영상 전체 길이 (초)
-            progress_callback: 진행률 콜백 (0-100)
+            progress_callback: 진행률 콜백 (0-100), 하위 호환용
+            progress_info_callback: 상세 진행률 콜백 (ProgressInfo)
 
         Raises:
             FFmpegError: FFmpeg 실행 실패
@@ -199,12 +205,23 @@ class FFmpegExecutor:
                 stderr_lines.append(line)
                 progress = parse_progress_line(line)
 
-                if progress and progress_callback and total_duration > 0:
+                if progress and total_duration > 0:
                     percent = self.calculate_progress_percent(
                         progress["time_seconds"],
                         total_duration,
                     )
-                    progress_callback(percent)
+
+                    # 새로운 상세 콜백 우선
+                    if progress_info_callback:
+                        info = ProgressInfo(
+                            percent=percent,
+                            current_time=progress["time_seconds"],
+                            total_duration=total_duration,
+                            fps=progress.get("fps", 0.0),
+                        )
+                        progress_info_callback(info)
+                    elif progress_callback:
+                        progress_callback(percent)
 
         # 프로세스 완료 대기
         return_code = process.wait()

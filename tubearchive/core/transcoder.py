@@ -17,6 +17,7 @@ from tubearchive.ffmpeg.executor import FFmpegError, FFmpegExecutor
 from tubearchive.ffmpeg.profiles import PROFILE_SDR, get_fallback_profile
 from tubearchive.models.job import JobStatus
 from tubearchive.models.video import VideoFile
+from tubearchive.utils.progress import ProgressInfo
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class Transcoder:
         target_width: int = 3840,
         target_height: int = 2160,
         fade_duration: float = 0.5,
+        progress_info_callback: Callable[[ProgressInfo], None] | None = None,
     ) -> tuple[Path, int]:
         """
         단일 영상 트랜스코딩.
@@ -65,6 +67,7 @@ class Transcoder:
             target_width: 타겟 너비
             target_height: 타겟 높이
             fade_duration: 페이드 지속 시간
+            progress_info_callback: 상세 진행률 콜백 (UI 업데이트용)
 
         Returns:
             (트랜스코딩된 파일 경로, video_id) 튜플
@@ -131,9 +134,15 @@ class Transcoder:
             color_transfer=metadata.color_transfer,
         )
 
-        # 진행률 콜백
+        # 진행률 콜백 (DB 저장용)
         def on_progress(percent: int) -> None:
             self.resume_mgr.save_progress(job_id, percent)
+
+        # 상세 진행률 콜백 (UI + DB)
+        def on_progress_info(info: ProgressInfo) -> None:
+            self.resume_mgr.save_progress(job_id, info.percent)
+            if progress_info_callback:
+                progress_info_callback(info)
 
         # 트랜스코딩 실행
         try:
@@ -158,7 +167,15 @@ class Transcoder:
                     seek_start=seek_start,
                 )
 
-            self.executor.run(cmd, metadata.duration_seconds, on_progress)
+            # UI 콜백이 있으면 상세 정보 사용, 없으면 기존 방식
+            if progress_info_callback:
+                self.executor.run(
+                    cmd,
+                    metadata.duration_seconds,
+                    progress_info_callback=on_progress_info,
+                )
+            else:
+                self.executor.run(cmd, metadata.duration_seconds, on_progress)
             self.job_repo.mark_completed(job_id, output_path)
             logger.info(f"Transcoding completed: {output_path}")
 
@@ -177,7 +194,8 @@ class Transcoder:
                     video_filter,
                     audio_filter,
                     seek_start,
-                    on_progress,
+                    on_progress if not progress_info_callback else None,
+                    on_progress_info if progress_info_callback else None,
                 )
             else:
                 self.job_repo.mark_failed(job_id, str(e))
@@ -193,7 +211,8 @@ class Transcoder:
         video_filter: str,
         audio_filter: str,
         seek_start: float | None,
-        on_progress: Callable[[int], None],
+        on_progress: Callable[[int], None] | None,
+        on_progress_info: Callable[[ProgressInfo], None] | None = None,
     ) -> tuple[Path, int]:
         """libx265 폴백 트랜스코딩."""
 
@@ -220,7 +239,14 @@ class Transcoder:
                     seek_start=seek_start,
                 )
 
-            self.executor.run(cmd, metadata.duration_seconds, on_progress)
+            if on_progress_info:
+                self.executor.run(
+                    cmd,
+                    metadata.duration_seconds,
+                    progress_info_callback=on_progress_info,
+                )
+            else:
+                self.executor.run(cmd, metadata.duration_seconds, on_progress)
             self.job_repo.mark_completed(job_id, output_path)
             logger.info(f"Fallback transcoding completed: {output_path}")
 

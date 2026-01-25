@@ -22,7 +22,7 @@ from tubearchive.core.transcoder import Transcoder
 from tubearchive.database.repository import MergeJobRepository
 from tubearchive.database.schema import init_database
 from tubearchive.models.video import VideoFile
-from tubearchive.utils.progress import MultiProgressBar
+from tubearchive.utils.progress import MultiProgressBar, ProgressInfo
 from tubearchive.utils.summary_generator import generate_single_file_description
 
 logger = logging.getLogger(__name__)
@@ -584,7 +584,14 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
             for i, vf in enumerate(video_files):
                 progress.start_file(vf.path.name)
 
-                output_path, video_id = transcoder.transcode_video(vf)
+                # 상세 진행률 콜백
+                def on_progress_info(info: ProgressInfo) -> None:
+                    progress.update_with_info(info)
+
+                output_path, video_id = transcoder.transcode_video(
+                    vf,
+                    progress_info_callback=on_progress_info,
+                )
 
                 # 메타데이터 수집 (Summary용)
                 try:
@@ -811,15 +818,23 @@ def upload_to_youtube(
         file_size_bytes = file_path.stat().st_size
         file_size_mb = file_size_bytes / (1024 * 1024)
         bar_width = 30
+        last_percent = -1
 
         def on_progress(percent: int) -> None:
+            nonlocal last_percent
+            if percent == last_percent:
+                return  # 중복 업데이트 방지
+            last_percent = percent
+
             filled = int(bar_width * percent / 100)
             bar = "█" * filled + "░" * (bar_width - filled)
             uploaded_mb = file_size_mb * percent / 100
-            msg = f"\r📤 업로드: [{bar}] {percent:3d}% ({uploaded_mb:.1f} / {file_size_mb:.1f} MB)"
-            print(msg, end="", flush=True)
+            # 줄 전체를 지우고 다시 출력
+            sys.stdout.write(f"\r\033[K📤 업로드: [{bar}] {percent:3d}% ({uploaded_mb:.1f} / {file_size_mb:.1f} MB)")
+            sys.stdout.flush()
             if percent >= 100:
-                print()  # 완료 시 줄바꿈
+                sys.stdout.write("\n")
+                sys.stdout.flush()
 
         result = uploader.upload(
             file_path=file_path,
