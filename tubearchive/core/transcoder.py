@@ -116,11 +116,10 @@ class Transcoder:
         self.job_repo.update_status(job_id, JobStatus.PROCESSING)
         self.resume_mgr.set_temp_file(job_id, output_path)
 
-        # 프로파일 선택
+        # 프로파일 선택 (메타데이터 기반)
         profile = select_profile(
-            metadata.device_model,
-            metadata.color_transfer,
-            metadata.color_space,
+            color_transfer=metadata.color_transfer,
+            color_space=metadata.color_space,
         )
         logger.info(f"Using profile: {profile.name}")
 

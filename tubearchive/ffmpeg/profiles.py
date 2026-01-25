@@ -1,4 +1,4 @@
-"""기기별 FFmpeg 인코딩 프로파일."""
+"""메타데이터 기반 FFmpeg 인코딩 프로파일."""
 
 from dataclasses import dataclass
 
@@ -41,36 +41,15 @@ class EncodingProfile:
         return args
 
 
-# 기본 4K HEVC VideoToolbox 프로파일 (10-bit 통일)
-PROFILE_4K_HEVC_VT = EncodingProfile(
-    name="4K HEVC VideoToolbox",
+# =============================================================================
+# 메타데이터 기반 프로파일 (디바이스 무관)
+# =============================================================================
+
+# SDR 프로파일 (BT.709)
+PROFILE_SDR = EncodingProfile(
+    name="SDR (BT.709)",
     video_codec="hevc_videotoolbox",
     video_bitrate="50M",
-    pixel_format="p010le",
-    audio_codec="aac",
-    audio_bitrate="256k",
-    extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
-)
-
-# Nikon N-Log (Rec.2020, HDR, 10-bit)
-PROFILE_NIKON_NLOG = EncodingProfile(
-    name="Nikon N-Log",
-    video_codec="hevc_videotoolbox",
-    video_bitrate="50M",
-    pixel_format="p010le",
-    audio_codec="aac",
-    audio_bitrate="256k",
-    color_primaries="bt2020",
-    color_transfer="smpte2084",
-    color_space="bt2020nc",
-    extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
-)
-
-# iPhone (SDR, Rec.709, 10-bit로 변환하여 통일)
-PROFILE_IPHONE = EncodingProfile(
-    name="iPhone",
-    video_codec="hevc_videotoolbox",
-    video_bitrate="40M",
     pixel_format="p010le",
     audio_codec="aac",
     audio_bitrate="256k",
@@ -80,29 +59,35 @@ PROFILE_IPHONE = EncodingProfile(
     extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
 )
 
-# GoPro (SDR, Rec.709, 10-bit로 변환하여 통일)
-PROFILE_GOPRO = EncodingProfile(
-    name="GoPro",
+# HDR HLG 프로파일 (BT.2020 + HLG)
+PROFILE_HDR_HLG = EncodingProfile(
+    name="HDR HLG (BT.2020)",
     video_codec="hevc_videotoolbox",
     video_bitrate="50M",
     pixel_format="p010le",
     audio_codec="aac",
     audio_bitrate="256k",
+    color_primaries="bt2020",
+    color_transfer="arib-std-b67",  # HLG
+    color_space="bt2020nc",
     extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
 )
 
-# DJI (SDR, Rec.709, 10-bit로 변환하여 통일)
-PROFILE_DJI = EncodingProfile(
-    name="DJI",
+# HDR PQ 프로파일 (BT.2020 + PQ/HDR10)
+PROFILE_HDR_PQ = EncodingProfile(
+    name="HDR PQ (BT.2020)",
     video_codec="hevc_videotoolbox",
     video_bitrate="50M",
     pixel_format="p010le",
     audio_codec="aac",
     audio_bitrate="256k",
+    color_primaries="bt2020",
+    color_transfer="smpte2084",  # PQ
+    color_space="bt2020nc",
     extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
 )
 
-# libx265 폴백 (VideoToolbox 실패 시, 10-bit)
+# libx265 폴백 (VideoToolbox 실패 시)
 PROFILE_FALLBACK_LIBX265 = EncodingProfile(
     name="libx265 Fallback",
     video_codec="libx265",
@@ -115,43 +100,35 @@ PROFILE_FALLBACK_LIBX265 = EncodingProfile(
 
 
 def select_profile(
-    device_model: str | None,
     color_transfer: str | None,
     color_space: str | None,
 ) -> EncodingProfile:
     """
-    기기 모델과 컬러 정보를 기반으로 프로파일 선택.
+    영상 메타데이터를 기반으로 프로파일 선택.
+
+    디바이스에 상관없이 영상의 실제 색공간 특성에 맞는 프로파일을 반환합니다.
 
     Args:
-        device_model: 기기 모델명
-        color_transfer: 컬러 전송 특성
-        color_space: 컬러 스페이스
+        color_transfer: 컬러 전송 특성 (예: bt709, arib-std-b67, smpte2084)
+        color_space: 컬러 스페이스 (예: bt709, bt2020nc)
 
     Returns:
         적합한 EncodingProfile
     """
-    device_upper = (device_model or "").upper()
+    # HDR HLG 감지 (아이폰 HDR, 일부 카메라)
+    if color_transfer == "arib-std-b67":
+        return PROFILE_HDR_HLG
 
-    # Nikon N-Log 감지 (HDR)
-    if "NIKON" in device_upper:
-        if color_transfer == "smpte2084" or color_space == "bt2020nc":
-            return PROFILE_NIKON_NLOG
-        return PROFILE_4K_HEVC_VT
+    # HDR PQ/HDR10 감지 (Nikon N-Log, Sony S-Log, 일부 HDR 카메라)
+    if color_transfer == "smpte2084":
+        return PROFILE_HDR_PQ
 
-    # iPhone 감지
-    if "IPHONE" in device_upper:
-        return PROFILE_IPHONE
+    # BT.2020 색공간이지만 transfer가 불명확한 경우 → HLG로 처리
+    if color_space in ("bt2020nc", "bt2020c"):
+        return PROFILE_HDR_HLG
 
-    # GoPro 감지
-    if "GOPRO" in device_upper:
-        return PROFILE_GOPRO
-
-    # DJI 감지
-    if "DJI" in device_upper:
-        return PROFILE_DJI
-
-    # 기본 프로파일
-    return PROFILE_4K_HEVC_VT
+    # 기본값: SDR (BT.709)
+    return PROFILE_SDR
 
 
 def get_fallback_profile() -> EncodingProfile:

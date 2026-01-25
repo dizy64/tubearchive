@@ -1,0 +1,67 @@
+"""pytest 설정 및 공통 fixture."""
+
+import os
+import tempfile
+from pathlib import Path
+from typing import Generator
+
+import pytest
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolate_test_database() -> Generator[Path, None, None]:
+    """
+    테스트용 DB 격리.
+
+    pytest 실행 시 자동으로 임시 DB 경로를 설정하여
+    실제 운영 DB와 분리합니다.
+    """
+    # 임시 디렉토리에 테스트 DB 생성
+    with tempfile.TemporaryDirectory(prefix="tubearchive_test_") as tmp_dir:
+        test_db_path = Path(tmp_dir) / "test_tubearchive.db"
+
+        # 환경 변수 설정
+        original_db_path = os.environ.get("TUBEARCHIVE_DB_PATH")
+        os.environ["TUBEARCHIVE_DB_PATH"] = str(test_db_path)
+
+        yield test_db_path
+
+        # 환경 변수 복원
+        if original_db_path is not None:
+            os.environ["TUBEARCHIVE_DB_PATH"] = original_db_path
+        else:
+            os.environ.pop("TUBEARCHIVE_DB_PATH", None)
+
+
+@pytest.fixture
+def temp_db_path(tmp_path: Path) -> Path:
+    """
+    개별 테스트용 임시 DB 경로.
+
+    각 테스트에서 독립적인 DB가 필요할 때 사용합니다.
+    """
+    return tmp_path / "test.db"
+
+
+@pytest.fixture
+def temp_video_dir(tmp_path: Path) -> Path:
+    """
+    테스트용 임시 비디오 디렉토리.
+
+    테스트 비디오 파일을 생성할 디렉토리입니다.
+    """
+    video_dir = tmp_path / "videos"
+    video_dir.mkdir()
+    return video_dir
+
+
+@pytest.fixture
+def temp_output_dir(tmp_path: Path) -> Path:
+    """
+    테스트용 임시 출력 디렉토리.
+
+    트랜스코딩 및 병합 출력 파일용 디렉토리입니다.
+    """
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    return output_dir

@@ -71,12 +71,12 @@ class TestFFmpegExecutor:
         """트랜스코딩 명령어 빌드."""
         from pathlib import Path
 
-        from tubearchive.ffmpeg.profiles import PROFILE_4K_HEVC_VT
+        from tubearchive.ffmpeg.profiles import PROFILE_SDR
 
         cmd = executor.build_transcode_command(
             input_path=Path("/input/video.mp4"),
             output_path=Path("/output/video.mp4"),
-            profile=PROFILE_4K_HEVC_VT,
+            profile=PROFILE_SDR,
             video_filter="scale=3840:2160",
             audio_filter="afade=t=in:st=0:d=0.5",
         )
@@ -95,12 +95,12 @@ class TestFFmpegExecutor:
         """filter_complex 사용 시."""
         from pathlib import Path
 
-        from tubearchive.ffmpeg.profiles import PROFILE_4K_HEVC_VT
+        from tubearchive.ffmpeg.profiles import PROFILE_SDR
 
         cmd = executor.build_transcode_command(
             input_path=Path("/input/video.mp4"),
             output_path=Path("/output/video.mp4"),
-            profile=PROFILE_4K_HEVC_VT,
+            profile=PROFILE_SDR,
             filter_complex="[0:v]split=2[bg][fg];...[v_out]",
             audio_filter="afade=t=in:st=0:d=0.5",
         )
@@ -112,12 +112,12 @@ class TestFFmpegExecutor:
         """덮어쓰기 옵션."""
         from pathlib import Path
 
-        from tubearchive.ffmpeg.profiles import PROFILE_4K_HEVC_VT
+        from tubearchive.ffmpeg.profiles import PROFILE_SDR
 
         cmd = executor.build_transcode_command(
             input_path=Path("/input/video.mp4"),
             output_path=Path("/output/video.mp4"),
-            profile=PROFILE_4K_HEVC_VT,
+            profile=PROFILE_SDR,
             overwrite=True,
         )
 
