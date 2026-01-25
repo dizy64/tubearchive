@@ -734,13 +734,15 @@ def upload_to_youtube(
         uploader = YouTubeUploader(service)
 
         # 프로그레스 바 설정
-        file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        file_size_bytes = file_path.stat().st_size
+        file_size_mb = file_size_bytes / (1024 * 1024)
         bar_width = 30
 
         def on_progress(percent: int) -> None:
             filled = int(bar_width * percent / 100)
             bar = "█" * filled + "░" * (bar_width - filled)
-            msg = f"\r📤 업로드: [{bar}] {percent:3d}% ({file_size_mb:.1f}MB)"
+            uploaded_mb = file_size_mb * percent / 100
+            msg = f"\r📤 업로드: [{bar}] {percent:3d}% ({uploaded_mb:.1f} / {file_size_mb:.1f} MB)"
             print(msg, end="", flush=True)
             if percent >= 100:
                 print()  # 완료 시 줄바꿈
