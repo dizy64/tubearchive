@@ -505,8 +505,23 @@ def upload_to_youtube(
     logger.info(f"  Title: {video_title}")
     logger.info(f"  Privacy: {privacy}")
 
+    # 인증 상태 확인
+    from tubearchive.youtube.auth import check_auth_status
+
+    status = check_auth_status()
+
+    if not status.has_client_secrets:
+        print("\n❌ YouTube 설정이 필요합니다.")
+        print(f"\n{status.get_setup_guide()}")
+        print("\n설정 완료 후 다시 실행해주세요.")
+        raise YouTubeAuthError("client_secrets.json not found")
+
+    if not status.has_valid_token:
+        print("\n🔐 YouTube 인증이 필요합니다.")
+        print("   브라우저에서 Google 계정 인증을 진행합니다...\n")
+
     try:
-        # 인증
+        # 인증 (토큰 없으면 자동으로 브라우저 열림)
         service = get_authenticated_service()
 
         # 업로드
@@ -540,6 +555,7 @@ def upload_to_youtube(
     except YouTubeAuthError as e:
         logger.error(f"YouTube authentication failed: {e}")
         print(f"\n❌ YouTube 인증 실패: {e}")
+        print("\n설정 가이드: tubearchive --setup-youtube")
         raise
     except YouTubeUploadError as e:
         logger.error(f"YouTube upload failed: {e}")
