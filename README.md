@@ -31,6 +31,8 @@
 
 ## 설치
 
+### 1. 프로젝트 설치
+
 ```bash
 # 저장소 클론
 git clone <repository-url>
@@ -44,19 +46,70 @@ asdf local python 3.14.2
 uv sync
 ```
 
+### 2. 전역 CLI 도구로 설치 (권장)
+
+프로젝트 디렉토리 외부에서도 `tubearchive` 명령어를 사용하려면:
+
+```bash
+# tubearchive 디렉토리에서 실행
+cd /path/to/tubearchive
+uv tool install .
+
+# PATH 설정 (최초 1회, 쉘 재시작 필요)
+uv tool update-shell
+source ~/.zshrc  # 또는 터미널 재시작
+```
+
+설치 확인:
+```bash
+uv tool list
+# 출력: tubearchive v0.1.0
+```
+
+업데이트:
+```bash
+cd /path/to/tubearchive
+uv tool install . --force
+```
+
+제거:
+```bash
+uv tool uninstall tubearchive
+```
+
 ## 사용법
 
 ### 기본 사용
 
+전역 설치 후:
 ```bash
 # Case 1: 현재 디렉토리의 모든 영상 병합
-uv run tubearchive
+tubearchive
 
 # Case 2: 특정 파일들만 병합 (파일 생성 시간 순 정렬)
-uv run tubearchive video1.mp4 video2.mov video3.mts
+tubearchive video1.mp4 video2.mov video3.mts
 
 # Case 3: 특정 디렉토리의 영상 병합
+tubearchive ~/Videos/Trip2024/
+```
+
+프로젝트 디렉토리에서 직접 실행:
+```bash
+cd /path/to/tubearchive
 uv run tubearchive ~/Videos/Trip2024/
+```
+
+### 다른 경로에서 실행
+
+전역 설치 없이 다른 경로에서 실행하려면 `--project` 옵션 사용:
+
+```bash
+# 어디서든 실행 가능
+uv run --project /path/to/tubearchive tubearchive ~/Videos/Trip2024/
+
+# 예시
+cd ~/Downloads
+uv run --project ~/Workspaces/dizy64/tubearchive tubearchive ./videos/ -o merged.mp4
 ```
 
 ### 옵션
@@ -188,6 +241,19 @@ fade=t=in:st=0:d=0.5,fade=t=out:st=<end>:d=0.5
 ```
 
 ## 트러블슈팅
+
+### PATH 설정 문제
+
+`uv tool install` 후 `tubearchive: command not found` 오류가 발생하면:
+
+```bash
+# 방법 1: uv 자동 설정 (권장)
+uv tool update-shell
+source ~/.zshrc  # 또는 터미널 재시작
+
+# 방법 2: 수동 설정 (~/.zshrc 또는 ~/.bashrc에 추가)
+export PATH="$HOME/.local/bin:$PATH"
+```
 
 ### VideoToolbox 실패
 
