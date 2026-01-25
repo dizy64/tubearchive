@@ -1,10 +1,36 @@
 """SQLite 데이터베이스 스키마."""
 
+import os
 import sqlite3
 from pathlib import Path
 
-# 기본 데이터베이스 파일 경로
-DEFAULT_DB_PATH = Path.cwd() / "tubearchive.db"
+# 환경 변수
+ENV_DB_PATH = "TUBEARCHIVE_DB_PATH"
+
+
+def get_default_db_path() -> Path:
+    """
+    기본 데이터베이스 경로 반환.
+
+    우선순위:
+    1. TUBEARCHIVE_DB_PATH 환경 변수
+    2. ~/.tubearchive/tubearchive.db
+
+    Returns:
+        데이터베이스 파일 경로
+    """
+    env_path = os.environ.get(ENV_DB_PATH)
+    if env_path:
+        return Path(env_path)
+
+    # 홈 디렉토리에 고정 위치 사용
+    db_dir = Path.home() / ".tubearchive"
+    db_dir.mkdir(exist_ok=True)
+    return db_dir / "tubearchive.db"
+
+
+# 기본 데이터베이스 파일 경로 (호환성 유지)
+DEFAULT_DB_PATH = get_default_db_path()
 
 # SQL 스키마 정의
 SCHEMA = """

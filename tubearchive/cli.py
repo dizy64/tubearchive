@@ -257,13 +257,21 @@ def run_pipeline(validated_args: ValidatedArgs) -> tuple[Path, Path | None]:
         video_files, final_path, validated_args.output_dir
     )
 
-    # 5. 임시 파일 정리
+    # 5. 임시 파일 및 폴더 정리
     if not validated_args.keep_temp:
         logger.info("Cleaning up temporary files...")
         for temp_path in transcoded_paths:
             if temp_path.exists() and temp_path != final_path:
                 temp_path.unlink()
                 logger.debug(f"  Removed: {temp_path}")
+
+        # 임시 폴더 삭제 (비어있거나 concat 파일만 남은 경우)
+        if temp_dir.exists():
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"Removed temp directory: {temp_dir}")
+            except OSError as e:
+                logger.warning(f"Failed to remove temp directory: {e}")
 
     return final_path, summary_path
 

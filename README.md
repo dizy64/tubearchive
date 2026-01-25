@@ -218,23 +218,32 @@ options:
 
 ### 환경 변수
 
-| 환경 변수 | 설명 | 예시 |
-|-----------|------|------|
-| `TUBEARCHIVE_OUTPUT_DIR` | 기본 출력 디렉토리 | `~/Videos/Processed` |
+| 환경 변수 | 설명 | 기본값 |
+|-----------|------|--------|
+| `TUBEARCHIVE_OUTPUT_DIR` | 기본 출력 디렉토리 | 출력 파일과 같은 위치 |
+| `TUBEARCHIVE_DB_PATH` | 데이터베이스 파일 경로 | `~/.tubearchive/tubearchive.db` |
 
 ```bash
 # 환경 변수 설정 (~/.zshrc 또는 ~/.bashrc에 추가)
 export TUBEARCHIVE_OUTPUT_DIR="$HOME/Videos/Processed"
+export TUBEARCHIVE_DB_PATH="$HOME/.tubearchive/tubearchive.db"  # 기본값
 
 # 또는 일회성 실행
 TUBEARCHIVE_OUTPUT_DIR=~/Videos tubearchive ~/Downloads/clips/
 ```
 
+### 데이터베이스 위치
+
+모든 작업 이력은 `~/.tubearchive/tubearchive.db`에 저장됩니다.
+- 어디서 실행해도 동일한 DB 사용 (중앙화된 관리)
+- `TUBEARCHIVE_DB_PATH` 환경 변수로 경로 변경 가능
+
 ### 임시 파일 경로
 
 트랜스코딩 중 생성되는 임시 파일은 `/tmp/tubearchive/`에 저장됩니다.
-- 시스템 재부팅 시 자동 정리
-- `--keep-temp` 옵션으로 임시 파일 보존 가능
+- **작업 완료 시 자동 삭제** (폴더 전체 정리)
+- 시스템 재부팅 시에도 자동 정리
+- `--keep-temp` 옵션으로 임시 파일 보존 가능 (디버깅용)
 
 ## 프로젝트 구조
 

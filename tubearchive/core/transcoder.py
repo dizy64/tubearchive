@@ -34,14 +34,20 @@ class Transcoder:
 
         Args:
             db_path: 데이터베이스 경로 (None이면 기본값)
-            temp_dir: 임시 파일 디렉토리 (None이면 현재 디렉토리)
+            temp_dir: 임시 파일 디렉토리 (필수, None이면 에러)
+
+        Raises:
+            ValueError: temp_dir이 None인 경우
         """
+        if temp_dir is None:
+            raise ValueError("temp_dir is required")
+
         self.conn = init_database(db_path)
         self.video_repo = VideoRepository(self.conn)
         self.job_repo = TranscodingJobRepository(self.conn)
         self.resume_mgr = ResumeManager(self.conn)
         self.executor = FFmpegExecutor()
-        self.temp_dir = temp_dir or Path.cwd() / "tubearchive_temp"
+        self.temp_dir = temp_dir
         self.temp_dir.mkdir(exist_ok=True)
 
     def transcode_video(

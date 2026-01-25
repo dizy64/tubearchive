@@ -48,10 +48,16 @@ class Merger:
 
         Args:
             ffmpeg_path: FFmpeg 실행 파일 경로
-            temp_dir: 임시 파일 디렉토리
+            temp_dir: 임시 파일 디렉토리 (필수, None이면 에러)
+
+        Raises:
+            ValueError: temp_dir이 None인 경우
         """
+        if temp_dir is None:
+            raise ValueError("temp_dir is required")
+
         self.ffmpeg_path = ffmpeg_path
-        self.temp_dir = temp_dir or Path.cwd() / "tubearchive_temp"
+        self.temp_dir = temp_dir
         self.temp_dir.mkdir(exist_ok=True)
 
     def build_merge_command(
