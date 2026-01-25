@@ -198,8 +198,8 @@ uv run tubearchive -v ~/Videos/
 ### 전체 옵션
 
 ```
-usage: tubearchive [-h] [-o OUTPUT] [--no-resume] [--keep-temp] [--dry-run] [-v]
-                   [targets ...]
+usage: tubearchive [-h] [-o OUTPUT] [--output-dir DIR] [--no-resume]
+                   [--keep-temp] [--dry-run] [-v] [targets ...]
 
 다양한 기기의 4K 영상을 표준화하여 병합합니다.
 
@@ -209,11 +209,32 @@ positional arguments:
 options:
   -h, --help           도움말 표시
   -o, --output OUTPUT  출력 파일 경로 (기본: merged_output.mp4)
+  --output-dir DIR     출력 파일 저장 디렉토리 (환경변수: TUBEARCHIVE_OUTPUT_DIR)
   --no-resume          Resume 기능 비활성화
   --keep-temp          임시 파일 보존 (디버깅용)
   --dry-run            실행 계획만 출력 (실제 실행 안 함)
   -v, --verbose        상세 로그 출력
 ```
+
+### 환경 변수
+
+| 환경 변수 | 설명 | 예시 |
+|-----------|------|------|
+| `TUBEARCHIVE_OUTPUT_DIR` | 기본 출력 디렉토리 | `~/Videos/Processed` |
+
+```bash
+# 환경 변수 설정 (~/.zshrc 또는 ~/.bashrc에 추가)
+export TUBEARCHIVE_OUTPUT_DIR="$HOME/Videos/Processed"
+
+# 또는 일회성 실행
+TUBEARCHIVE_OUTPUT_DIR=~/Videos tubearchive ~/Downloads/clips/
+```
+
+### 임시 파일 경로
+
+트랜스코딩 중 생성되는 임시 파일은 `/tmp/tubearchive/`에 저장됩니다.
+- 시스템 재부팅 시 자동 정리
+- `--keep-temp` 옵션으로 임시 파일 보존 가능
 
 ## 프로젝트 구조
 
