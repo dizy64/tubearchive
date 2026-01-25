@@ -256,6 +256,40 @@ tubearchive --upload-only video.mp4 --upload-privacy public
 | `--upload-only FILE` | 지정된 파일을 YouTube에 업로드 (병합 없이) | - |
 | `--upload-title TITLE` | 영상 제목 | 파일명 또는 디렉토리명 |
 | `--upload-privacy` | 공개 설정 (public/unlisted/private) | unlisted |
+| `--playlist ID` | 업로드 후 플레이리스트에 추가 (여러 번 사용 가능) | - |
+| `--list-playlists` | 내 플레이리스트 목록 조회 | - |
+
+#### 플레이리스트에 추가
+
+업로드 후 자동으로 플레이리스트에 추가할 수 있습니다.
+
+```bash
+# 플레이리스트 목록 조회 (ID 확인용)
+tubearchive --list-playlists
+
+# 출력 예시:
+# 번호  제목                                     영상수   ID
+# --------------------------------------------------------------------------------
+# 1    여행 브이로그                              12       PLxxxxxxxxxxxxxxx
+# 2    일상 기록                                  8        PLyyyyyyyyyyyyyyy
+#
+# 💡 환경 변수 설정 예시:
+#    export TUBEARCHIVE_YOUTUBE_PLAYLIST=PLxxxxxxxxxxxxxxx
+
+# 특정 플레이리스트에 추가
+tubearchive ~/Videos/ --upload --playlist PLxxxxxxxxxxxxxxx
+
+# 여러 플레이리스트에 동시 추가
+tubearchive ~/Videos/ --upload --playlist PLaaaaa --playlist PLbbbbb
+
+# 환경 변수로 기본 플레이리스트 설정 (~/.zshrc에 추가)
+export TUBEARCHIVE_YOUTUBE_PLAYLIST=PLxxxxxxxxxxxxxxx
+# 또는 여러 개 (쉼표로 구분)
+export TUBEARCHIVE_YOUTUBE_PLAYLIST=PLaaaaa,PLbbbbb
+
+# 환경 변수 설정 후에는 --playlist 없이도 자동 추가
+tubearchive ~/Videos/ --upload
+```
 
 #### 자동 설명 생성
 
@@ -271,11 +305,11 @@ tubearchive --upload-only video.mp4 --upload-privacy public
 ### 전체 옵션
 
 ```
-usage: tubearchive [-h] [-o OUTPUT] [--output-dir DIR] [--no-resume]
+usage: tubearchive [-h] [-V] [-o OUTPUT] [--output-dir DIR] [--no-resume]
                    [--keep-temp] [--dry-run] [-v]
                    [--upload] [--upload-only FILE]
                    [--upload-title TITLE] [--upload-privacy {public,unlisted,private}]
-                   [--setup-youtube]
+                   [--playlist ID] [--setup-youtube] [--youtube-auth] [--list-playlists]
                    [targets ...]
 
 다양한 기기의 4K 영상을 표준화하여 병합합니다.
@@ -285,6 +319,7 @@ positional arguments:
 
 options:
   -h, --help           도움말 표시
+  -V, --version        버전 출력
   -o, --output OUTPUT  출력 파일 경로 (기본: merged_output.mp4)
   --output-dir DIR     출력 파일 저장 디렉토리 (환경변수: TUBEARCHIVE_OUTPUT_DIR)
   --no-resume          Resume 기능 비활성화
@@ -295,7 +330,10 @@ options:
   --upload-only FILE   지정된 파일을 YouTube에 업로드 (병합 없이)
   --upload-title TITLE YouTube 업로드 시 영상 제목
   --upload-privacy     YouTube 공개 설정 (기본: unlisted)
+  --playlist ID        업로드 후 플레이리스트에 추가 (여러 번 사용 가능)
   --setup-youtube      YouTube 인증 상태 확인 및 설정 가이드 출력
+  --youtube-auth       YouTube 브라우저 인증 실행
+  --list-playlists     내 플레이리스트 목록 조회
 ```
 
 ### 환경 변수
@@ -306,6 +344,7 @@ options:
 | `TUBEARCHIVE_DB_PATH` | 데이터베이스 파일 경로 | `~/.tubearchive/tubearchive.db` |
 | `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 클라이언트 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
 | `TUBEARCHIVE_YOUTUBE_TOKEN` | OAuth 토큰 저장 경로 | `~/.tubearchive/youtube_token.json` |
+| `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID (쉼표로 여러 개 지정) | - |
 
 ```bash
 # 환경 변수 설정 (~/.zshrc 또는 ~/.bashrc에 추가)
@@ -358,7 +397,8 @@ tubearchive/
 ├── youtube/
 │   ├── __init__.py       # 모듈 exports
 │   ├── auth.py           # OAuth 2.0 인증
-│   └── uploader.py       # YouTube 업로드 (Resumable)
+│   ├── uploader.py       # YouTube 업로드 (Resumable)
+│   └── playlist.py       # 플레이리스트 관리
 └── utils/
     ├── validators.py     # 입력 검증
     ├── progress.py       # 진행률 표시

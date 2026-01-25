@@ -292,3 +292,39 @@ def generate_clip_summary(
     lines.append("```")
 
     return "\n".join(lines)
+
+
+def generate_youtube_description(
+    video_clips: list[tuple[str, float, str | None, str | None]],
+) -> str:
+    """
+    YouTube 설명용 타임스탬프 생성.
+
+    YouTube 설명에 바로 복사할 수 있는 깔끔한 형식입니다.
+
+    Args:
+        video_clips: (파일명, duration, device_model, shot_time) 튜플 리스트
+
+    Returns:
+        타임스탬프 문자열
+    """
+    lines: list[str] = []
+
+    # 타임스탬프
+    current_time = 0.0
+    for filename, duration, _, _ in video_clips:
+        timestamp = format_timestamp(current_time)
+        clip_name = Path(filename).stem
+        lines.append(f"{timestamp} {clip_name}")
+        current_time += duration
+
+    # 촬영 기기 정보 (중복 제거, None 제외)
+    devices = list(dict.fromkeys(
+        device for _, _, device, _ in video_clips if device
+    ))
+    if devices:
+        lines.append("")
+        devices_str = ", ".join(devices)
+        lines.append(f"이 영상은 {devices_str}로 촬영됨")
+
+    return "\n".join(lines)

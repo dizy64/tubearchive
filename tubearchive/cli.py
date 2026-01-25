@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -23,6 +24,36 @@ logger = logging.getLogger(__name__)
 
 # 환경 변수
 ENV_OUTPUT_DIR = "TUBEARCHIVE_OUTPUT_DIR"
+ENV_YOUTUBE_PLAYLIST = "TUBEARCHIVE_YOUTUBE_PLAYLIST"
+
+# YYYYMMDD 패턴 (파일명 시작 부분)
+DATE_PATTERN = re.compile(r"^(\d{4})(\d{2})(\d{2})\s*(.*)$")
+
+
+def format_youtube_title(title: str) -> str:
+    """
+    YouTube 제목 포맷팅.
+
+    YYYYMMDD 형식의 날짜를 'YYYY년 M월 D일'로 변환합니다.
+    예: '20240115 도쿄 여행' → '2024년 1월 15일 도쿄 여행'
+
+    Args:
+        title: 원본 제목
+
+    Returns:
+        포맷팅된 제목
+    """
+    match = DATE_PATTERN.match(title)
+    if match:
+        year, month, day, rest = match.groups()
+        # 앞의 0 제거 (01 → 1)
+        month_int = int(month)
+        day_int = int(day)
+        formatted = f"{year}년 {month_int}월 {day_int}일"
+        if rest:
+            formatted += f" {rest}"
+        return formatted
+    return title
 
 
 def get_default_output_dir() -> Path | None:
@@ -183,7 +214,10 @@ def create_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="ID",
-        help="업로드 후 플레이리스트에 추가 (여러 번 사용 가능, --playlist 만 쓰면 목록에서 선택)",
+        help=(
+            "업로드 후 플레이리스트에 추가 "
+            f"(환경변수: {ENV_YOUTUBE_PLAYLIST}, 쉼표로 구분)"
+        ),
     )
 
     parser.add_argument(
@@ -196,6 +230,12 @@ def create_parser() -> argparse.ArgumentParser:
         "--youtube-auth",
         action="store_true",
         help="YouTube 브라우저 인증 실행",
+    )
+
+    parser.add_argument(
+        "--list-playlists",
+        action="store_true",
+        help="내 플레이리스트 목록 조회",
     )
 
     return parser
@@ -421,7 +461,10 @@ def save_merge_job_to_db(
     Returns:
         생성된 Summary 마크다운 (실패 시 None)
     """
-    from tubearchive.utils.summary_generator import generate_clip_summary
+    from tubearchive.utils.summary_generator import (
+        generate_clip_summary,
+        generate_youtube_description,
+    )
 
     try:
         conn = init_database()
@@ -462,8 +505,11 @@ def save_merge_job_to_db(
         total_duration = sum(d for _, d, _, _ in video_clips)
         total_size = output_path.stat().st_size if output_path.exists() else 0
 
-        # Summary 마크다운 생성 (기종, 촬영시간, 타임스탬프)
-        summary_markdown = generate_clip_summary(video_clips)
+        # 콘솔 출력용 요약 (마크다운 형식)
+        console_summary = generate_clip_summary(video_clips)
+
+        # YouTube 설명용 (타임스탬프 + 촬영기기)
+        youtube_description = generate_youtube_description(video_clips)
 
         repo.create(
             output_path=output_path,
@@ -473,11 +519,11 @@ def save_merge_job_to_db(
             total_duration_seconds=total_duration,
             total_size_bytes=total_size,
             clips_info_json=clips_json,
-            summary_markdown=summary_markdown,
+            summary_markdown=youtube_description,  # YouTube 설명용으로 저장
         )
         conn.close()
         logger.debug("Merge job saved to database with summary")
-        return summary_markdown
+        return console_summary  # 콘솔에는 상세 요약 출력
 
     except Exception as e:
         logger.warning(f"Failed to save merge job to DB: {e}")
@@ -511,7 +557,9 @@ def upload_to_youtube(
         raise FileNotFoundError(f"Video file not found: {file_path}")
 
     # 제목 결정: 지정값 > 파일명(확장자 제외)
-    video_title = title or file_path.stem
+    # YYYYMMDD 형식을 'YYYY년 M월 D일'로 변환
+    raw_title = title or file_path.stem
+    video_title = format_youtube_title(raw_title)
 
     logger.info(f"Uploading to YouTube: {file_path}")
     logger.info(f"  Title: {video_title}")
@@ -671,20 +719,78 @@ def cmd_youtube_auth() -> None:
         raise
 
 
+def cmd_list_playlists() -> None:
+    """
+    --list-playlists 옵션 처리.
+
+    내 플레이리스트 목록을 조회하여 ID와 함께 출력합니다.
+    """
+    from tubearchive.youtube.auth import get_authenticated_service
+    from tubearchive.youtube.playlist import list_playlists
+
+    print("\n📋 내 플레이리스트 목록\n")
+
+    try:
+        service = get_authenticated_service()
+        playlists = list_playlists(service)
+
+        if not playlists:
+            print("플레이리스트가 없습니다.")
+            return
+
+        print(f"{'번호':<4} {'제목':<40} {'영상수':<8} ID")
+        print("-" * 80)
+        for i, pl in enumerate(playlists, 1):
+            print(f"{i:<4} {pl.title:<40} {pl.item_count:<8} {pl.id}")
+
+        print("-" * 80)
+        print("\n💡 환경 변수 설정 예시:")
+        print(f"   export {ENV_YOUTUBE_PLAYLIST}={playlists[0].id}")
+        if len(playlists) > 1:
+            ids = ",".join(pl.id for pl in playlists[:2])
+            print(f"   export {ENV_YOUTUBE_PLAYLIST}={ids}  # 여러 개")
+
+    except Exception as e:
+        logger.error(f"Failed to list playlists: {e}")
+        print(f"\n❌ 플레이리스트 조회 실패: {e}")
+
+        # 스코프 부족 에러 처리
+        if "insufficient" in str(e).lower() or "scope" in str(e).lower():
+            from tubearchive.youtube.auth import get_token_path
+
+            token_path = get_token_path()
+            print("\n💡 권한이 부족합니다. 토큰을 삭제하고 재인증하세요:")
+            print(f"   rm {token_path}")
+            print("   tubearchive --youtube-auth")
+        raise
+
+
 def resolve_playlist_ids(playlist_args: list[str] | None) -> list[str]:
     """
     플레이리스트 인자 처리.
 
+    우선순위:
+    1. --playlist 옵션이 명시적으로 지정됨 → 해당 값 사용
+    2. --playlist 옵션 없음 + 환경 변수 설정됨 → 환경 변수 값 사용
+    3. 둘 다 없음 → 빈 리스트 (플레이리스트 추가 안 함)
+
     Args:
         playlist_args: --playlist 인자 값 리스트
-            - None: 플레이리스트 사용 안 함
+            - None: 환경 변수 확인
             - 빈 문자열 포함: 목록에서 선택
             - 기타: 플레이리스트 ID로 사용
 
     Returns:
         플레이리스트 ID 리스트 (사용 안 함 또는 취소 시 빈 리스트)
     """
+    # 환경 변수에서 기본 플레이리스트 확인
     if playlist_args is None:
+        env_playlist = os.environ.get(ENV_YOUTUBE_PLAYLIST)
+        if env_playlist:
+            ids = [pid.strip() for pid in env_playlist.split(",") if pid.strip()]
+            if ids:
+                logger.info(f"Using playlists from env: {ids}")
+                return ids
         return []
 
     # 빈 문자열이 있으면 선택 모드
@@ -777,6 +883,11 @@ def main() -> None:
         # --youtube-auth 옵션 처리 (브라우저 인증)
         if args.youtube_auth:
             cmd_youtube_auth()
+            return
+
+        # --list-playlists 옵션 처리 (플레이리스트 목록)
+        if args.list_playlists:
+            cmd_list_playlists()
             return
 
         # --upload-only 옵션 처리 (업로드만)

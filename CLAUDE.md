@@ -67,8 +67,12 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
 **youtube/**: YouTube 업로드 모듈
 - `auth.py`: OAuth 2.0 인증 (토큰 저장/갱신, 브라우저 인증 플로우)
 - `uploader.py`: Resumable upload (청크 단위, 재시도 로직)
+- `playlist.py`: 플레이리스트 관리 (목록 조회, 영상 추가)
 - 설정 파일: `~/.tubearchive/client_secrets.json`, `~/.tubearchive/youtube_token.json`
-- 환경 변수: `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS`, `TUBEARCHIVE_YOUTUBE_TOKEN`
+- 환경 변수:
+  - `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS`: OAuth 클라이언트 시크릿 경로
+  - `TUBEARCHIVE_YOUTUBE_TOKEN`: 토큰 파일 경로
+  - `TUBEARCHIVE_YOUTUBE_PLAYLIST`: 기본 플레이리스트 ID (쉼표로 여러 개 지정 가능)
 
 ### 테스트 구조
 - `conftest.py`: session-scoped 테스트 DB 격리 (운영 DB와 분리)
