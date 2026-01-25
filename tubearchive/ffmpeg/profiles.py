@@ -13,6 +13,7 @@ class EncodingProfile:
     pixel_format: str
     audio_codec: str
     audio_bitrate: str
+    frame_rate: str = "30000/1001"  # 29.97fps (NTSC 표준, concat 호환성)
     color_primaries: str | None = None
     color_transfer: str | None = None
     color_space: str | None = None
@@ -24,6 +25,7 @@ class EncodingProfile:
             "-c:v", self.video_codec,
             "-b:v", self.video_bitrate,
             "-pix_fmt", self.pixel_format,
+            "-r", self.frame_rate,
             "-c:a", self.audio_codec,
             "-b:a", self.audio_bitrate,
         ]
