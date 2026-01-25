@@ -3,7 +3,10 @@
 import argparse
 import json
 import logging
+import os
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +22,48 @@ from tubearchive.utils.summary_generator import OutputInfo, save_summary
 
 logger = logging.getLogger(__name__)
 
+# 환경 변수
+ENV_OUTPUT_DIR = "TUBEARCHIVE_OUTPUT_DIR"
+
+
+def get_default_output_dir() -> Path | None:
+    """환경 변수에서 기본 출력 디렉토리 가져오기."""
+    env_dir = os.environ.get(ENV_OUTPUT_DIR)
+    if env_dir:
+        path = Path(env_dir)
+        if path.is_dir():
+            return path
+        logger.warning(f"{ENV_OUTPUT_DIR}={env_dir} is not a valid directory")
+    return None
+
+
+def get_temp_dir() -> Path:
+    """시스템 임시 디렉토리 내 tubearchive 폴더 반환."""
+    temp_base = Path(tempfile.gettempdir()) / "tubearchive"
+    temp_base.mkdir(exist_ok=True)
+    return temp_base
+
+
+def check_output_disk_space(output_dir: Path, required_bytes: int) -> bool:
+    """
+    출력 디렉토리 디스크 공간 확인.
+
+    Args:
+        output_dir: 출력 디렉토리
+        required_bytes: 필요한 바이트 수
+
+    Returns:
+        공간이 충분하면 True
+    """
+    usage = shutil.disk_usage(output_dir)
+    if usage.free < required_bytes:
+        logger.warning(
+            f"Insufficient disk space: {usage.free / (1024**3):.1f}GB available, "
+            f"{required_bytes / (1024**3):.1f}GB required"
+        )
+        return False
+    return True
+
 
 @dataclass
 class ValidatedArgs:
@@ -26,6 +71,7 @@ class ValidatedArgs:
 
     targets: list[Path]
     output: Path | None
+    output_dir: Path | None
     no_resume: bool
     keep_temp: bool
     dry_run: bool
@@ -82,6 +128,13 @@ def create_parser() -> argparse.ArgumentParser:
         help="상세 로그 출력",
     )
 
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help=f"출력 파일 저장 디렉토리 (환경변수: {ENV_OUTPUT_DIR})",
+    )
+
     return parser
 
 
@@ -116,9 +169,19 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         if not output.parent.exists():
             raise FileNotFoundError(f"Output directory not found: {output.parent}")
 
+    # output_dir 검증 (CLI 인자 > 환경 변수 > None)
+    output_dir: Path | None = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+        if not output_dir.is_dir():
+            raise FileNotFoundError(f"Output directory not found: {args.output_dir}")
+    else:
+        output_dir = get_default_output_dir()
+
     return ValidatedArgs(
         targets=targets,
         output=output,
+        output_dir=output_dir,
         no_resume=args.no_resume,
         keep_temp=args.keep_temp,
         dry_run=args.dry_run,
@@ -162,12 +225,14 @@ def run_pipeline(validated_args: ValidatedArgs) -> tuple[Path, Path | None]:
     for vf in video_files:
         logger.info(f"  - {vf.path.name}")
 
-    # 2. 트랜스코딩
+    # 2. 트랜스코딩 (임시 파일은 /tmp에 저장)
+    temp_dir = get_temp_dir()
+    logger.info(f"Using temp directory: {temp_dir}")
     logger.info("Starting transcoding...")
     transcoded_paths: list[Path] = []
     progress = MultiProgressBar(total_files=len(video_files))
 
-    with Transcoder() as transcoder:
+    with Transcoder(temp_dir=temp_dir) as transcoder:
         for vf in video_files:
             progress.start_file(vf.path.name)
 
@@ -182,13 +247,15 @@ def run_pipeline(validated_args: ValidatedArgs) -> tuple[Path, Path | None]:
     logger.info("Merging videos...")
     output_path = validated_args.output or Path.cwd() / "merged_output.mp4"
 
-    merger = Merger()
+    merger = Merger(temp_dir=temp_dir)
     final_path = merger.merge(transcoded_paths, output_path)
 
     logger.info(f"Final output: {final_path}")
 
     # 4. 요약 정보 생성
-    summary_path = generate_output_summary(video_files, final_path)
+    summary_path = generate_output_summary(
+        video_files, final_path, validated_args.output_dir
+    )
 
     # 5. 임시 파일 정리
     if not validated_args.keep_temp:
@@ -204,6 +271,7 @@ def run_pipeline(validated_args: ValidatedArgs) -> tuple[Path, Path | None]:
 def generate_output_summary(
     video_files: list[VideoFile],
     output_path: Path,
+    output_dir: Path | None = None,
 ) -> Path | None:
     """
     출력 영상 요약 정보 생성 및 DB 저장.
@@ -211,12 +279,21 @@ def generate_output_summary(
     Args:
         video_files: 원본 영상 파일 목록
         output_path: 출력 파일 경로
+        output_dir: 요약 파일 저장 디렉토리 (None이면 출력 파일과 같은 디렉토리)
 
     Returns:
         요약 파일 경로 또는 None
     """
     try:
         logger.info("Generating output summary...")
+
+        # 출력 디렉토리 결정
+        summary_dir = output_dir or output_path.parent
+
+        # 디스크 공간 확인 (최소 10MB 여유 확인)
+        if not check_output_disk_space(summary_dir, 10 * 1024 * 1024):
+            logger.warning("Skipping summary generation due to insufficient disk space")
+            return None
 
         # 각 영상의 duration 수집
         video_durations: list[tuple[Path, float]] = []
@@ -232,7 +309,7 @@ def generate_output_summary(
         output_info = OutputInfo.from_video_files(video_durations, output_path)
 
         # 요약 마크다운 저장
-        summary_path = save_summary(output_info)
+        summary_path = save_summary(output_info, summary_dir)
         logger.info(f"Summary saved: {summary_path}")
 
         # DB에 저장
@@ -266,6 +343,11 @@ def save_merge_job_to_db(
             ensure_ascii=False,
         )
 
+        # summary_path 계산
+        actual_summary_path = (
+            output_info.output_path.parent / f"{output_info.output_path.stem}_summary.md"
+        )
+
         repo.create(
             output_path=output_info.output_path,
             video_ids=[],  # 현재 video_ids 추적 안 함 (단순화)
@@ -274,8 +356,7 @@ def save_merge_job_to_db(
             total_duration_seconds=output_info.total_duration,
             total_size_bytes=output_info.total_size,
             clips_info_json=clips_json,
-            summary_path=output_info.output_path.parent
-            / f"{output_info.output_path.stem}_summary.md",
+            summary_path=actual_summary_path,
         )
         conn.close()
         logger.debug("Merge job saved to database")
@@ -299,12 +380,19 @@ def main() -> None:
             logger.info("Dry run mode - showing execution plan only")
 
             video_files = scan_videos(validated_args.targets)
+            temp_dir = get_temp_dir()
+            output_dir_str = (
+                str(validated_args.output_dir) if validated_args.output_dir else "(출력 파일 위치)"
+            )
+
             print("\n=== Dry Run Execution Plan ===")
             print(f"Input targets: {[str(t) for t in validated_args.targets]}")
             print(f"Video files found: {len(video_files)}")
             for vf in video_files:
                 print(f"  - {vf.path}")
             print(f"Output: {validated_args.output or 'merged_output.mp4'}")
+            print(f"Output dir: {output_dir_str}")
+            print(f"Temp dir: {temp_dir}")
             print(f"Resume enabled: {not validated_args.no_resume}")
             print(f"Keep temp files: {validated_args.keep_temp}")
             print("=" * 30)
