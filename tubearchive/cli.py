@@ -294,6 +294,20 @@ def create_parser() -> argparse.ArgumentParser:
         help="YouTube 업로드 기록 초기화 (다시 업로드, 경로 지정 또는 목록에서 선택)",
     )
 
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="작업 현황 조회 (트랜스코딩, 병합, 업로드)",
+    )
+
+    parser.add_argument(
+        "--status-detail",
+        type=int,
+        metavar="ID",
+        default=None,
+        help="특정 작업 상세 조회 (merge_job ID)",
+    )
+
     return parser
 
 
@@ -1285,6 +1299,193 @@ def cmd_upload_only(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_status() -> None:
+    """
+    --status 옵션 처리.
+
+    작업 현황을 조회하여 출력합니다.
+    """
+    conn = init_database()
+
+    print("\n📊 TubeArchive 작업 현황\n")
+
+    # 1. 진행 중인 트랜스코딩 작업
+    cursor = conn.execute("""
+        SELECT tj.id, tj.status, tj.progress_percent, v.original_path
+        FROM transcoding_jobs tj
+        JOIN videos v ON tj.video_id = v.id
+        WHERE tj.status IN ('pending', 'processing')
+        ORDER BY tj.created_at DESC
+        LIMIT 10
+    """)
+    processing_jobs = cursor.fetchall()
+
+    if processing_jobs:
+        print("🔄 진행 중인 트랜스코딩:")
+        print("-" * 70)
+        for job in processing_jobs:
+            path = Path(job["original_path"]).name
+            status = "⏳ 대기" if job["status"] == "pending" else "🔄 진행"
+            progress = job["progress_percent"] or 0
+            print(f"  {status} [{progress:3d}%] {path}")
+        print()
+
+    # 2. 최근 병합 작업
+    cursor = conn.execute("""
+        SELECT id, title, date, status, youtube_id, output_path,
+               total_duration_seconds, total_size_bytes, created_at
+        FROM merge_jobs
+        ORDER BY created_at DESC
+        LIMIT 10
+    """)
+    merge_jobs = cursor.fetchall()
+
+    if merge_jobs:
+        print("📁 최근 병합 작업:")
+        print("-" * 90)
+        print(f"{'ID':<4} {'상태':<10} {'제목':<25} {'날짜':<12} {'길이':<10} {'YouTube':<12}")
+        print("-" * 90)
+        for job in merge_jobs:
+            job_id = job["id"]
+            title = (job["title"] or "-")[:23]
+            date = job["date"] or "-"
+            status = job["status"]
+
+            # 상태 아이콘
+            status_icon = {
+                "pending": "⏳ 대기",
+                "processing": "🔄 진행",
+                "completed": "✅ 완료",
+                "failed": "❌ 실패",
+            }.get(status, status)
+
+            # 길이 포맷
+            duration = job["total_duration_seconds"] or 0
+            if duration >= 3600:
+                duration_str = f"{int(duration // 3600)}h {int((duration % 3600) // 60)}m"
+            elif duration >= 60:
+                duration_str = f"{int(duration // 60)}m {int(duration % 60)}s"
+            else:
+                duration_str = f"{int(duration)}s"
+
+            # YouTube 상태
+            if job["youtube_id"]:
+                yt_status = f"✅ {job['youtube_id'][:8]}..."
+            else:
+                yt_status = "- 미업로드"
+
+            row = f"{job_id:<4} {status_icon:<10} {title:<25} {date:<12} {duration_str:<10}"
+            print(f"{row} {yt_status}")
+
+        print("-" * 90)
+    else:
+        print("📁 병합 작업 없음\n")
+
+    # 3. 통계 요약
+    cursor = conn.execute("SELECT COUNT(*) as cnt FROM videos")
+    video_count = cursor.fetchone()["cnt"]
+
+    cursor = conn.execute("SELECT COUNT(*) as cnt FROM merge_jobs WHERE youtube_id IS NOT NULL")
+    uploaded_count = cursor.fetchone()["cnt"]
+
+    cursor = conn.execute("SELECT COUNT(*) as cnt FROM merge_jobs")
+    total_jobs = cursor.fetchone()["cnt"]
+
+    print(f"\n📈 통계: 영상 {video_count}개 등록 | 병합 {total_jobs}건 | 업로드 {uploaded_count}건")
+
+    conn.close()
+
+
+def cmd_status_detail(job_id: int) -> None:
+    """
+    --status-detail 옵션 처리.
+
+    특정 작업의 상세 정보를 출력합니다.
+
+    Args:
+        job_id: merge_job ID
+    """
+    import json
+
+    conn = init_database()
+
+    cursor = conn.execute(
+        """
+        SELECT * FROM merge_jobs WHERE id = ?
+        """,
+        (job_id,),
+    )
+    job = cursor.fetchone()
+
+    if not job:
+        print(f"❌ 작업 ID {job_id}를 찾을 수 없습니다.")
+        conn.close()
+        return
+
+    print(f"\n📋 작업 상세 (ID: {job_id})\n")
+    print("=" * 60)
+
+    print(f"📌 제목: {job['title'] or '-'}")
+    print(f"📅 날짜: {job['date'] or '-'}")
+    print(f"📁 출력: {job['output_path']}")
+
+    # 상태
+    status = job["status"]
+    status_icon = {
+        "pending": "⏳ 대기",
+        "processing": "🔄 진행 중",
+        "completed": "✅ 완료",
+        "failed": "❌ 실패",
+    }.get(status, status)
+    print(f"📊 상태: {status_icon}")
+
+    # 길이/크기
+    duration = job["total_duration_seconds"] or 0
+    hours = int(duration // 3600)
+    minutes = int((duration % 3600) // 60)
+    seconds = int(duration % 60)
+    if hours > 0:
+        duration_str = f"{hours}시간 {minutes}분 {seconds}초"
+    elif minutes > 0:
+        duration_str = f"{minutes}분 {seconds}초"
+    else:
+        duration_str = f"{seconds}초"
+    print(f"⏱️  길이: {duration_str}")
+
+    size_bytes = job["total_size_bytes"] or 0
+    if size_bytes >= 1024 * 1024 * 1024:
+        size_str = f"{size_bytes / (1024**3):.2f} GB"
+    else:
+        size_str = f"{size_bytes / (1024**2):.1f} MB"
+    print(f"💾 크기: {size_str}")
+
+    # YouTube
+    if job["youtube_id"]:
+        print(f"🎬 YouTube: https://youtu.be/{job['youtube_id']}")
+    else:
+        print("🎬 YouTube: 미업로드")
+
+    # 클립 정보
+    clips_json = job["clips_info_json"]
+    if clips_json:
+        try:
+            clips = json.loads(clips_json)
+            print(f"\n📹 클립 ({len(clips)}개):")
+            print("-" * 60)
+            for i, clip in enumerate(clips, 1):
+                name = clip.get("name", "-")
+                clip_duration = clip.get("duration", 0)
+                device = clip.get("device", "-")
+                shot_time = clip.get("shot_time", "-")
+                print(f"  {i}. {name}")
+                print(f"     기기: {device} | 촬영: {shot_time} | 길이: {clip_duration:.1f}s")
+        except json.JSONDecodeError:
+            pass
+
+    print("=" * 60)
+    conn.close()
+
+
 def main() -> None:
     """CLI 진입점."""
     parser = create_parser()
@@ -1316,6 +1517,16 @@ def main() -> None:
         # --reset-upload 옵션 처리 (업로드 기록 초기화)
         if args.reset_upload is not None:
             cmd_reset_upload(args.reset_upload)
+            return
+
+        # --status 옵션 처리 (작업 현황 조회)
+        if args.status:
+            cmd_status()
+            return
+
+        # --status-detail 옵션 처리 (작업 상세 조회)
+        if args.status_detail is not None:
+            cmd_status_detail(args.status_detail)
             return
 
         # --upload-only 옵션 처리 (업로드만)
