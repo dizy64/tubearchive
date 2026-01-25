@@ -396,7 +396,7 @@ def _transcode_single(
     vf: VideoFile,
     temp_dir: Path,
     index: int,
-) -> tuple[int, Path, tuple[str, float, str | None, str | None]]:
+) -> tuple[int, Path, int, tuple[str, float, str | None, str | None]]:
     """
     단일 파일 트랜스코딩 (병렬 처리용).
 
@@ -406,11 +406,11 @@ def _transcode_single(
         index: 파일 인덱스 (순서 유지용)
 
     Returns:
-        (인덱스, 출력 경로, 클립 정보) 튜플
+        (인덱스, 출력 경로, video_id, 클립 정보) 튜플
     """
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
-        output_path = transcoder.transcode_video(vf)
+        output_path, video_id = transcoder.transcode_video(vf)
 
         # 메타데이터 수집 (Summary용)
         clip_info: tuple[str, float, str | None, str | None]
@@ -427,7 +427,7 @@ def _transcode_single(
             logger.warning(f"Failed to get metadata for {vf.path}: {e}")
             clip_info = (vf.path.name, 0.0, None, None)
 
-        return index, output_path, clip_info
+        return index, output_path, video_id, clip_info
 
 
 def run_pipeline(validated_args: ValidatedArgs) -> Path:
@@ -462,8 +462,8 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     else:
         logger.info("Starting transcoding...")
 
-    # 결과 저장용 (인덱스로 순서 유지)
-    results: dict[int, tuple[Path, tuple[str, float, str | None, str | None]]] = {}
+    # 결과 저장용 (인덱스로 순서 유지): (출력 경로, video_id, 클립 정보)
+    results: dict[int, tuple[Path, int, tuple[str, float, str | None, str | None]]] = {}
 
     if parallel > 1:
         # 병렬 처리
@@ -491,8 +491,8 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
 
             for future in as_completed(futures):
                 try:
-                    idx, output_path, clip_info = future.result()
-                    results[idx] = (output_path, clip_info)
+                    idx, output_path, video_id, clip_info = future.result()
+                    results[idx] = (output_path, video_id, clip_info)
                     print_progress(idx, video_files[idx].path.name, "완료")
                 except Exception as e:
                     idx = futures[future]
@@ -508,7 +508,7 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
             for i, vf in enumerate(video_files):
                 progress.start_file(vf.path.name)
 
-                output_path = transcoder.transcode_video(vf)
+                output_path, video_id = transcoder.transcode_video(vf)
 
                 # 메타데이터 수집 (Summary용)
                 try:
@@ -524,15 +524,17 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
                     logger.warning(f"Failed to get metadata for {vf.path}: {e}")
                     clip_info = (vf.path.name, 0.0, None, None)
 
-                results[i] = (output_path, clip_info)
+                results[i] = (output_path, video_id, clip_info)
                 progress.finish_file()
 
     # 인덱스 순서대로 결과 정렬
     transcoded_paths: list[Path] = []
+    video_ids: list[int] = []
     video_clips: list[tuple[str, float, str | None, str | None]] = []
     for i in range(len(video_files)):
-        output_path, clip_info = results[i]
+        output_path, video_id, clip_info = results[i]
         transcoded_paths.append(output_path)
+        video_ids.append(video_id)
         video_clips.append(clip_info)
 
     # 3. 병합
@@ -552,7 +554,9 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     logger.info(f"Final output: {final_path}")
 
     # 4. DB에 타임라인 정보 저장 및 Summary 생성
-    summary_markdown = save_merge_job_to_db(final_path, video_clips, validated_args.targets)
+    summary_markdown = save_merge_job_to_db(
+        final_path, video_clips, validated_args.targets, video_ids
+    )
 
     # 5. 임시 파일 및 폴더 정리
     if not validated_args.keep_temp:
@@ -585,6 +589,7 @@ def save_merge_job_to_db(
     output_path: Path,
     video_clips: list[tuple[str, float, str | None, str | None]],
     targets: list[Path],
+    video_ids: list[int],
 ) -> str | None:
     """
     병합 작업 정보를 DB에 저장 (타임라인 및 Summary 포함).
@@ -592,6 +597,8 @@ def save_merge_job_to_db(
     Args:
         output_path: 출력 파일 경로
         video_clips: (파일명, 재생시간, 기종, 촬영시간) 튜플 리스트
+        targets: 대상 경로 목록
+        video_ids: 병합된 영상들의 DB ID 목록
         targets: 입력 타겟 목록 (제목 추출용)
 
     Returns:
@@ -652,7 +659,7 @@ def save_merge_job_to_db(
 
         repo.create(
             output_path=output_path,
-            video_ids=[],
+            video_ids=video_ids,
             title=title,
             date=today,
             total_duration_seconds=total_duration,

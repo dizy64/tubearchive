@@ -56,7 +56,7 @@ class Transcoder:
         target_width: int = 3840,
         target_height: int = 2160,
         fade_duration: float = 0.5,
-    ) -> Path:
+    ) -> tuple[Path, int]:
         """
         단일 영상 트랜스코딩.
 
@@ -67,7 +67,7 @@ class Transcoder:
             fade_duration: 페이드 지속 시간
 
         Returns:
-            트랜스코딩된 파일 경로
+            (트랜스코딩된 파일 경로, video_id) 튜플
 
         Raises:
             FFmpegError: 트랜스코딩 실패
@@ -92,7 +92,7 @@ class Transcoder:
             )
             if completed_job and completed_job.temp_file_path:
                 logger.info(f"Video already processed: {video_file.path}")
-                return completed_job.temp_file_path
+                return completed_job.temp_file_path, video_id
 
         # 작업 생성 또는 기존 작업 조회
         job_id = self.resume_mgr.get_or_create_job(video_id)
@@ -162,7 +162,7 @@ class Transcoder:
             self.job_repo.mark_completed(job_id, output_path)
             logger.info(f"Transcoding completed: {output_path}")
 
-            return output_path
+            return output_path, video_id
 
         except FFmpegError as e:
             # VideoToolbox 실패 시 폴백 시도
@@ -171,6 +171,7 @@ class Transcoder:
                 return self._transcode_with_fallback(
                     video_file,
                     metadata,
+                    video_id,
                     job_id,
                     output_path,
                     video_filter,
@@ -186,13 +187,14 @@ class Transcoder:
         self,
         video_file: VideoFile,
         metadata: VideoMetadata,
+        video_id: int,
         job_id: int,
         output_path: Path,
         video_filter: str,
         audio_filter: str,
         seek_start: float | None,
         on_progress: Callable[[int], None],
-    ) -> Path:
+    ) -> tuple[Path, int]:
         """libx265 폴백 트랜스코딩."""
 
         fallback_profile = get_fallback_profile()
@@ -222,7 +224,7 @@ class Transcoder:
             self.job_repo.mark_completed(job_id, output_path)
             logger.info(f"Fallback transcoding completed: {output_path}")
 
-            return output_path
+            return output_path, video_id
 
         except FFmpegError as e:
             self.job_repo.mark_failed(job_id, str(e))
