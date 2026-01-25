@@ -57,7 +57,4 @@ class MergeJob:
     clips_info_json: str | None = None
     summary_markdown: str | None = None
 
-    def __post_init__(self) -> None:
-        """검증."""
-        if not self.video_ids:
-            raise ValueError("video_ids cannot be empty")
+    # video_ids 검증 제거 (기존 레코드 호환성)
