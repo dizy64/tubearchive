@@ -82,13 +82,19 @@ class Merger:
         if overwrite:
             cmd.append("-y")
 
-        cmd.extend([
-            "-f", "concat",
-            "-safe", "0",
-            "-i", str(concat_file),
-            "-c", "copy",
-            str(output_path),
-        ])
+        cmd.extend(
+            [
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_file),
+                "-c",
+                "copy",
+                str(output_path),
+            ]
+        )
 
         return cmd
 

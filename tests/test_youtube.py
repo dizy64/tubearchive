@@ -33,9 +33,7 @@ class TestYouTubeAuth:
         from tubearchive.youtube.auth import get_token_path
 
         custom_path = tmp_path / "custom_token.json"
-        with patch.dict(
-            "os.environ", {"TUBEARCHIVE_YOUTUBE_TOKEN": str(custom_path)}, clear=False
-        ):
+        with patch.dict("os.environ", {"TUBEARCHIVE_YOUTUBE_TOKEN": str(custom_path)}, clear=False):
             token_path = get_token_path()
             assert token_path == custom_path
 
@@ -103,9 +101,7 @@ class TestYouTubeAuth:
         assert token_path.exists()
         assert json.loads(token_path.read_text()) == {"token": "test"}
 
-    def test_get_authenticated_service_raises_without_secrets(
-        self, tmp_path: Path
-    ) -> None:
+    def test_get_authenticated_service_raises_without_secrets(self, tmp_path: Path) -> None:
         """클라이언트 시크릿 없으면 에러."""
         from tubearchive.youtube.auth import (
             YouTubeAuthError,
@@ -187,9 +183,7 @@ class TestYouTubeUploader:
 
         uploader = YouTubeUploader(mock_service)
 
-        with patch(
-            "tubearchive.youtube.uploader.MediaFileUpload"
-        ) as mock_media_upload:
+        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
             mock_media_upload.return_value = MagicMock()
             result = uploader.upload(
                 video_file,
@@ -228,9 +222,7 @@ class TestYouTubeUploader:
 
         uploader = YouTubeUploader(mock_service)
 
-        with patch(
-            "tubearchive.youtube.uploader.MediaFileUpload"
-        ) as mock_media_upload:
+        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
             mock_media_upload.return_value = MagicMock()
             uploader.upload(
                 video_file,
@@ -255,9 +247,7 @@ class TestYouTubeUploader:
 
         uploader = YouTubeUploader(mock_service)
 
-        with patch(
-            "tubearchive.youtube.uploader.MediaFileUpload"
-        ) as mock_media_upload:
+        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
             mock_media_upload.return_value = MagicMock()
             uploader.upload(video_file, title="Test")
 
@@ -287,15 +277,11 @@ class TestYouTubeUploadError:
         mock_response = Mock()
         mock_response.status = 403
         mock_response.reason = "Quota Exceeded"
-        mock_insert.next_chunk.side_effect = HttpError(
-            mock_response, b"quota exceeded"
-        )
+        mock_insert.next_chunk.side_effect = HttpError(mock_response, b"quota exceeded")
 
         uploader = YouTubeUploader(mock_service)
 
-        with patch(
-            "tubearchive.youtube.uploader.MediaFileUpload"
-        ) as mock_media_upload:
+        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
             mock_media_upload.return_value = MagicMock()
             with pytest.raises(YouTubeUploadError) as exc_info:
                 uploader.upload(video_file, title="Test")

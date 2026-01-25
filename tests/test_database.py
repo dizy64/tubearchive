@@ -21,9 +21,7 @@ class TestSchema:
         conn = init_database(db_path)
 
         # 테이블 존재 확인
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = {row[0] for row in cursor.fetchall()}
 
         assert "videos" in tables
@@ -39,9 +37,7 @@ class TestSchema:
 
         # 존재하지 않는 video_id로 transcoding_job 삽입 시도
         with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(
-                "INSERT INTO transcoding_jobs (video_id) VALUES (999)"
-            )
+            conn.execute("INSERT INTO transcoding_jobs (video_id) VALUES (999)")
 
         conn.close()
 
@@ -164,9 +160,7 @@ class TestTranscodingJobRepository:
         return TranscodingJobRepository(db_conn)
 
     @pytest.fixture
-    def video_id(
-        self, video_repo: VideoRepository, tmp_path: Path
-    ) -> int:
+    def video_id(self, video_repo: VideoRepository, tmp_path: Path) -> int:
         """테스트용 video_id."""
         video_path = tmp_path / "sample.mp4"
         video_path.write_text("")
@@ -191,17 +185,13 @@ class TestTranscodingJobRepository:
         )
         return video_repo.insert(video_file, metadata)
 
-    def test_create_job(
-        self, job_repo: TranscodingJobRepository, video_id: int
-    ) -> None:
+    def test_create_job(self, job_repo: TranscodingJobRepository, video_id: int) -> None:
         """작업 생성."""
         job_id = job_repo.create(video_id)
 
         assert job_id > 0
 
-    def test_get_job_by_id(
-        self, job_repo: TranscodingJobRepository, video_id: int
-    ) -> None:
+    def test_get_job_by_id(self, job_repo: TranscodingJobRepository, video_id: int) -> None:
         """ID로 작업 조회."""
         job_id = job_repo.create(video_id)
         job = job_repo.get_by_id(job_id)
@@ -211,9 +201,7 @@ class TestTranscodingJobRepository:
         assert job.status == JobStatus.PENDING
         assert job.progress_percent == 0
 
-    def test_update_status(
-        self, job_repo: TranscodingJobRepository, video_id: int
-    ) -> None:
+    def test_update_status(self, job_repo: TranscodingJobRepository, video_id: int) -> None:
         """상태 업데이트."""
         job_id = job_repo.create(video_id)
         job_repo.update_status(job_id, JobStatus.PROCESSING)
@@ -223,9 +211,7 @@ class TestTranscodingJobRepository:
         assert job.status == JobStatus.PROCESSING
         assert job.started_at is not None
 
-    def test_update_progress(
-        self, job_repo: TranscodingJobRepository, video_id: int
-    ) -> None:
+    def test_update_progress(self, job_repo: TranscodingJobRepository, video_id: int) -> None:
         """진행률 업데이트."""
         job_id = job_repo.create(video_id)
         job_repo.update_progress(job_id, 50)
@@ -250,9 +236,7 @@ class TestTranscodingJobRepository:
         assert job.completed_at is not None
         assert job.temp_file_path == temp_file
 
-    def test_mark_failed(
-        self, job_repo: TranscodingJobRepository, video_id: int
-    ) -> None:
+    def test_mark_failed(self, job_repo: TranscodingJobRepository, video_id: int) -> None:
         """실패 처리."""
         job_id = job_repo.create(video_id)
         error_msg = "FFmpeg failed"
@@ -264,9 +248,7 @@ class TestTranscodingJobRepository:
         assert job.status == JobStatus.FAILED
         assert job.error_message == error_msg
 
-    def test_get_incomplete_jobs(
-        self, job_repo: TranscodingJobRepository, video_id: int
-    ) -> None:
+    def test_get_incomplete_jobs(self, job_repo: TranscodingJobRepository, video_id: int) -> None:
         """미완료 작업 조회."""
         job_id = job_repo.create(video_id)
         job_repo.update_status(job_id, JobStatus.PROCESSING)
@@ -276,9 +258,7 @@ class TestTranscodingJobRepository:
         assert len(incomplete) == 1
         assert incomplete[0].id == job_id
 
-    def test_get_jobs_by_video_id(
-        self, job_repo: TranscodingJobRepository, video_id: int
-    ) -> None:
+    def test_get_jobs_by_video_id(self, job_repo: TranscodingJobRepository, video_id: int) -> None:
         """video_id로 작업 조회."""
         job_id = job_repo.create(video_id)
 

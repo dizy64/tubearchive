@@ -147,7 +147,8 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "-V", "--version",
+        "-V",
+        "--version",
         action="version",
         version=f"%(prog)s {__version__}",
     )
@@ -160,7 +161,8 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         type=str,
         default=None,
         help="출력 파일 경로 (기본: merged_output.mp4)",
@@ -185,7 +187,8 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="상세 로그 출력",
     )
@@ -233,10 +236,7 @@ def create_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="ID",
-        help=(
-            "업로드 후 플레이리스트에 추가 "
-            f"(환경변수: {ENV_YOUTUBE_PLAYLIST}, 쉼표로 구분)"
-        ),
+        help=(f"업로드 후 플레이리스트에 추가 (환경변수: {ENV_YOUTUBE_PLAYLIST}, 쉼표로 구분)"),
     )
 
     parser.add_argument(
@@ -552,9 +552,7 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     logger.info(f"Final output: {final_path}")
 
     # 4. DB에 타임라인 정보 저장 및 Summary 생성
-    summary_markdown = save_merge_job_to_db(
-        final_path, video_clips, validated_args.targets
-    )
+    summary_markdown = save_merge_job_to_db(final_path, video_clips, validated_args.targets)
 
     # 5. 임시 파일 및 폴더 정리
     if not validated_args.keep_temp:
@@ -612,14 +610,16 @@ def save_merge_job_to_db(
         timeline: list[dict[str, str | float | None]] = []
         current_time = 0.0
         for name, duration, device, shot_time in video_clips:
-            timeline.append({
-                "name": name,
-                "duration": duration,
-                "start": current_time,
-                "end": current_time + duration,
-                "device": device,
-                "shot_time": shot_time,
-            })
+            timeline.append(
+                {
+                    "name": name,
+                    "duration": duration,
+                    "start": current_time,
+                    "end": current_time + duration,
+                    "device": device,
+                    "shot_time": shot_time,
+                }
+            )
             current_time += duration
 
         clips_json = json.dumps(timeline, ensure_ascii=False)
@@ -637,6 +637,7 @@ def save_merge_job_to_db(
 
         # 날짜: 오늘
         from datetime import date
+
         today = date.today().isoformat()
 
         # 총 재생시간 및 파일 크기

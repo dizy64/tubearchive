@@ -109,9 +109,7 @@ class TestDetector:
             },
         }
 
-    def test_detect_landscape_video(
-        self, sample_ffprobe_output: dict, tmp_path: Path
-    ) -> None:
+    def test_detect_landscape_video(self, sample_ffprobe_output: dict, tmp_path: Path) -> None:
         """가로 영상 메타데이터 감지."""
         video_file = tmp_path / "test.mp4"
         video_file.write_text("")
@@ -130,9 +128,7 @@ class TestDetector:
         assert metadata.is_portrait is False
         assert metadata.is_vfr is False
 
-    def test_detect_portrait_video(
-        self, portrait_ffprobe_output: dict, tmp_path: Path
-    ) -> None:
+    def test_detect_portrait_video(self, portrait_ffprobe_output: dict, tmp_path: Path) -> None:
         """세로 영상 감지."""
         video_file = tmp_path / "test.mov"
         video_file.write_text("")

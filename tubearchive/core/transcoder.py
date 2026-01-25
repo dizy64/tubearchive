@@ -107,9 +107,7 @@ class Transcoder:
         # Resume 시작 위치 계산
         seek_start: float | None = None
         if job.status == JobStatus.PROCESSING and job.progress_percent > 0:
-            seek_start = self.resume_mgr.calculate_resume_position(
-                job, metadata.duration_seconds
-            )
+            seek_start = self.resume_mgr.calculate_resume_position(job, metadata.duration_seconds)
             logger.info(f"Resuming from {seek_start:.2f}s ({job.progress_percent}%)")
 
         # 작업 시작

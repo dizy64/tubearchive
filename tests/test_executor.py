@@ -1,6 +1,5 @@
 """FFmpeg 실행기 테스트."""
 
-
 import pytest
 
 from tubearchive.ffmpeg.executor import (

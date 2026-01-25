@@ -50,8 +50,7 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
 
     # Duration
     duration_seconds = float(
-        video_stream.get("duration")
-        or probe_data.get("format", {}).get("duration", "0")
+        video_stream.get("duration") or probe_data.get("format", {}).get("duration", "0")
     )
 
     # 회전 메타데이터 확인
@@ -62,11 +61,7 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
     is_portrait = is_rotated_vertical or (width < height)
 
     # 기기 모델 감지
-    device_model = (
-        probe_data.get("format", {})
-        .get("tags", {})
-        .get("com.apple.quicktime.model")
-    )
+    device_model = probe_data.get("format", {}).get("tags", {}).get("com.apple.quicktime.model")
 
     # 컬러 정보
     color_space = video_stream.get("color_space")

@@ -88,10 +88,7 @@ def create_dip_to_black_video_filter(
     fade_out_start = total_duration - fade_duration
 
     # fade=in:0:d=0.5,fade=out:st=119.5:d=0.5
-    return (
-        f"fade=t=in:st=0:d={fade_duration},"
-        f"fade=t=out:st={fade_out_start}:d={fade_duration}"
-    )
+    return f"fade=t=in:st=0:d={fade_duration},fade=t=out:st={fade_out_start}:d={fade_duration}"
 
 
 def create_dip_to_black_audio_filter(
@@ -111,10 +108,7 @@ def create_dip_to_black_audio_filter(
     fade_out_start = total_duration - fade_duration
 
     # afade=t=in:st=0:d=0.5,afade=t=out:st=119.5:d=0.5
-    return (
-        f"afade=t=in:st=0:d={fade_duration},"
-        f"afade=t=out:st={fade_out_start}:d={fade_duration}"
-    )
+    return f"afade=t=in:st=0:d={fade_duration},afade=t=out:st={fade_out_start}:d={fade_duration}"
 
 
 def create_combined_filter(

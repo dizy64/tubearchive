@@ -52,10 +52,7 @@ class AuthStatus:
             설정 가이드 문자열
         """
         if self.has_valid_token:
-            return (
-                "✅ YouTube 인증 완료!\n"
-                f"   토큰 위치: {self.token_path}"
-            )
+            return f"✅ YouTube 인증 완료!\n   토큰 위치: {self.token_path}"
 
         if not self.has_client_secrets:
             return (

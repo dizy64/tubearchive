@@ -8,17 +8,19 @@ logger = logging.getLogger(__name__)
 
 
 # 지원되는 비디오 확장자
-VIDEO_EXTENSIONS = frozenset({
-    ".mp4",
-    ".mov",
-    ".mts",
-    ".m4v",
-    ".mkv",
-    ".avi",
-    ".webm",
-    ".m2ts",
-    ".mxf",
-})
+VIDEO_EXTENSIONS = frozenset(
+    {
+        ".mp4",
+        ".mov",
+        ".mts",
+        ".m4v",
+        ".mkv",
+        ".avi",
+        ".webm",
+        ".m2ts",
+        ".mxf",
+    }
+)
 
 
 class ValidationError(Exception):
@@ -107,8 +109,7 @@ def check_disk_space(path: Path, required_bytes: int) -> None:
         available_mb = available / (1024 * 1024)
         required_mb = required_bytes / (1024 * 1024)
         raise ValidationError(
-            f"Insufficient disk space: {available_mb:.1f}MB available, "
-            f"{required_mb:.1f}MB required"
+            f"Insufficient disk space: {available_mb:.1f}MB available, {required_mb:.1f}MB required"
         )
 
     logger.debug(
@@ -151,8 +152,7 @@ def validate_ffmpeg_available(command: str = "ffmpeg") -> str:
     path = shutil.which(command)
     if path is None:
         raise ValidationError(
-            f"{command.upper()} not found. Please install FFmpeg: "
-            "https://ffmpeg.org/download.html"
+            f"{command.upper()} not found. Please install FFmpeg: https://ffmpeg.org/download.html"
         )
 
     logger.debug(f"Found {command}: {path}")

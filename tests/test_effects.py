@@ -1,6 +1,5 @@
 """FFmpeg 효과 테스트."""
 
-
 from tubearchive.ffmpeg.effects import (
     create_combined_filter,
     create_dip_to_black_audio_filter,

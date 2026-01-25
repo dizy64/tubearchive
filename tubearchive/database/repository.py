@@ -27,17 +27,19 @@ class VideoRepository:
         Returns:
             삽입된 video_id
         """
-        metadata_json = json.dumps({
-            "width": metadata.width,
-            "height": metadata.height,
-            "fps": metadata.fps,
-            "codec": metadata.codec,
-            "pixel_format": metadata.pixel_format,
-            "is_vfr": metadata.is_vfr,
-            "color_space": metadata.color_space,
-            "color_transfer": metadata.color_transfer,
-            "color_primaries": metadata.color_primaries,
-        })
+        metadata_json = json.dumps(
+            {
+                "width": metadata.width,
+                "height": metadata.height,
+                "fps": metadata.fps,
+                "codec": metadata.codec,
+                "pixel_format": metadata.pixel_format,
+                "is_vfr": metadata.is_vfr,
+                "color_space": metadata.color_space,
+                "color_transfer": metadata.color_transfer,
+                "color_primaries": metadata.color_primaries,
+            }
+        )
 
         cursor = self.conn.execute(
             """
@@ -78,9 +80,7 @@ class VideoRepository:
 
     def get_all(self) -> list[sqlite3.Row]:
         """모든 영상 조회."""
-        cursor = self.conn.execute(
-            "SELECT * FROM videos ORDER BY creation_time"
-        )
+        cursor = self.conn.execute("SELECT * FROM videos ORDER BY creation_time")
         return cursor.fetchall()
 
 
@@ -198,9 +198,7 @@ class TranscodingJobRepository:
             temp_file_path=Path(row["temp_file_path"]) if row["temp_file_path"] else None,
             status=JobStatus(row["status"]),
             progress_percent=row["progress_percent"],
-            started_at=(
-                datetime.fromisoformat(row["started_at"]) if row["started_at"] else None
-            ),
+            started_at=(datetime.fromisoformat(row["started_at"]) if row["started_at"] else None),
             completed_at=(
                 datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
             ),
@@ -277,9 +275,7 @@ class MergeJobRepository:
 
     def get_latest(self) -> MergeJob | None:
         """최신 작업 조회."""
-        cursor = self.conn.execute(
-            "SELECT * FROM merge_jobs ORDER BY created_at DESC LIMIT 1"
-        )
+        cursor = self.conn.execute("SELECT * FROM merge_jobs ORDER BY created_at DESC LIMIT 1")
         row = cursor.fetchone()
         if row is None:
             return None
@@ -311,9 +307,7 @@ class MergeJobRepository:
 
     def get_all(self) -> list[MergeJob]:
         """모든 병합 작업 조회."""
-        cursor = self.conn.execute(
-            "SELECT * FROM merge_jobs ORDER BY created_at DESC"
-        )
+        cursor = self.conn.execute("SELECT * FROM merge_jobs ORDER BY created_at DESC")
         return [self._row_to_job(row) for row in cursor.fetchall()]
 
     def get_uploaded(self) -> list[MergeJob]:

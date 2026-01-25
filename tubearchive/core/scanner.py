@@ -1,6 +1,6 @@
 """영상 파일 스캐너."""
 
-import platform
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -101,11 +101,11 @@ def _get_creation_time(path: Path) -> datetime:
     """
     stat = path.stat()
 
-    if platform.system() == "Darwin":
-        # macOS: st_birthtime
+    if sys.platform == "darwin":
+        # macOS: st_birthtime (mypy recognizes sys.platform checks)
         timestamp = stat.st_birthtime
     else:
-        # 기타: st_ctime 폴백
+        # Linux/Windows: st_ctime 폴백 (메타데이터 변경 시간)
         timestamp = stat.st_ctime
 
     return datetime.fromtimestamp(timestamp)

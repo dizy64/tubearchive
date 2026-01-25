@@ -1,7 +1,5 @@
 """진행률 표시 테스트."""
 
-
-
 from tubearchive.utils.progress import ProgressBar, format_size, format_time
 
 

@@ -88,9 +88,7 @@ class TestMerger:
         assert str(concat_file) in cmd
         assert str(output_path) in cmd
 
-    def test_build_merge_command_with_overwrite(
-        self, merger: Merger, tmp_path: Path
-    ) -> None:
+    def test_build_merge_command_with_overwrite(self, merger: Merger, tmp_path: Path) -> None:
         """덮어쓰기 옵션."""
         concat_file = tmp_path / "concat.txt"
         concat_file.touch()

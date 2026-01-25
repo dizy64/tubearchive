@@ -319,9 +319,7 @@ def generate_youtube_description(
         current_time += duration
 
     # 촬영 기기 정보 (중복 제거, None 제외)
-    devices = list(dict.fromkeys(
-        device for _, _, device, _ in video_clips if device
-    ))
+    devices = list(dict.fromkeys(device for _, _, device, _ in video_clips if device))
     if devices:
         lines.append("")
         devices_str = ", ".join(devices)

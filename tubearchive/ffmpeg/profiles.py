@@ -22,12 +22,18 @@ class EncodingProfile:
     def to_ffmpeg_args(self) -> list[str]:
         """FFmpeg 인자 목록 생성."""
         args = [
-            "-c:v", self.video_codec,
-            "-b:v", self.video_bitrate,
-            "-pix_fmt", self.pixel_format,
-            "-r", self.frame_rate,
-            "-c:a", self.audio_codec,
-            "-b:a", self.audio_bitrate,
+            "-c:v",
+            self.video_codec,
+            "-b:v",
+            self.video_bitrate,
+            "-pix_fmt",
+            self.pixel_format,
+            "-r",
+            self.frame_rate,
+            "-c:a",
+            self.audio_codec,
+            "-b:a",
+            self.audio_bitrate,
         ]
 
         if self.color_primaries:
