@@ -290,9 +290,9 @@ class MergeJobRepository:
         self.conn.commit()
 
     def update_youtube_id(self, job_id: int, youtube_id: str) -> None:
-        """YouTube ID 업데이트."""
+        """YouTube ID 업데이트 및 상태를 completed로 변경."""
         self.conn.execute(
-            "UPDATE merge_jobs SET youtube_id = ? WHERE id = ?",
+            "UPDATE merge_jobs SET youtube_id = ?, status = 'completed' WHERE id = ?",
             (youtube_id, job_id),
         )
         self.conn.commit()
