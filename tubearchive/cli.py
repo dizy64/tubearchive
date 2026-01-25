@@ -242,6 +242,14 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--upload-chunk",
+        type=int,
+        default=None,
+        metavar="MB",
+        help="업로드 청크 크기 MB (1-256, 환경변수: TUBEARCHIVE_UPLOAD_CHUNK_MB, 기본: 32)",
+    )
+
+    parser.add_argument(
         "--setup-youtube",
         action="store_true",
         help="YouTube 인증 상태 확인 및 설정 가이드 출력",
@@ -764,6 +772,7 @@ def upload_to_youtube(
     privacy: str = "unlisted",
     merge_job_id: int | None = None,
     playlist_ids: list[str] | None = None,
+    chunk_mb: int | None = None,
 ) -> None:
     """
     영상을 YouTube에 업로드.
@@ -775,6 +784,7 @@ def upload_to_youtube(
         privacy: 공개 설정 (public, unlisted, private)
         merge_job_id: DB에 저장할 MergeJob ID
         playlist_ids: 추가할 플레이리스트 ID 리스트 (None이면 추가 안 함)
+        chunk_mb: 업로드 청크 크기 MB (None이면 환경변수/기본값)
     """
     from tubearchive.youtube.auth import YouTubeAuthError, get_authenticated_service
     from tubearchive.youtube.playlist import PlaylistError, add_to_playlist
@@ -812,7 +822,7 @@ def upload_to_youtube(
         service = get_authenticated_service()
 
         # 업로드
-        uploader = YouTubeUploader(service)
+        uploader = YouTubeUploader(service, chunk_mb=chunk_mb)
 
         # 프로그레스 바 설정
         file_size_bytes = file_path.stat().st_size
@@ -829,8 +839,10 @@ def upload_to_youtube(
             filled = int(bar_width * percent / 100)
             bar = "█" * filled + "░" * (bar_width - filled)
             uploaded_mb = file_size_mb * percent / 100
-            # 줄 전체를 지우고 다시 출력
-            sys.stdout.write(f"\r\033[K📤 업로드: [{bar}] {percent:3d}% ({uploaded_mb:.1f} / {file_size_mb:.1f} MB)")
+            # 줄 전체를 지우고 다시 출력 (\033[K: 커서부터 줄 끝까지 지움)
+            sys.stdout.write(
+                f"\r\033[K📤 [{bar}] {percent:3d}% ({uploaded_mb:.1f}/{file_size_mb:.1f}MB)"
+            )
             sys.stdout.flush()
             if percent >= 100:
                 sys.stdout.write("\n")
@@ -1244,6 +1256,7 @@ def cmd_upload_only(args: argparse.Namespace) -> None:
         privacy=args.upload_privacy,
         merge_job_id=merge_job_id,
         playlist_ids=playlist_ids,
+        chunk_mb=args.upload_chunk,
     )
 
 
@@ -1347,6 +1360,7 @@ def main() -> None:
                 description=description,
                 merge_job_id=merge_job_id,
                 playlist_ids=playlist_ids,
+                chunk_mb=args.upload_chunk,
             )
 
     except FileNotFoundError as e:

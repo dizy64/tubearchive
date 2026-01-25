@@ -1,6 +1,7 @@
 """YouTube 영상 업로드."""
 
 import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,8 +15,49 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 업로드 청크 크기 (1MB)
-CHUNK_SIZE = 1 * 1024 * 1024
+# 업로드 청크 크기 설정
+# - 환경변수: TUBEARCHIVE_UPLOAD_CHUNK_MB (MB 단위, 1-256)
+# - 기본값: 32MB (고속 네트워크용)
+# - YouTube API 최대: 256MB
+ENV_UPLOAD_CHUNK_MB = "TUBEARCHIVE_UPLOAD_CHUNK_MB"
+DEFAULT_CHUNK_MB = 32
+MIN_CHUNK_MB = 1
+MAX_CHUNK_MB = 256
+
+
+def get_chunk_size(chunk_mb: int | None = None) -> int:
+    """
+    청크 크기 결정 (바이트 단위).
+
+    우선순위: 인자 > 환경변수 > 기본값
+
+    Args:
+        chunk_mb: MB 단위 청크 크기 (None이면 환경변수/기본값 사용)
+
+    Returns:
+        바이트 단위 청크 크기
+    """
+    if chunk_mb is None:
+        env_val = os.environ.get(ENV_UPLOAD_CHUNK_MB)
+        if env_val:
+            try:
+                chunk_mb = int(env_val)
+            except ValueError:
+                logger.warning(f"{ENV_UPLOAD_CHUNK_MB}={env_val} is not valid, using default")
+                chunk_mb = DEFAULT_CHUNK_MB
+        else:
+            chunk_mb = DEFAULT_CHUNK_MB
+
+    # 범위 제한
+    if chunk_mb < MIN_CHUNK_MB:
+        logger.warning(f"Chunk size {chunk_mb}MB too small, using {MIN_CHUNK_MB}MB")
+        chunk_mb = MIN_CHUNK_MB
+    elif chunk_mb > MAX_CHUNK_MB:
+        logger.warning(f"Chunk size {chunk_mb}MB too large, using {MAX_CHUNK_MB}MB")
+        chunk_mb = MAX_CHUNK_MB
+
+    return chunk_mb * 1024 * 1024
+
 
 # 재시도 가능한 HTTP 상태 코드
 RETRIABLE_STATUS_CODES = [500, 502, 503, 504]
@@ -60,14 +102,16 @@ class UploadResult:
 class YouTubeUploader:
     """YouTube 영상 업로더."""
 
-    def __init__(self, service: YouTubeResource) -> None:
+    def __init__(self, service: YouTubeResource, chunk_mb: int | None = None) -> None:
         """
         초기화.
 
         Args:
             service: 인증된 YouTube API 서비스
+            chunk_mb: 업로드 청크 크기 (MB, None이면 환경변수/기본값)
         """
         self.service = service
+        self.chunk_size = get_chunk_size(chunk_mb)
 
     def upload(
         self,
@@ -117,9 +161,11 @@ class YouTubeUploader:
         }
 
         # 미디어 파일 설정 (resumable upload)
+        chunk_mb = self.chunk_size // (1024 * 1024)
+        logger.info(f"  Chunk size: {chunk_mb}MB")
         media = MediaFileUpload(
             str(file_path),
-            chunksize=CHUNK_SIZE,
+            chunksize=self.chunk_size,
             resumable=True,
             mimetype="video/*",
         )

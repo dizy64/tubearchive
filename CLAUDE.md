@@ -73,6 +73,7 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
   - `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS`: OAuth 클라이언트 시크릿 경로
   - `TUBEARCHIVE_YOUTUBE_TOKEN`: 토큰 파일 경로
   - `TUBEARCHIVE_YOUTUBE_PLAYLIST`: 기본 플레이리스트 ID (쉼표로 여러 개 지정 가능)
+  - `TUBEARCHIVE_UPLOAD_CHUNK_MB`: 업로드 청크 크기 MB (1-256, 기본: 32)
 
 ### 테스트 구조
 - `conftest.py`: session-scoped 테스트 DB 격리 (운영 DB와 분리)
