@@ -95,6 +95,7 @@ class TestValidateArgs:
             keep_temp=False,
             dry_run=False,
             output_dir=None,
+            parallel=None,
         )
 
         result = validate_args(args)
@@ -110,6 +111,7 @@ class TestValidateArgs:
             keep_temp=False,
             dry_run=False,
             output_dir=None,
+            parallel=None,
         )
 
         result = validate_args(args)
@@ -125,6 +127,7 @@ class TestValidateArgs:
             keep_temp=False,
             dry_run=False,
             output_dir=None,
+            parallel=None,
         )
 
         result = validate_args(args)
@@ -140,6 +143,7 @@ class TestValidateArgs:
             keep_temp=False,
             dry_run=False,
             output_dir=None,
+            parallel=None,
         )
 
         with pytest.raises(FileNotFoundError):
@@ -154,6 +158,7 @@ class TestValidateArgs:
             keep_temp=False,
             dry_run=False,
             output_dir=None,
+            parallel=None,
         )
 
         result = validate_args(args)
@@ -169,6 +174,7 @@ class TestValidateArgs:
             keep_temp=False,
             dry_run=False,
             output_dir=None,
+            parallel=None,
         )
 
         with pytest.raises(FileNotFoundError, match="Output directory"):

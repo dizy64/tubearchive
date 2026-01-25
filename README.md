@@ -130,6 +130,44 @@ uv run tubearchive --keep-temp ~/Videos/
 
 # 상세 로그 출력
 uv run tubearchive -v ~/Videos/
+
+# 병렬 트랜스코딩 (4개 파일 동시 처리)
+uv run tubearchive -j 4 ~/Videos/
+```
+
+### 병렬 트랜스코딩
+
+여러 파일을 동시에 트랜스코딩하여 처리 속도를 높일 수 있습니다.
+
+```bash
+# CLI 옵션으로 지정
+tubearchive -j 4 ~/Videos/           # 4개 파일 동시 처리
+tubearchive --parallel 2 ~/Videos/   # 2개 파일 동시 처리
+
+# 환경 변수로 기본값 설정 (~/.zshrc에 추가)
+export TUBEARCHIVE_PARALLEL=4
+
+# 환경 변수 설정 후 자동 적용
+tubearchive ~/Videos/  # 4개 파일 동시 처리
+```
+
+**주의사항:**
+- VideoToolbox 하드웨어 인코더는 동시 세션 수에 제한이 있을 수 있음
+- 시스템 리소스(CPU, 메모리)에 따라 적절한 값 설정 권장
+- 기본값: 1 (순차 처리)
+
+### 리셋 기능
+
+이미 처리된 기록을 초기화하여 다시 작업할 수 있습니다.
+
+```bash
+# 빌드 기록 초기화 (트랜스코딩/병합 다시 수행)
+tubearchive --reset-build                    # 목록에서 선택
+tubearchive --reset-build /path/to/output.mp4  # 특정 파일 지정
+
+# 업로드 기록 초기화 (YouTube 다시 업로드)
+tubearchive --reset-upload                   # 목록에서 선택
+tubearchive --reset-upload /path/to/output.mp4 # 특정 파일 지정
 ```
 
 ### 출력 요약 및 YouTube 정보
@@ -306,34 +344,38 @@ tubearchive ~/Videos/ --upload
 
 ```
 usage: tubearchive [-h] [-V] [-o OUTPUT] [--output-dir DIR] [--no-resume]
-                   [--keep-temp] [--dry-run] [-v]
+                   [--keep-temp] [--dry-run] [-v] [-j N]
                    [--upload] [--upload-only FILE]
                    [--upload-title TITLE] [--upload-privacy {public,unlisted,private}]
                    [--playlist ID] [--setup-youtube] [--youtube-auth] [--list-playlists]
+                   [--reset-build [PATH]] [--reset-upload [PATH]]
                    [targets ...]
 
 다양한 기기의 4K 영상을 표준화하여 병합합니다.
 
 positional arguments:
-  targets              영상 파일 또는 디렉토리 (기본: 현재 디렉토리)
+  targets               영상 파일 또는 디렉토리 (기본: 현재 디렉토리)
 
 options:
-  -h, --help           도움말 표시
-  -V, --version        버전 출력
-  -o, --output OUTPUT  출력 파일 경로 (기본: merged_output.mp4)
-  --output-dir DIR     출력 파일 저장 디렉토리 (환경변수: TUBEARCHIVE_OUTPUT_DIR)
-  --no-resume          Resume 기능 비활성화
-  --keep-temp          임시 파일 보존 (디버깅용)
-  --dry-run            실행 계획만 출력 (실제 실행 안 함)
-  -v, --verbose        상세 로그 출력
-  --upload             병합 완료 후 YouTube에 업로드
-  --upload-only FILE   지정된 파일을 YouTube에 업로드 (병합 없이)
-  --upload-title TITLE YouTube 업로드 시 영상 제목
-  --upload-privacy     YouTube 공개 설정 (기본: unlisted)
-  --playlist ID        업로드 후 플레이리스트에 추가 (여러 번 사용 가능)
-  --setup-youtube      YouTube 인증 상태 확인 및 설정 가이드 출력
-  --youtube-auth       YouTube 브라우저 인증 실행
-  --list-playlists     내 플레이리스트 목록 조회
+  -h, --help            도움말 표시
+  -V, --version         버전 출력
+  -o, --output OUTPUT   출력 파일 경로 (기본: merged_output.mp4)
+  --output-dir DIR      출력 파일 저장 디렉토리 (환경변수: TUBEARCHIVE_OUTPUT_DIR)
+  --no-resume           Resume 기능 비활성화
+  --keep-temp           임시 파일 보존 (디버깅용)
+  --dry-run             실행 계획만 출력 (실제 실행 안 함)
+  -v, --verbose         상세 로그 출력
+  -j, --parallel N      병렬 트랜스코딩 수 (환경변수: TUBEARCHIVE_PARALLEL, 기본: 1)
+  --upload              병합 완료 후 YouTube에 업로드
+  --upload-only FILE    지정된 파일을 YouTube에 업로드 (병합 없이)
+  --upload-title TITLE  YouTube 업로드 시 영상 제목
+  --upload-privacy      YouTube 공개 설정 (기본: unlisted)
+  --playlist ID         업로드 후 플레이리스트에 추가 (여러 번 사용 가능)
+  --setup-youtube       YouTube 인증 상태 확인 및 설정 가이드 출력
+  --youtube-auth        YouTube 브라우저 인증 실행
+  --list-playlists      내 플레이리스트 목록 조회
+  --reset-build [PATH]  빌드 기록 초기화 (트랜스코딩/병합 다시 수행)
+  --reset-upload [PATH] 업로드 기록 초기화 (YouTube 다시 업로드)
 ```
 
 ### 환경 변수
@@ -342,6 +384,7 @@ options:
 |-----------|------|--------|
 | `TUBEARCHIVE_OUTPUT_DIR` | 기본 출력 디렉토리 | 출력 파일과 같은 위치 |
 | `TUBEARCHIVE_DB_PATH` | 데이터베이스 파일 경로 | `~/.tubearchive/tubearchive.db` |
+| `TUBEARCHIVE_PARALLEL` | 병렬 트랜스코딩 수 | 1 (순차 처리) |
 | `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 클라이언트 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
 | `TUBEARCHIVE_YOUTUBE_TOKEN` | OAuth 토큰 저장 경로 | `~/.tubearchive/youtube_token.json` |
 | `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID (쉼표로 여러 개 지정) | - |

@@ -8,8 +8,10 @@ import re
 import shutil
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 
 from tubearchive import __version__
 from tubearchive.core.detector import detect_metadata
@@ -18,6 +20,7 @@ from tubearchive.core.scanner import scan_videos
 from tubearchive.core.transcoder import Transcoder
 from tubearchive.database.repository import MergeJobRepository
 from tubearchive.database.schema import init_database
+from tubearchive.models.video import VideoFile
 from tubearchive.utils.progress import MultiProgressBar
 
 logger = logging.getLogger(__name__)
@@ -25,6 +28,7 @@ logger = logging.getLogger(__name__)
 # 환경 변수
 ENV_OUTPUT_DIR = "TUBEARCHIVE_OUTPUT_DIR"
 ENV_YOUTUBE_PLAYLIST = "TUBEARCHIVE_YOUTUBE_PLAYLIST"
+ENV_PARALLEL = "TUBEARCHIVE_PARALLEL"
 
 # YYYYMMDD 패턴 (파일명 시작 부분)
 DATE_PATTERN = re.compile(r"^(\d{4})(\d{2})(\d{2})\s*(.*)$")
@@ -95,6 +99,20 @@ def check_output_disk_space(output_dir: Path, required_bytes: int) -> bool:
     return True
 
 
+def get_default_parallel() -> int:
+    """환경 변수에서 기본 병렬 처리 수 가져오기."""
+    env_parallel = os.environ.get(ENV_PARALLEL)
+    if env_parallel:
+        try:
+            val = int(env_parallel)
+            if val >= 1:
+                return val
+            logger.warning(f"{ENV_PARALLEL}={env_parallel} must be >= 1, using 1")
+        except ValueError:
+            logger.warning(f"{ENV_PARALLEL}={env_parallel} is not a valid number")
+    return 1  # 기본값: 순차 처리
+
+
 @dataclass
 class ValidatedArgs:
     """검증된 CLI 인자."""
@@ -106,6 +124,7 @@ class ValidatedArgs:
     keep_temp: bool
     dry_run: bool
     upload: bool = False
+    parallel: int = 1
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -239,6 +258,15 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--parallel",
+        "-j",
+        type=int,
+        default=None,
+        metavar="N",
+        help=f"병렬 트랜스코딩 수 (환경변수: {ENV_PARALLEL}, 기본: 1)",
+    )
+
+    parser.add_argument(
         "--reset-build",
         type=str,
         nargs="?",
@@ -302,6 +330,11 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     # upload 플래그 확인
     upload = getattr(args, "upload", False)
 
+    # parallel 값 결정 (CLI 인자 > 환경 변수 > 기본값)
+    parallel = args.parallel if args.parallel is not None else get_default_parallel()
+    if parallel < 1:
+        parallel = 1
+
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -310,6 +343,7 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         keep_temp=args.keep_temp,
         dry_run=args.dry_run,
         upload=upload,
+        parallel=parallel,
     )
 
 
@@ -358,6 +392,44 @@ def get_output_filename(targets: list[Path]) -> str:
     return f"{name}.mp4"
 
 
+def _transcode_single(
+    vf: VideoFile,
+    temp_dir: Path,
+    index: int,
+) -> tuple[int, Path, tuple[str, float, str | None, str | None]]:
+    """
+    단일 파일 트랜스코딩 (병렬 처리용).
+
+    Args:
+        vf: VideoFile 객체
+        temp_dir: 임시 디렉토리
+        index: 파일 인덱스 (순서 유지용)
+
+    Returns:
+        (인덱스, 출력 경로, 클립 정보) 튜플
+    """
+
+    with Transcoder(temp_dir=temp_dir) as transcoder:
+        output_path = transcoder.transcode_video(vf)
+
+        # 메타데이터 수집 (Summary용)
+        clip_info: tuple[str, float, str | None, str | None]
+        try:
+            metadata = detect_metadata(vf.path)
+            creation_time_str = vf.creation_time.strftime("%H:%M:%S")
+            clip_info = (
+                vf.path.name,
+                metadata.duration_seconds,
+                metadata.device_model,
+                creation_time_str,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to get metadata for {vf.path}: {e}")
+            clip_info = (vf.path.name, 0.0, None, None)
+
+        return index, output_path, clip_info
+
+
 def run_pipeline(validated_args: ValidatedArgs) -> Path:
     """
     전체 파이프라인 실행.
@@ -383,37 +455,85 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     # 2. 트랜스코딩 (임시 파일은 /tmp에 저장)
     temp_dir = get_temp_dir()
     logger.info(f"Using temp directory: {temp_dir}")
-    logger.info("Starting transcoding...")
+
+    parallel = validated_args.parallel
+    if parallel > 1:
+        logger.info(f"Starting parallel transcoding (workers: {parallel})...")
+    else:
+        logger.info("Starting transcoding...")
+
+    # 결과 저장용 (인덱스로 순서 유지)
+    results: dict[int, tuple[Path, tuple[str, float, str | None, str | None]]] = {}
+
+    if parallel > 1:
+        # 병렬 처리
+        completed_count = 0
+        total_count = len(video_files)
+        print_lock = Lock()
+
+        def print_progress(idx: int, filename: str, status: str) -> None:
+            nonlocal completed_count
+            with print_lock:
+                completed_count += 1
+                print(
+                    f"\r🎬 트랜스코딩: [{completed_count}/{total_count}] {status}: {filename}",
+                    end="",
+                    flush=True,
+                )
+                if completed_count == total_count:
+                    print()  # 줄바꿈
+
+        with ThreadPoolExecutor(max_workers=parallel) as executor:
+            futures = {
+                executor.submit(_transcode_single, vf, temp_dir, i): i
+                for i, vf in enumerate(video_files)
+            }
+
+            for future in as_completed(futures):
+                try:
+                    idx, output_path, clip_info = future.result()
+                    results[idx] = (output_path, clip_info)
+                    print_progress(idx, video_files[idx].path.name, "완료")
+                except Exception as e:
+                    idx = futures[future]
+                    logger.error(f"Failed to transcode {video_files[idx].path}: {e}")
+                    print_progress(idx, video_files[idx].path.name, "실패")
+                    raise
+
+    else:
+        # 순차 처리 (기존 방식)
+        progress = MultiProgressBar(total_files=len(video_files))
+
+        with Transcoder(temp_dir=temp_dir) as transcoder:
+            for i, vf in enumerate(video_files):
+                progress.start_file(vf.path.name)
+
+                output_path = transcoder.transcode_video(vf)
+
+                # 메타데이터 수집 (Summary용)
+                try:
+                    metadata = detect_metadata(vf.path)
+                    creation_time_str = vf.creation_time.strftime("%H:%M:%S")
+                    clip_info = (
+                        vf.path.name,
+                        metadata.duration_seconds,
+                        metadata.device_model,
+                        creation_time_str,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to get metadata for {vf.path}: {e}")
+                    clip_info = (vf.path.name, 0.0, None, None)
+
+                results[i] = (output_path, clip_info)
+                progress.finish_file()
+
+    # 인덱스 순서대로 결과 정렬
     transcoded_paths: list[Path] = []
-    # (파일명, duration, device_model, creation_time_str)
     video_clips: list[tuple[str, float, str | None, str | None]] = []
-    progress = MultiProgressBar(total_files=len(video_files))
-
-    with Transcoder(temp_dir=temp_dir) as transcoder:
-        for vf in video_files:
-            progress.start_file(vf.path.name)
-
-            def on_progress(percent: int) -> None:
-                progress.update_file_progress(percent)
-
-            output_path = transcoder.transcode_video(vf)
-            transcoded_paths.append(output_path)
-
-            # 메타데이터 수집 (Summary용)
-            try:
-                metadata = detect_metadata(vf.path)
-                creation_time_str = vf.creation_time.strftime("%H:%M:%S")
-                video_clips.append((
-                    vf.path.name,
-                    metadata.duration_seconds,
-                    metadata.device_model,
-                    creation_time_str,
-                ))
-            except Exception as e:
-                logger.warning(f"Failed to get metadata for {vf.path}: {e}")
-                video_clips.append((vf.path.name, 0.0, None, None))
-
-            progress.finish_file()
+    for i in range(len(video_files)):
+        output_path, clip_info = results[i]
+        transcoded_paths.append(output_path)
+        video_clips.append(clip_info)
 
     # 3. 병합
     logger.info("Merging videos...")
@@ -1092,6 +1212,7 @@ def main() -> None:
             print(f"Temp dir: {temp_dir}")
             print(f"Resume enabled: {not validated_args.no_resume}")
             print(f"Keep temp files: {validated_args.keep_temp}")
+            print(f"Parallel workers: {validated_args.parallel}")
             print("=" * 30)
             return
 
