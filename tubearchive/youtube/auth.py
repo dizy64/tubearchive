@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# OAuth 스코프 (업로드만 필요)
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+# OAuth 스코프 (업로드 + 플레이리스트 관리)
+SCOPES = ["https://www.googleapis.com/auth/youtube"]
 
 # 환경 변수
 ENV_CLIENT_SECRETS = "TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS"
