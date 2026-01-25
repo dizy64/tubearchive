@@ -10,6 +10,7 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from threading import Lock
 
@@ -22,6 +23,7 @@ from tubearchive.database.repository import MergeJobRepository
 from tubearchive.database.schema import init_database
 from tubearchive.models.video import VideoFile
 from tubearchive.utils.progress import MultiProgressBar
+from tubearchive.utils.summary_generator import generate_single_file_description
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +394,76 @@ def get_output_filename(targets: list[Path]) -> str:
     return f"{name}.mp4"
 
 
+def handle_single_file_upload(
+    video_file: VideoFile,
+    args: ValidatedArgs,
+) -> Path:
+    """
+    단일 파일 직접 업로드 처리.
+
+    인코딩/병합 없이 DB 저장 후 원본 파일 경로 반환.
+
+    Args:
+        video_file: VideoFile 객체
+        args: 검증된 CLI 인자
+
+    Returns:
+        원본 파일 경로
+    """
+    logger.info(f"Single file detected with --upload, skipping transcode: {video_file.path.name}")
+
+    # 1. 메타데이터 수집
+    metadata = detect_metadata(video_file.path)
+
+    # 2. YouTube 제목 생성 (디렉토리명 기반)
+    title = get_output_filename([video_file.path]).replace(".mp4", "")
+
+    # 3. 촬영 시간 추출
+    creation_time_str = video_file.creation_time.strftime("%H:%M:%S")
+
+    # 4. 클립 정보 생성
+    clip_info: dict[str, str | float | None] = {
+        "name": video_file.path.name,
+        "duration": metadata.duration_seconds,
+        "start": 0.0,
+        "end": metadata.duration_seconds,
+        "device": metadata.device_model or "Unknown",
+        "shot_time": creation_time_str,
+    }
+
+    # 5. YouTube 설명 생성 (단일 파일용)
+    youtube_description = generate_single_file_description(clip_info)
+
+    # 6. DB 저장
+    conn = init_database()
+    repo = MergeJobRepository(conn)
+    today = date.today().isoformat()
+
+    repo.create(
+        output_path=video_file.path,
+        video_ids=[],  # 트랜스코딩 안 함
+        title=title,
+        date=today,
+        total_duration_seconds=metadata.duration_seconds,
+        total_size_bytes=video_file.path.stat().st_size,
+        clips_info_json=json.dumps([clip_info]),
+        summary_markdown=youtube_description,
+    )
+    conn.close()
+
+    # 7. 콘솔 출력
+    logger.info(f"Saved to DB: {title}")
+    print("\n📁 단일 파일 업로드 모드 (트랜스코딩 생략)")
+    print(f"📹 파일: {video_file.path.name}")
+    minutes = int(metadata.duration_seconds // 60)
+    seconds = int(metadata.duration_seconds % 60)
+    print(f"⏱️  길이: {minutes}분 {seconds}초")
+    if metadata.device_model:
+        print(f"📷 기기: {metadata.device_model}")
+
+    return video_file.path
+
+
 def _transcode_single(
     vf: VideoFile,
     temp_dir: Path,
@@ -451,6 +523,10 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     logger.info(f"Found {len(video_files)} video files")
     for vf in video_files:
         logger.info(f"  - {vf.path.name}")
+
+    # 단일 파일 + --upload 시 빠른 경로 (인코딩/병합 건너뛰기)
+    if len(video_files) == 1 and validated_args.upload:
+        return handle_single_file_upload(video_files[0], validated_args)
 
     # 2. 트랜스코딩 (임시 파일은 /tmp에 저장)
     temp_dir = get_temp_dir()
@@ -643,8 +719,6 @@ def save_merge_job_to_db(
                 title = output_path.stem
 
         # 날짜: 오늘
-        from datetime import date
-
         today = date.today().isoformat()
 
         # 총 재생시간 및 파일 크기

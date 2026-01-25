@@ -326,3 +326,34 @@ def generate_youtube_description(
         lines.append(f"이 영상은 {devices_str}로 촬영됨")
 
     return "\n".join(lines)
+
+
+def generate_single_file_description(clip_info: dict[str, str | float | None]) -> str:
+    """
+    단일 파일용 YouTube 설명 생성.
+
+    Args:
+        clip_info: 클립 메타데이터 딕셔너리
+            - name: 파일명
+            - duration: 길이 (초)
+            - start: 시작 시간
+            - end: 종료 시간
+            - device: 촬영 기기
+            - shot_time: 촬영 시간
+
+    Returns:
+        YouTube 설명 문자열 (메타데이터 없으면 빈 문자열)
+    """
+    lines: list[str] = []
+
+    # 기기 정보 (Unknown 제외)
+    device = clip_info.get("device")
+    if device and device != "Unknown":
+        lines.append(f"Filmed with {device}")
+
+    # 촬영 시간 (빈 문자열 제외)
+    shot_time = clip_info.get("shot_time")
+    if shot_time:
+        lines.append(f"Shot at {shot_time}")
+
+    return "\n".join(lines)

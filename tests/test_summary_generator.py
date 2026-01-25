@@ -7,6 +7,7 @@ from tubearchive.utils.summary_generator import (
     extract_topic_from_path,
     format_timestamp,
     generate_chapters,
+    generate_single_file_description,
     generate_summary_markdown,
 )
 
@@ -229,3 +230,97 @@ class TestGenerateSummaryMarkdown:
         assert "클립2" in markdown
         assert "0:30" in markdown  # clip1 duration
         assert "1:00" in markdown  # clip2 duration
+
+
+class TestGenerateSingleFileDescription:
+    """generate_single_file_description 테스트."""
+
+    def test_generates_description_with_device_and_time(self) -> None:
+        """기기 정보와 촬영 시간이 있는 경우."""
+        clip_info = {
+            "name": "video.mp4",
+            "duration": 120.5,
+            "start": 0.0,
+            "end": 120.5,
+            "device": "iPhone 17 Pro Max",
+            "shot_time": "14:30:00",
+        }
+        result = generate_single_file_description(clip_info)
+
+        assert "iPhone 17 Pro Max" in result
+        assert "14:30:00" in result
+
+    def test_generates_description_with_device_only(self) -> None:
+        """기기 정보만 있는 경우."""
+        clip_info = {
+            "name": "video.mp4",
+            "duration": 60.0,
+            "start": 0.0,
+            "end": 60.0,
+            "device": "Nikon Z8",
+            "shot_time": None,
+        }
+        result = generate_single_file_description(clip_info)
+
+        assert "Nikon Z8" in result
+        assert "Shot at" not in result
+
+    def test_generates_description_with_time_only(self) -> None:
+        """촬영 시간만 있는 경우."""
+        clip_info = {
+            "name": "video.mp4",
+            "duration": 60.0,
+            "start": 0.0,
+            "end": 60.0,
+            "device": None,
+            "shot_time": "09:15:30",
+        }
+        result = generate_single_file_description(clip_info)
+
+        assert "09:15:30" in result
+        assert "Filmed with" not in result
+
+    def test_returns_empty_for_no_metadata(self) -> None:
+        """메타데이터가 없는 경우 빈 문자열 반환."""
+        clip_info = {
+            "name": "video.mp4",
+            "duration": 60.0,
+            "start": 0.0,
+            "end": 60.0,
+            "device": None,
+            "shot_time": None,
+        }
+        result = generate_single_file_description(clip_info)
+
+        assert result == ""
+
+    def test_skips_unknown_device(self) -> None:
+        """Unknown 기기는 표시하지 않음."""
+        clip_info = {
+            "name": "video.mp4",
+            "duration": 60.0,
+            "start": 0.0,
+            "end": 60.0,
+            "device": "Unknown",
+            "shot_time": "10:00:00",
+        }
+        result = generate_single_file_description(clip_info)
+
+        assert "Unknown" not in result
+        assert "Filmed with" not in result
+        assert "10:00:00" in result
+
+    def test_skips_empty_shot_time(self) -> None:
+        """빈 문자열 촬영 시간은 표시하지 않음."""
+        clip_info = {
+            "name": "video.mp4",
+            "duration": 60.0,
+            "start": 0.0,
+            "end": 60.0,
+            "device": "GoPro Hero 13",
+            "shot_time": "",
+        }
+        result = generate_single_file_description(clip_info)
+
+        assert "GoPro Hero 13" in result
+        assert "Shot at" not in result
