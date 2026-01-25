@@ -355,6 +355,14 @@ class TestCLIUploadIntegration:
         args = parser.parse_args(["--setup-youtube"])
         assert args.setup_youtube is True
 
+    def test_youtube_auth_option_exists(self) -> None:
+        """--youtube-auth 옵션이 존재."""
+        from tubearchive.cli import create_parser
+
+        parser = create_parser()
+        args = parser.parse_args(["--youtube-auth"])
+        assert args.youtube_auth is True
+
 
 class TestCheckAuthStatus:
     """인증 상태 확인 기능 테스트."""
