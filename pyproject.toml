@@ -1,0 +1,47 @@
+[project]
+name = "tubearchive"
+version = "0.1.0"
+description = "4K 영상 표준화 및 병합 CLI 도구 (Project Komorebi)"
+authors = [
+    {name = "Donggeun Lee", email = "i@dizy.me"}
+]
+requires-python = ">=3.14"
+dependencies = []
+readme = "README.md"
+
+[project.scripts]
+tubearchive = "tubearchive.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "mypy>=1.8.0",
+    "ruff>=0.1.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = []
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=tubearchive --cov-report=term-missing"
