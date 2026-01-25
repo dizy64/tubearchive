@@ -14,7 +14,7 @@ from tubearchive.database.resume import ResumeManager
 from tubearchive.database.schema import init_database
 from tubearchive.ffmpeg.effects import create_combined_filter
 from tubearchive.ffmpeg.executor import FFmpegError, FFmpegExecutor
-from tubearchive.ffmpeg.profiles import get_fallback_profile, select_profile
+from tubearchive.ffmpeg.profiles import PROFILE_SDR, get_fallback_profile
 from tubearchive.models.job import JobStatus
 from tubearchive.models.video import VideoFile
 
@@ -116,14 +116,12 @@ class Transcoder:
         self.job_repo.update_status(job_id, JobStatus.PROCESSING)
         self.resume_mgr.set_temp_file(job_id, output_path)
 
-        # 프로파일 선택 (메타데이터 기반)
-        profile = select_profile(
-            color_transfer=metadata.color_transfer,
-            color_space=metadata.color_space,
-        )
+        # 프로파일: 항상 SDR로 통일 (concat 호환성)
+        # HDR 소스는 필터에서 SDR로 변환됨
+        profile = PROFILE_SDR
         logger.info(f"Using profile: {profile.name}")
 
-        # 필터 생성
+        # 필터 생성 (HDR 소스는 SDR로 변환)
         video_filter, audio_filter = create_combined_filter(
             source_width=metadata.width,
             source_height=metadata.height,
@@ -132,6 +130,7 @@ class Transcoder:
             target_width=target_width,
             target_height=target_height,
             fade_duration=fade_duration,
+            color_transfer=metadata.color_transfer,
         )
 
         # 진행률 콜백

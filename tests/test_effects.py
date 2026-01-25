@@ -2,8 +2,10 @@
 
 
 from tubearchive.ffmpeg.effects import (
+    create_combined_filter,
     create_dip_to_black_audio_filter,
     create_dip_to_black_video_filter,
+    create_hdr_to_sdr_filter,
     create_portrait_layout_filter,
 )
 
@@ -164,3 +166,89 @@ class TestDipToBlackAudioFilter:
         audio_fadeout_st = audio_filter.split("afade=t=out:st=")[1].split(":")[0]
 
         assert video_fadeout_st == audio_fadeout_st == "59.5"
+
+
+class TestHdrToSdrFilter:
+    """HDR→SDR 변환 필터 테스트."""
+
+    def test_creates_colorspace_filter_for_hlg(self) -> None:
+        """HLG HDR 변환 필터 생성."""
+        filter_str = create_hdr_to_sdr_filter(color_transfer="arib-std-b67")
+
+        assert "colorspace=" in filter_str
+        assert "bt709" in filter_str
+
+    def test_creates_colorspace_filter_for_pq(self) -> None:
+        """PQ/HDR10 변환 필터 생성."""
+        filter_str = create_hdr_to_sdr_filter(color_transfer="smpte2084")
+
+        assert "colorspace=" in filter_str
+        assert "bt709" in filter_str
+
+    def test_returns_empty_for_sdr(self) -> None:
+        """SDR 소스는 빈 필터 반환."""
+        filter_str = create_hdr_to_sdr_filter(color_transfer="bt709")
+
+        assert filter_str == ""
+
+    def test_returns_empty_for_none(self) -> None:
+        """메타데이터 없으면 빈 필터 반환."""
+        filter_str = create_hdr_to_sdr_filter(color_transfer=None)
+
+        assert filter_str == ""
+
+
+class TestCombinedFilterWithHdr:
+    """HDR 소스에 대한 결합 필터 테스트."""
+
+    def test_includes_hdr_conversion_for_hlg_source(self) -> None:
+        """HLG HDR 소스 시 변환 필터 포함."""
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            color_transfer="arib-std-b67",
+        )
+
+        assert "colorspace=" in video_filter
+        assert "bt709" in video_filter
+
+    def test_includes_hdr_conversion_for_pq_source(self) -> None:
+        """PQ HDR 소스 시 변환 필터 포함."""
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            color_transfer="smpte2084",
+        )
+
+        assert "colorspace=" in video_filter
+        assert "bt709" in video_filter
+
+    def test_no_hdr_conversion_for_sdr_source(self) -> None:
+        """SDR 소스는 변환 없음."""
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            color_transfer="bt709",
+        )
+
+        assert "colorspace=" not in video_filter
+
+    def test_hdr_conversion_with_portrait_layout(self) -> None:
+        """세로 영상 + HDR 변환 결합."""
+        video_filter, _ = create_combined_filter(
+            source_width=1080,
+            source_height=1920,
+            total_duration=60.0,
+            is_portrait=True,
+            color_transfer="arib-std-b67",
+        )
+
+        # 세로 레이아웃 필터와 HDR 변환 모두 포함
+        assert "overlay" in video_filter
+        assert "colorspace=" in video_filter
