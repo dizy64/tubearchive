@@ -1,12 +1,9 @@
 """FFmpeg 실행기 테스트."""
 
-import re
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tubearchive.ffmpeg.executor import (
-    FFmpegError,
     FFmpegExecutor,
     parse_progress_line,
 )
@@ -54,7 +51,7 @@ class TestParseProgressLine:
 
         assert result is None
 
-    def test_handles_N_A_time(self) -> None:
+    def test_handles_na_time(self) -> None:
         """time=N/A 처리."""
         line = "frame=    0 fps=0.0 q=0.0 size=       0kB time=N/A"
         result = parse_progress_line(line)
@@ -73,6 +70,7 @@ class TestFFmpegExecutor:
     def test_build_transcode_command(self, executor: FFmpegExecutor) -> None:
         """트랜스코딩 명령어 빌드."""
         from pathlib import Path
+
         from tubearchive.ffmpeg.profiles import PROFILE_4K_HEVC_VT
 
         cmd = executor.build_transcode_command(
@@ -96,6 +94,7 @@ class TestFFmpegExecutor:
     def test_build_command_with_filter_complex(self, executor: FFmpegExecutor) -> None:
         """filter_complex 사용 시."""
         from pathlib import Path
+
         from tubearchive.ffmpeg.profiles import PROFILE_4K_HEVC_VT
 
         cmd = executor.build_transcode_command(
@@ -112,6 +111,7 @@ class TestFFmpegExecutor:
     def test_build_command_overwrite(self, executor: FFmpegExecutor) -> None:
         """덮어쓰기 옵션."""
         from pathlib import Path
+
         from tubearchive.ffmpeg.profiles import PROFILE_4K_HEVC_VT
 
         cmd = executor.build_transcode_command(

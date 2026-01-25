@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.cli import create_parser, validate_args, main
+from tubearchive.cli import create_parser, main, validate_args
 
 
 class TestCreateParser:

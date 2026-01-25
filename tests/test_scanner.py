@@ -1,6 +1,5 @@
 """파일 스캐너 테스트."""
 
-import os
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -54,7 +53,9 @@ class TestScanner:
 
             yield tmp_path
 
-    def test_empty_args_scans_cwd(self, temp_video_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_empty_args_scans_cwd(
+        self, temp_video_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """인자 없이 호출하면 현재 디렉토리 스캔."""
         monkeypatch.chdir(temp_video_dir)
 

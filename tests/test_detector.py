@@ -1,13 +1,11 @@
 """메타데이터 감지기 테스트."""
 
-import json
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
 from tubearchive.core.detector import detect_metadata
-from tubearchive.models.video import VideoFile, VideoMetadata
 
 
 class TestDetector:

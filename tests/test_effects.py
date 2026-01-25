@@ -1,6 +1,5 @@
 """FFmpeg 효과 테스트."""
 
-import pytest
 
 from tubearchive.ffmpeg.effects import (
     create_dip_to_black_audio_filter,

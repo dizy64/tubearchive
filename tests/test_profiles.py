@@ -1,6 +1,5 @@
 """인코딩 프로파일 테스트."""
 
-import pytest
 
 from tubearchive.ffmpeg.profiles import (
     PROFILE_4K_HEVC_VT,
@@ -9,7 +8,6 @@ from tubearchive.ffmpeg.profiles import (
     PROFILE_GOPRO,
     PROFILE_IPHONE,
     PROFILE_NIKON_NLOG,
-    EncodingProfile,
     get_fallback_profile,
     select_profile,
 )

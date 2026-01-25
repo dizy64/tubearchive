@@ -1,16 +1,14 @@
 """데이터베이스 테스트."""
 
-import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import pytest
 
-from tubearchive.database.repository import VideoRepository, TranscodingJobRepository
+from tubearchive.database.repository import TranscodingJobRepository, VideoRepository
 from tubearchive.database.schema import init_database
-from tubearchive.models.job import JobStatus, TranscodingJob
+from tubearchive.models.job import JobStatus
 from tubearchive.models.video import VideoFile, VideoMetadata
 
 
