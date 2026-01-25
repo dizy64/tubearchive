@@ -1309,6 +1309,7 @@ def main() -> None:
             print("\n📤 YouTube 업로드 시작...")
             # DB에서 최신 MergeJob ID 조회
             merge_job_id = None
+            title = None
             description = ""
             try:
                 conn = init_database()
@@ -1316,6 +1317,7 @@ def main() -> None:
                 job = repo.get_latest()
                 if job:
                     merge_job_id = job.id
+                    title = job.title
                     description = job.summary_markdown or ""
                 conn.close()
             except Exception as e:
@@ -1326,6 +1328,7 @@ def main() -> None:
 
             upload_to_youtube(
                 file_path=output_path,
+                title=title,
                 description=description,
                 merge_job_id=merge_job_id,
                 playlist_ids=playlist_ids,
