@@ -161,6 +161,10 @@ class YouTubeUploader:
         response: dict[str, Any] | None = None
         retries = 0
 
+        # 시작 시 0% 표시
+        if on_progress:
+            on_progress(0)
+
         while response is None:
             try:
                 status, response = request.next_chunk()
@@ -170,6 +174,9 @@ class YouTubeUploader:
                     logger.debug(f"Upload progress: {progress_percent}%")
                     if on_progress:
                         on_progress(progress_percent)
+                elif response is None:
+                    # 청크 전송 중이지만 status가 None인 경우
+                    logger.debug("Uploading chunk...")
 
             except HttpError as e:
                 if e.resp.status in RETRIABLE_STATUS_CODES:
