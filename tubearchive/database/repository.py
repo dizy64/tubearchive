@@ -1,0 +1,208 @@
+"""데이터베이스 CRUD 작업."""
+
+import json
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+
+from tubearchive.models.job import JobStatus, TranscodingJob
+from tubearchive.models.video import VideoFile, VideoMetadata
+
+
+class VideoRepository:
+    """영상 정보 저장소."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        """초기화."""
+        self.conn = conn
+
+    def insert(self, video: VideoFile, metadata: VideoMetadata) -> int:
+        """
+        영상 정보 삽입.
+
+        Args:
+            video: VideoFile 객체
+            metadata: VideoMetadata 객체
+
+        Returns:
+            삽입된 video_id
+        """
+        metadata_json = json.dumps({
+            "width": metadata.width,
+            "height": metadata.height,
+            "fps": metadata.fps,
+            "codec": metadata.codec,
+            "pixel_format": metadata.pixel_format,
+            "is_vfr": metadata.is_vfr,
+            "color_space": metadata.color_space,
+            "color_transfer": metadata.color_transfer,
+            "color_primaries": metadata.color_primaries,
+        })
+
+        cursor = self.conn.execute(
+            """
+            INSERT INTO videos (
+                original_path, creation_time, duration_seconds,
+                device_model, is_portrait, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(video.path),
+                video.creation_time.isoformat(),
+                metadata.duration_seconds,
+                metadata.device_model,
+                1 if metadata.is_portrait else 0,
+                metadata_json,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid or 0
+
+    def get_by_id(self, video_id: int) -> sqlite3.Row | None:
+        """ID로 영상 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM videos WHERE id = ?",
+            (video_id,),
+        )
+        result: sqlite3.Row | None = cursor.fetchone()
+        return result
+
+    def get_by_path(self, path: Path) -> sqlite3.Row | None:
+        """경로로 영상 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM videos WHERE original_path = ?",
+            (str(path),),
+        )
+        result: sqlite3.Row | None = cursor.fetchone()
+        return result
+
+    def get_all(self) -> list[sqlite3.Row]:
+        """모든 영상 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM videos ORDER BY creation_time"
+        )
+        return cursor.fetchall()
+
+
+class TranscodingJobRepository:
+    """트랜스코딩 작업 저장소."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        """초기화."""
+        self.conn = conn
+
+    def create(self, video_id: int) -> int:
+        """
+        작업 생성.
+
+        Args:
+            video_id: 영상 ID
+
+        Returns:
+            생성된 job_id
+        """
+        cursor = self.conn.execute(
+            "INSERT INTO transcoding_jobs (video_id) VALUES (?)",
+            (video_id,),
+        )
+        self.conn.commit()
+        return cursor.lastrowid or 0
+
+    def get_by_id(self, job_id: int) -> TranscodingJob | None:
+        """ID로 작업 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM transcoding_jobs WHERE id = ?",
+            (job_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_job(row)
+
+    def get_by_video_id(self, video_id: int) -> list[TranscodingJob]:
+        """video_id로 작업 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM transcoding_jobs WHERE video_id = ? ORDER BY created_at DESC",
+            (video_id,),
+        )
+        return [self._row_to_job(row) for row in cursor.fetchall()]
+
+    def get_incomplete_jobs(self) -> list[TranscodingJob]:
+        """미완료(processing) 작업 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM transcoding_jobs WHERE status = 'processing' ORDER BY started_at"
+        )
+        return [self._row_to_job(row) for row in cursor.fetchall()]
+
+    def update_status(self, job_id: int, status: JobStatus) -> None:
+        """상태 업데이트."""
+        now = datetime.now().isoformat()
+
+        if status == JobStatus.PROCESSING:
+            self.conn.execute(
+                "UPDATE transcoding_jobs SET status = ?, started_at = ? WHERE id = ?",
+                (status.value, now, job_id),
+            )
+        elif status == JobStatus.COMPLETED:
+            self.conn.execute(
+                "UPDATE transcoding_jobs SET status = ?, completed_at = ? WHERE id = ?",
+                (status.value, now, job_id),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE transcoding_jobs SET status = ? WHERE id = ?",
+                (status.value, job_id),
+            )
+        self.conn.commit()
+
+    def update_progress(self, job_id: int, progress: int) -> None:
+        """진행률 업데이트."""
+        self.conn.execute(
+            "UPDATE transcoding_jobs SET progress_percent = ? WHERE id = ?",
+            (progress, job_id),
+        )
+        self.conn.commit()
+
+    def mark_completed(self, job_id: int, output_path: Path) -> None:
+        """완료 처리."""
+        now = datetime.now().isoformat()
+        self.conn.execute(
+            """
+            UPDATE transcoding_jobs
+            SET status = 'completed', progress_percent = 100,
+                temp_file_path = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (str(output_path), now, job_id),
+        )
+        self.conn.commit()
+
+    def mark_failed(self, job_id: int, error_message: str) -> None:
+        """실패 처리."""
+        now = datetime.now().isoformat()
+        self.conn.execute(
+            """
+            UPDATE transcoding_jobs
+            SET status = 'failed', error_message = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (error_message, now, job_id),
+        )
+        self.conn.commit()
+
+    def _row_to_job(self, row: sqlite3.Row) -> TranscodingJob:
+        """Row를 TranscodingJob으로 변환."""
+        return TranscodingJob(
+            id=row["id"],
+            video_id=row["video_id"],
+            temp_file_path=Path(row["temp_file_path"]) if row["temp_file_path"] else None,
+            status=JobStatus(row["status"]),
+            progress_percent=row["progress_percent"],
+            started_at=(
+                datetime.fromisoformat(row["started_at"]) if row["started_at"] else None
+            ),
+            completed_at=(
+                datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
+            ),
+            error_message=row["error_message"],
+        )
