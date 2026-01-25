@@ -16,7 +16,6 @@ from tubearchive.core.scanner import scan_videos
 from tubearchive.core.transcoder import Transcoder
 from tubearchive.database.repository import MergeJobRepository
 from tubearchive.database.schema import init_database
-from tubearchive.models.video import VideoFile
 from tubearchive.utils.progress import MultiProgressBar
 
 logger = logging.getLogger(__name__)
@@ -259,7 +258,8 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     logger.info(f"Using temp directory: {temp_dir}")
     logger.info("Starting transcoding...")
     transcoded_paths: list[Path] = []
-    video_durations: list[tuple[str, float]] = []
+    # (파일명, duration, device_model, creation_time_str)
+    video_clips: list[tuple[str, float, str | None, str | None]] = []
     progress = MultiProgressBar(total_files=len(video_files))
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
@@ -272,13 +272,19 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
             output_path = transcoder.transcode_video(vf)
             transcoded_paths.append(output_path)
 
-            # duration 수집 (타임라인용)
+            # 메타데이터 수집 (Summary용)
             try:
                 metadata = detect_metadata(vf.path)
-                video_durations.append((vf.path.name, metadata.duration_seconds))
+                creation_time_str = vf.creation_time.strftime("%H:%M:%S")
+                video_clips.append((
+                    vf.path.name,
+                    metadata.duration_seconds,
+                    metadata.device_model,
+                    creation_time_str,
+                ))
             except Exception as e:
-                logger.warning(f"Failed to get duration for {vf.path}: {e}")
-                video_durations.append((vf.path.name, 0.0))
+                logger.warning(f"Failed to get metadata for {vf.path}: {e}")
+                video_clips.append((vf.path.name, 0.0, None, None))
 
             progress.finish_file()
 
@@ -298,8 +304,10 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
 
     logger.info(f"Final output: {final_path}")
 
-    # 4. DB에 타임라인 정보 저장
-    save_merge_job_to_db(final_path, video_durations, validated_args.targets)
+    # 4. DB에 타임라인 정보 저장 및 Summary 생성
+    summary_markdown = save_merge_job_to_db(
+        final_path, video_clips, validated_args.targets
+    )
 
     # 5. 임시 파일 및 폴더 정리
     if not validated_args.keep_temp:
@@ -317,35 +325,50 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
             except OSError as e:
                 logger.warning(f"Failed to remove temp directory: {e}")
 
+    # 6. Summary 출력 (복사해서 바로 사용 가능)
+    if summary_markdown:
+        print("\n" + "=" * 60)
+        print("📋 SUMMARY (Copy & Paste)")
+        print("=" * 60)
+        print(summary_markdown)
+        print("=" * 60 + "\n")
+
     return final_path
 
 
 def save_merge_job_to_db(
     output_path: Path,
-    video_durations: list[tuple[str, float]],
+    video_clips: list[tuple[str, float, str | None, str | None]],
     targets: list[Path],
-) -> None:
+) -> str | None:
     """
-    병합 작업 정보를 DB에 저장 (타임라인 포함).
+    병합 작업 정보를 DB에 저장 (타임라인 및 Summary 포함).
 
     Args:
         output_path: 출력 파일 경로
-        video_durations: (파일명, 재생시간) 튜플 리스트
+        video_clips: (파일명, 재생시간, 기종, 촬영시간) 튜플 리스트
         targets: 입력 타겟 목록 (제목 추출용)
+
+    Returns:
+        생성된 Summary 마크다운 (실패 시 None)
     """
+    from tubearchive.utils.summary_generator import generate_clip_summary
+
     try:
         conn = init_database()
         repo = MergeJobRepository(conn)
 
-        # 타임라인 정보 생성 (각 클립의 시작/종료 시간)
-        timeline: list[dict] = []
+        # 타임라인 정보 생성 (각 클립의 메타데이터 포함)
+        timeline: list[dict[str, str | float | None]] = []
         current_time = 0.0
-        for name, duration in video_durations:
+        for name, duration, device, shot_time in video_clips:
             timeline.append({
                 "name": name,
                 "duration": duration,
                 "start": current_time,
                 "end": current_time + duration,
+                "device": device,
+                "shot_time": shot_time,
             })
             current_time += duration
 
@@ -367,8 +390,11 @@ def save_merge_job_to_db(
         today = date.today().isoformat()
 
         # 총 재생시간 및 파일 크기
-        total_duration = sum(d for _, d in video_durations)
+        total_duration = sum(d for _, d, _, _ in video_clips)
         total_size = output_path.stat().st_size if output_path.exists() else 0
+
+        # Summary 마크다운 생성 (기종, 촬영시간, 타임스탬프)
+        summary_markdown = generate_clip_summary(video_clips)
 
         repo.create(
             output_path=output_path,
@@ -378,13 +404,15 @@ def save_merge_job_to_db(
             total_duration_seconds=total_duration,
             total_size_bytes=total_size,
             clips_info_json=clips_json,
-            summary_path=None,
+            summary_markdown=summary_markdown,
         )
         conn.close()
-        logger.debug("Merge job saved to database")
+        logger.debug("Merge job saved to database with summary")
+        return summary_markdown
 
     except Exception as e:
         logger.warning(f"Failed to save merge job to DB: {e}")
+        return None
 
 
 def main() -> None:

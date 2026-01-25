@@ -224,7 +224,7 @@ class MergeJobRepository:
         total_duration_seconds: float | None = None,
         total_size_bytes: int | None = None,
         clips_info_json: str | None = None,
-        summary_path: Path | None = None,
+        summary_markdown: str | None = None,
     ) -> int:
         """
         병합 작업 생성.
@@ -237,7 +237,7 @@ class MergeJobRepository:
             total_duration_seconds: 총 재생 시간 (초)
             total_size_bytes: 총 파일 크기 (바이트)
             clips_info_json: 클립 정보 JSON
-            summary_path: 요약 파일 경로
+            summary_markdown: 마크다운 형식 요약 콘텐츠
 
         Returns:
             생성된 job_id
@@ -247,7 +247,7 @@ class MergeJobRepository:
             INSERT INTO merge_jobs (
                 output_path, video_ids, title, date,
                 total_duration_seconds, total_size_bytes,
-                clips_info_json, summary_path
+                clips_info_json, summary_markdown
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -258,7 +258,7 @@ class MergeJobRepository:
                 total_duration_seconds,
                 total_size_bytes,
                 clips_info_json,
-                str(summary_path) if summary_path else None,
+                summary_markdown,
             ),
         )
         self.conn.commit()
@@ -315,5 +315,5 @@ class MergeJobRepository:
             total_duration_seconds=row["total_duration_seconds"],
             total_size_bytes=row["total_size_bytes"],
             clips_info_json=row["clips_info_json"],
-            summary_path=Path(row["summary_path"]) if row["summary_path"] else None,
+            summary_markdown=row["summary_markdown"],
         )

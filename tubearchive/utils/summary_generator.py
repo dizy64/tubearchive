@@ -251,25 +251,44 @@ def generate_summary_markdown(info: OutputInfo) -> str:
     return "\n".join(lines)
 
 
-def save_summary(info: OutputInfo, output_dir: Path | None = None) -> Path:
+def generate_clip_summary(
+    video_clips: list[tuple[str, float, str | None, str | None]],
+) -> str:
     """
-    요약 마크다운 파일 저장.
+    클립 정보 요약 생성 (기종, 촬영시간, 타임스탬프).
 
     Args:
-        info: OutputInfo 인스턴스
-        output_dir: 저장 디렉토리 (None이면 출력 파일과 같은 디렉토리)
+        video_clips: (파일명, duration, device_model, shot_time) 튜플 리스트
 
     Returns:
-        저장된 파일 경로
+        마크다운 형식 문자열
     """
-    if output_dir is None:
-        output_dir = info.output_path.parent
+    lines: list[str] = []
 
-    # 파일명 생성 (출력파일명_summary.md)
-    summary_filename = f"{info.output_path.stem}_summary.md"
-    summary_path = output_dir / summary_filename
+    # 클립 정보 테이블
+    lines.append("## 클립 정보")
+    lines.append("")
+    lines.append("| # | 파일명 | 기종 | 촬영시간 | 길이 |")
+    lines.append("|---|--------|------|----------|------|")
 
-    markdown = generate_summary_markdown(info)
-    summary_path.write_text(markdown, encoding="utf-8")
+    for i, (filename, duration, device, shot_time) in enumerate(video_clips, 1):
+        device_str = device or "-"
+        shot_time_str = shot_time or "-"
+        duration_str = format_timestamp(duration)
+        lines.append(f"| {i} | {filename} | {device_str} | {shot_time_str} | {duration_str} |")
 
-    return summary_path
+    lines.append("")
+
+    # YouTube 챕터 (복사용)
+    lines.append("## YouTube 챕터")
+    lines.append("")
+    lines.append("```")
+    current_time = 0.0
+    for filename, duration, _, _ in video_clips:
+        timestamp = format_timestamp(current_time)
+        clip_name = Path(filename).stem
+        lines.append(f"{timestamp} {clip_name}")
+        current_time += duration
+    lines.append("```")
+
+    return "\n".join(lines)

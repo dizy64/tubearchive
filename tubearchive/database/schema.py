@@ -13,7 +13,7 @@ def get_default_db_path() -> Path:
     기본 데이터베이스 경로 반환.
 
     우선순위:
-    1. TUBEARCHIVE_DB_PATH 환경 변수
+    1. TUBEARCHIVE_DB_PATH 환경 변수 (파일 또는 디렉토리)
     2. ~/.tubearchive/tubearchive.db
 
     Returns:
@@ -21,7 +21,15 @@ def get_default_db_path() -> Path:
     """
     env_path = os.environ.get(ENV_DB_PATH)
     if env_path:
-        return Path(env_path)
+        path = Path(env_path)
+        # 디렉토리인 경우 파일명 자동 추가
+        if path.is_dir():
+            return path / "tubearchive.db"
+        # 파일 확장자가 없거나 디렉토리처럼 보이면 파일명 추가
+        if path.suffix == "" and not path.exists():
+            path.mkdir(parents=True, exist_ok=True)
+            return path / "tubearchive.db"
+        return path
 
     # 홈 디렉토리에 고정 위치 사용
     db_dir = Path.home() / ".tubearchive"
@@ -72,7 +80,7 @@ CREATE TABLE IF NOT EXISTS merge_jobs (
     total_duration_seconds REAL,
     total_size_bytes INTEGER,
     clips_info_json TEXT,
-    summary_path TEXT,
+    summary_markdown TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

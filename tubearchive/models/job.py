@@ -55,7 +55,7 @@ class MergeJob:
     total_duration_seconds: float | None = None
     total_size_bytes: int | None = None
     clips_info_json: str | None = None
-    summary_path: Path | None = None
+    summary_markdown: str | None = None
 
     def __post_init__(self) -> None:
         """검증."""

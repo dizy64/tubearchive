@@ -7,30 +7,46 @@ from typing import Generator
 
 import pytest
 
+# 테스트 DB 영속성 제어 환경 변수
+# TUBEARCHIVE_TEST_PERSISTENT=1: 실제 DB 사용 (영속성 유지)
+# 미설정 또는 0: 임시 DB 사용 (테스트 후 삭제)
+ENV_TEST_PERSISTENT = "TUBEARCHIVE_TEST_PERSISTENT"
+
 
 @pytest.fixture(scope="session", autouse=True)
-def isolate_test_database() -> Generator[Path, None, None]:
+def isolate_test_database() -> Generator[Path | None, None, None]:
     """
     테스트용 DB 격리.
 
-    pytest 실행 시 자동으로 임시 DB 경로를 설정하여
-    실제 운영 DB와 분리합니다.
+    TUBEARCHIVE_TEST_PERSISTENT=1 설정 시:
+      - 실제 DB 경로 사용 (TUBEARCHIVE_DB_PATH 또는 기본 경로)
+      - 테스트 데이터가 영속적으로 유지됨
+
+    미설정 시 (기본):
+      - 임시 디렉토리에 테스트 DB 생성
+      - 테스트 완료 후 자동 삭제
     """
-    # 임시 디렉토리에 테스트 DB 생성
-    with tempfile.TemporaryDirectory(prefix="tubearchive_test_") as tmp_dir:
-        test_db_path = Path(tmp_dir) / "test_tubearchive.db"
+    use_persistent = os.environ.get(ENV_TEST_PERSISTENT, "0") == "1"
 
-        # 환경 변수 설정
-        original_db_path = os.environ.get("TUBEARCHIVE_DB_PATH")
-        os.environ["TUBEARCHIVE_DB_PATH"] = str(test_db_path)
+    if use_persistent:
+        # 영속 모드: 실제 DB 사용, 환경 변수 변경 없음
+        yield None
+    else:
+        # 격리 모드: 임시 DB 사용
+        with tempfile.TemporaryDirectory(prefix="tubearchive_test_") as tmp_dir:
+            test_db_path = Path(tmp_dir) / "test_tubearchive.db"
 
-        yield test_db_path
+            # 환경 변수 설정
+            original_db_path = os.environ.get("TUBEARCHIVE_DB_PATH")
+            os.environ["TUBEARCHIVE_DB_PATH"] = str(test_db_path)
 
-        # 환경 변수 복원
-        if original_db_path is not None:
-            os.environ["TUBEARCHIVE_DB_PATH"] = original_db_path
-        else:
-            os.environ.pop("TUBEARCHIVE_DB_PATH", None)
+            yield test_db_path
+
+            # 환경 변수 복원
+            if original_db_path is not None:
+                os.environ["TUBEARCHIVE_DB_PATH"] = original_db_path
+            else:
+                os.environ.pop("TUBEARCHIVE_DB_PATH", None)
 
 
 @pytest.fixture
