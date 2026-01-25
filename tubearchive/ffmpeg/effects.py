@@ -22,8 +22,10 @@ def create_hdr_to_sdr_filter(color_transfer: str | None) -> str:
     # colorspace 필터: BT.2020 → BT.709 변환
     # all=bt709: 출력 색공간 (primaries, transfer, matrix 모두 bt709)
     # iall=bt2020: 입력 색공간 (BT.2020)
-    # fast=1: 빠른 변환 모드
-    return "colorspace=all=bt709:iall=bt2020:fast=1"
+    # dither=fsb: Floyd-Steinberg 디더링 (색상 밴딩/노이즈 감소)
+    # Note: format 옵션은 colorspace 필터에서 지원하지 않음 (별도 format 필터 사용)
+    # Note: fast=1 제거 - 색상 정확도 우선 (iPhone 포트레이트 노이즈 방지)
+    return "colorspace=all=bt709:iall=bt2020:dither=fsb,format=yuv420p10le"
 
 
 def create_portrait_layout_filter(
@@ -153,29 +155,48 @@ def create_combined_filter(
         fg_height = target_height
         fg_width = int(source_width * (fg_height / source_height))
 
-        # HDR 변환이 필요하면 오버레이 후에 적용
-        hdr_part = f",{hdr_filter}" if hdr_filter else ""
-
-        video_filter = (
-            f"[0:v]split=2[bg][fg];"
-            f"[bg]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
-            f"crop={target_width}:{target_height},"
-            f"boxblur={blur_radius}:1[bg_blur];"
-            f"[fg]scale={fg_width}:{fg_height}[fg_scaled];"
-            f"[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2{hdr_part},"
-            f"fade=t=in:st=0:d={fade_duration},"
-            f"fade=t=out:st={fade_out_start}:d={fade_duration}[v_out]"
-        )
+        # HDR 변환: split 전에 적용하여 모든 후처리가 BT.709에서 수행되도록 함
+        # (색상 일관성 유지, boxblur/overlay 후 변환 시 발생하는 색상 노이즈 방지)
+        if hdr_filter:
+            video_filter = (
+                f"[0:v]{hdr_filter},split=2[bg][fg];"
+                f"[bg]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
+                f"crop={target_width}:{target_height},"
+                f"boxblur={blur_radius}:1[bg_blur];"
+                f"[fg]scale={fg_width}:{fg_height}[fg_scaled];"
+                f"[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2,"
+                f"fade=t=in:st=0:d={fade_duration},"
+                f"fade=t=out:st={fade_out_start}:d={fade_duration}[v_out]"
+            )
+        else:
+            video_filter = (
+                f"[0:v]split=2[bg][fg];"
+                f"[bg]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
+                f"crop={target_width}:{target_height},"
+                f"boxblur={blur_radius}:1[bg_blur];"
+                f"[fg]scale={fg_width}:{fg_height}[fg_scaled];"
+                f"[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2,"
+                f"fade=t=in:st=0:d={fade_duration},"
+                f"fade=t=out:st={fade_out_start}:d={fade_duration}[v_out]"
+            )
     else:
-        # 가로 영상: 스케일 + (HDR 변환) + Fade
-        hdr_part = f",{hdr_filter}" if hdr_filter else ""
-
-        video_filter = (
-            f"[0:v]scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
-            f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2{hdr_part},"
-            f"fade=t=in:st=0:d={fade_duration},"
-            f"fade=t=out:st={fade_out_start}:d={fade_duration}[v_out]"
-        )
+        # 가로 영상: (HDR 변환) + 스케일 + Fade
+        # HDR 변환을 먼저 적용하여 이후 처리가 BT.709에서 수행되도록 함
+        if hdr_filter:
+            video_filter = (
+                f"[0:v]{hdr_filter},"
+                f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+                f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,"
+                f"fade=t=in:st=0:d={fade_duration},"
+                f"fade=t=out:st={fade_out_start}:d={fade_duration}[v_out]"
+            )
+        else:
+            video_filter = (
+                f"[0:v]scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+                f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,"
+                f"fade=t=in:st=0:d={fade_duration},"
+                f"fade=t=out:st={fade_out_start}:d={fade_duration}[v_out]"
+            )
 
     audio_filter = create_dip_to_black_audio_filter(total_duration, fade_duration)
 
