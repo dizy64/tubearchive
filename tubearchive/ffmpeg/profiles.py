@@ -39,7 +39,7 @@ class EncodingProfile:
         return args
 
 
-# 기본 4K HEVC VideoToolbox 프로파일
+# 기본 4K HEVC VideoToolbox 프로파일 (10-bit 통일)
 PROFILE_4K_HEVC_VT = EncodingProfile(
     name="4K HEVC VideoToolbox",
     video_codec="hevc_videotoolbox",
@@ -47,10 +47,10 @@ PROFILE_4K_HEVC_VT = EncodingProfile(
     pixel_format="p010le",
     audio_codec="aac",
     audio_bitrate="256k",
-    extra_args=("-tag:v", "hvc1"),
+    extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
 )
 
-# Nikon N-Log (Rec.2020, HDR)
+# Nikon N-Log (Rec.2020, HDR, 10-bit)
 PROFILE_NIKON_NLOG = EncodingProfile(
     name="Nikon N-Log",
     video_codec="hevc_videotoolbox",
@@ -61,46 +61,46 @@ PROFILE_NIKON_NLOG = EncodingProfile(
     color_primaries="bt2020",
     color_transfer="smpte2084",
     color_space="bt2020nc",
-    extra_args=("-tag:v", "hvc1"),
+    extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
 )
 
-# iPhone (SDR, Rec.709)
+# iPhone (SDR, Rec.709, 10-bit로 변환하여 통일)
 PROFILE_IPHONE = EncodingProfile(
     name="iPhone",
     video_codec="hevc_videotoolbox",
     video_bitrate="40M",
-    pixel_format="yuv420p",
+    pixel_format="p010le",
     audio_codec="aac",
     audio_bitrate="256k",
     color_primaries="bt709",
     color_transfer="bt709",
     color_space="bt709",
-    extra_args=("-tag:v", "hvc1"),
+    extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
 )
 
-# GoPro (SDR, Rec.709)
+# GoPro (SDR, Rec.709, 10-bit로 변환하여 통일)
 PROFILE_GOPRO = EncodingProfile(
     name="GoPro",
     video_codec="hevc_videotoolbox",
     video_bitrate="50M",
-    pixel_format="yuv420p",
+    pixel_format="p010le",
     audio_codec="aac",
     audio_bitrate="256k",
-    extra_args=("-tag:v", "hvc1"),
+    extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
 )
 
-# DJI (SDR, Rec.709)
+# DJI (SDR, Rec.709, 10-bit로 변환하여 통일)
 PROFILE_DJI = EncodingProfile(
     name="DJI",
     video_codec="hevc_videotoolbox",
     video_bitrate="50M",
-    pixel_format="yuv420p",
+    pixel_format="p010le",
     audio_codec="aac",
     audio_bitrate="256k",
-    extra_args=("-tag:v", "hvc1"),
+    extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
 )
 
-# libx265 폴백 (VideoToolbox 실패 시)
+# libx265 폴백 (VideoToolbox 실패 시, 10-bit)
 PROFILE_FALLBACK_LIBX265 = EncodingProfile(
     name="libx265 Fallback",
     video_codec="libx265",
@@ -108,7 +108,7 @@ PROFILE_FALLBACK_LIBX265 = EncodingProfile(
     pixel_format="yuv420p10le",
     audio_codec="aac",
     audio_bitrate="256k",
-    extra_args=("-preset", "medium", "-tag:v", "hvc1"),
+    extra_args=("-preset", "medium", "-tag:v", "hvc1", "-color_range", "tv"),
 )
 
 
