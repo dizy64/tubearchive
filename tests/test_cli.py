@@ -181,6 +181,11 @@ class TestMain:
         """main이 파이프라인 호출."""
         video_file = tmp_path / "video.mp4"
         video_file.touch()
+        output_file = tmp_path / "output.mp4"
+        summary_file = tmp_path / "output_summary.md"
+
+        # run_pipeline은 (output_path, summary_path) 튜플 반환
+        mock_pipeline.return_value = (output_file, summary_file)
 
         with patch("sys.argv", ["tubearchive", str(video_file)]):
             main()

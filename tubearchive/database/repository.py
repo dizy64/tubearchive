@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from tubearchive.models.job import JobStatus, TranscodingJob
+from tubearchive.models.job import JobStatus, MergeJob, TranscodingJob
 from tubearchive.models.video import VideoFile, VideoMetadata
 
 
@@ -205,4 +205,115 @@ class TranscodingJobRepository:
                 datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
             ),
             error_message=row["error_message"],
+        )
+
+
+class MergeJobRepository:
+    """병합 작업 저장소."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        """초기화."""
+        self.conn = conn
+
+    def create(
+        self,
+        output_path: Path,
+        video_ids: list[int],
+        title: str | None = None,
+        date: str | None = None,
+        total_duration_seconds: float | None = None,
+        total_size_bytes: int | None = None,
+        clips_info_json: str | None = None,
+        summary_path: Path | None = None,
+    ) -> int:
+        """
+        병합 작업 생성.
+
+        Args:
+            output_path: 출력 파일 경로
+            video_ids: 포함된 영상 ID 목록
+            title: 제목 (디렉토리명에서 추출)
+            date: 날짜 (YYYY-MM-DD)
+            total_duration_seconds: 총 재생 시간 (초)
+            total_size_bytes: 총 파일 크기 (바이트)
+            clips_info_json: 클립 정보 JSON
+            summary_path: 요약 파일 경로
+
+        Returns:
+            생성된 job_id
+        """
+        cursor = self.conn.execute(
+            """
+            INSERT INTO merge_jobs (
+                output_path, video_ids, title, date,
+                total_duration_seconds, total_size_bytes,
+                clips_info_json, summary_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(output_path),
+                json.dumps(video_ids),
+                title,
+                date,
+                total_duration_seconds,
+                total_size_bytes,
+                clips_info_json,
+                str(summary_path) if summary_path else None,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid or 0
+
+    def get_by_id(self, job_id: int) -> MergeJob | None:
+        """ID로 작업 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM merge_jobs WHERE id = ?",
+            (job_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_job(row)
+
+    def get_latest(self) -> MergeJob | None:
+        """최신 작업 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM merge_jobs ORDER BY created_at DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_job(row)
+
+    def update_status(self, job_id: int, status: JobStatus) -> None:
+        """상태 업데이트."""
+        self.conn.execute(
+            "UPDATE merge_jobs SET status = ? WHERE id = ?",
+            (status.value, job_id),
+        )
+        self.conn.commit()
+
+    def update_youtube_id(self, job_id: int, youtube_id: str) -> None:
+        """YouTube ID 업데이트."""
+        self.conn.execute(
+            "UPDATE merge_jobs SET youtube_id = ? WHERE id = ?",
+            (youtube_id, job_id),
+        )
+        self.conn.commit()
+
+    def _row_to_job(self, row: sqlite3.Row) -> MergeJob:
+        """Row를 MergeJob으로 변환."""
+        return MergeJob(
+            id=row["id"],
+            output_path=Path(row["output_path"]),
+            video_ids=json.loads(row["video_ids"]),
+            status=JobStatus(row["status"]),
+            youtube_id=row["youtube_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            title=row["title"],
+            date=row["date"],
+            total_duration_seconds=row["total_duration_seconds"],
+            total_size_bytes=row["total_size_bytes"],
+            clips_info_json=row["clips_info_json"],
+            summary_path=Path(row["summary_path"]) if row["summary_path"] else None,
         )

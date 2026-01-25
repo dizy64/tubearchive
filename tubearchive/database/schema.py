@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS merge_jobs (
     video_ids TEXT NOT NULL,
     status TEXT CHECK(status IN ('pending', 'processing', 'completed', 'failed')) DEFAULT 'pending',
     youtube_id TEXT,
+    title TEXT,
+    date TEXT,
+    total_duration_seconds REAL,
+    total_size_bytes INTEGER,
+    clips_info_json TEXT,
+    summary_path TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

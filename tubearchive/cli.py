@@ -1,15 +1,21 @@
 """CLI 인터페이스."""
 
 import argparse
+import json
 import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from tubearchive.core.detector import detect_metadata
 from tubearchive.core.merger import Merger
 from tubearchive.core.scanner import scan_videos
 from tubearchive.core.transcoder import Transcoder
+from tubearchive.database.repository import MergeJobRepository
+from tubearchive.database.schema import init_database
+from tubearchive.models.video import VideoFile
 from tubearchive.utils.progress import MultiProgressBar
+from tubearchive.utils.summary_generator import OutputInfo, save_summary
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +140,7 @@ def setup_logging(verbose: bool = False) -> None:
     )
 
 
-def run_pipeline(validated_args: ValidatedArgs) -> Path:
+def run_pipeline(validated_args: ValidatedArgs) -> tuple[Path, Path | None]:
     """
     전체 파이프라인 실행.
 
@@ -142,7 +148,7 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         validated_args: 검증된 인자
 
     Returns:
-        최종 출력 파일 경로
+        (최종 출력 파일 경로, 요약 파일 경로) 튜플
     """
     # 1. 파일 스캔
     logger.info("Scanning video files...")
@@ -181,7 +187,10 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
 
     logger.info(f"Final output: {final_path}")
 
-    # 4. 임시 파일 정리
+    # 4. 요약 정보 생성
+    summary_path = generate_output_summary(video_files, final_path)
+
+    # 5. 임시 파일 정리
     if not validated_args.keep_temp:
         logger.info("Cleaning up temporary files...")
         for temp_path in transcoded_paths:
@@ -189,7 +198,90 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
                 temp_path.unlink()
                 logger.debug(f"  Removed: {temp_path}")
 
-    return final_path
+    return final_path, summary_path
+
+
+def generate_output_summary(
+    video_files: list[VideoFile],
+    output_path: Path,
+) -> Path | None:
+    """
+    출력 영상 요약 정보 생성 및 DB 저장.
+
+    Args:
+        video_files: 원본 영상 파일 목록
+        output_path: 출력 파일 경로
+
+    Returns:
+        요약 파일 경로 또는 None
+    """
+    try:
+        logger.info("Generating output summary...")
+
+        # 각 영상의 duration 수집
+        video_durations: list[tuple[Path, float]] = []
+        for vf in video_files:
+            try:
+                metadata = detect_metadata(vf.path)
+                video_durations.append((vf.path, metadata.duration_seconds))
+            except Exception as e:
+                logger.warning(f"Failed to get duration for {vf.path}: {e}")
+                video_durations.append((vf.path, 0.0))
+
+        # OutputInfo 생성
+        output_info = OutputInfo.from_video_files(video_durations, output_path)
+
+        # 요약 마크다운 저장
+        summary_path = save_summary(output_info)
+        logger.info(f"Summary saved: {summary_path}")
+
+        # DB에 저장
+        save_merge_job_to_db(output_info, video_files)
+
+        return summary_path
+
+    except Exception as e:
+        logger.warning(f"Failed to generate summary: {e}")
+        return None
+
+
+def save_merge_job_to_db(
+    output_info: OutputInfo,
+    video_files: list[VideoFile],
+) -> None:
+    """
+    병합 작업 정보를 DB에 저장.
+
+    Args:
+        output_info: 출력 정보
+        video_files: 원본 영상 파일 목록
+    """
+    try:
+        conn = init_database()
+        repo = MergeJobRepository(conn)
+
+        # 클립 정보 JSON
+        clips_json = json.dumps(
+            [{"name": name, "duration": dur} for name, dur in output_info.clips],
+            ensure_ascii=False,
+        )
+
+        repo.create(
+            output_path=output_info.output_path,
+            video_ids=[],  # 현재 video_ids 추적 안 함 (단순화)
+            title=output_info.title,
+            date=output_info.date,
+            total_duration_seconds=output_info.total_duration,
+            total_size_bytes=output_info.total_size,
+            clips_info_json=clips_json,
+            summary_path=output_info.output_path.parent
+            / f"{output_info.output_path.stem}_summary.md",
+        )
+        conn.close()
+        logger.debug("Merge job saved to database")
+
+    except Exception as e:
+        logger.warning(f"Failed to save merge job to DB: {e}")
 
 
 def main() -> None:
@@ -218,8 +310,11 @@ def main() -> None:
             print("=" * 30)
             return
 
-        output_path = run_pipeline(validated_args)
-        print(f"\nSuccess! Output: {output_path}")
+        output_path, summary_path = run_pipeline(validated_args)
+        print("\n✅ 완료!")
+        print(f"📹 출력 파일: {output_path}")
+        if summary_path:
+            print(f"📝 요약 파일: {summary_path}")
 
     except FileNotFoundError as e:
         logger.error(str(e))

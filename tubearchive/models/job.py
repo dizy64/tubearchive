@@ -49,6 +49,13 @@ class MergeJob:
     status: JobStatus
     youtube_id: str | None
     created_at: datetime
+    # 출력 메타데이터
+    title: str | None = None
+    date: str | None = None
+    total_duration_seconds: float | None = None
+    total_size_bytes: int | None = None
+    clips_info_json: str | None = None
+    summary_path: Path | None = None
 
     def __post_init__(self) -> None:
         """검증."""
