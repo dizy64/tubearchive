@@ -96,6 +96,9 @@ def init_database(db_path: Path | None = None) -> sqlite3.Connection:
     if db_path is None:
         db_path = DEFAULT_DB_PATH
 
+    # 부모 디렉토리 생성 보장
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -119,6 +122,9 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     """
     if db_path is None:
         db_path = DEFAULT_DB_PATH
+
+    # 부모 디렉토리 생성 보장
+    db_path.parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
