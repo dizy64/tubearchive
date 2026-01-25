@@ -836,8 +836,8 @@ def upload_to_youtube(
         if playlist_ids:
             for pid in playlist_ids:
                 try:
-                    add_to_playlist(service, pid, result.video_id)
-                    print(f"📋 플레이리스트에 추가됨: {pid}")
+                    item_id = add_to_playlist(service, pid, result.video_id)
+                    print(f"📋 플레이리스트에 추가됨: {pid} (item: {item_id})")
                 except PlaylistError as e:
                     logger.warning(f"Failed to add to playlist {pid}: {e}")
                     print(f"⚠️ 플레이리스트 추가 실패 ({pid}): {e}")

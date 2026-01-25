@@ -73,7 +73,7 @@ def add_to_playlist(
     service: YouTubeResource,
     playlist_id: str,
     video_id: str,
-) -> None:
+) -> str:
     """
     영상을 플레이리스트에 추가.
 
@@ -81,6 +81,9 @@ def add_to_playlist(
         service: 인증된 YouTube API 서비스
         playlist_id: 플레이리스트 ID
         video_id: 추가할 영상 ID
+
+    Returns:
+        추가된 playlistItem ID
 
     Raises:
         PlaylistError: 추가 실패 시
@@ -98,9 +101,19 @@ def add_to_playlist(
                 },
             },
         )
-        request.execute()
-        logger.info(f"Video {video_id} added to playlist {playlist_id}")
+        response = request.execute()
 
+        # 응답 검증
+        item_id: str | None = response.get("id")
+        if not item_id:
+            logger.warning(f"Playlist API response missing 'id': {response}")
+            raise PlaylistError("API response missing playlist item ID")
+
+        logger.info(f"Video {video_id} added to playlist {playlist_id} (item: {item_id})")
+        return item_id
+
+    except PlaylistError:
+        raise
     except Exception as e:
         logger.error(f"Failed to add video to playlist: {e}")
         raise PlaylistError(f"Failed to add video to playlist: {e}") from e
