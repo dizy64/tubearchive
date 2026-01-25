@@ -10,6 +10,7 @@
 - **VideoToolbox 하드웨어 가속**: Mac M1/M2에서 고속 인코딩
 - **기기별 자동 감지**: Nikon N-Log, iPhone, GoPro, DJI 자동 인식
 - **Dip-to-Black 효과**: 0.5초 Fade In/Out 자동 적용
+- **YouTube 업로드**: OAuth 인증, 병합 후 자동 업로드, 챕터 타임스탬프 자동 삽입
 
 ## 지원 기기 및 프로파일
 
@@ -195,11 +196,87 @@ uv run tubearchive -v ~/Videos/
 - 클립별 시작 시간 및 길이
 - 총 재생 시간 및 파일 크기
 
+### YouTube 업로드
+
+병합된 영상을 YouTube에 바로 업로드할 수 있습니다.
+
+#### 설정 상태 확인
+
+```bash
+# 현재 인증 상태 확인 및 설정 가이드 출력
+tubearchive --setup-youtube
+```
+
+#### 사전 설정 (최초 1회)
+
+1. **Google Cloud Console 설정**
+   - [Google Cloud Console](https://console.cloud.google.com/) 접속
+   - 새 프로젝트 생성 또는 기존 프로젝트 선택
+   - "APIs & Services" → "Enabled APIs & services" → "YouTube Data API v3" 활성화
+   - "APIs & Services" → "Credentials" → "Create Credentials" → "OAuth client ID"
+   - Application type: "Desktop app" 선택
+   - JSON 다운로드
+
+2. **클라이언트 시크릿 설정**
+   ```bash
+   # 다운로드한 JSON 파일을 설정 디렉토리에 저장
+   mkdir -p ~/.tubearchive
+   mv ~/Downloads/client_secret_*.json ~/.tubearchive/client_secrets.json
+   ```
+
+3. **첫 실행 시 인증**
+   ```bash
+   # 첫 업로드 시 브라우저가 열리며 Google 계정 인증 요청
+   tubearchive --upload-only video.mp4
+   # → 브라우저에서 Google 계정 로그인 및 권한 승인
+   # → 토큰이 ~/.tubearchive/youtube_token.json에 자동 저장
+   ```
+
+#### 업로드 방법
+
+```bash
+# 방법 1: 병합 후 바로 업로드
+tubearchive ~/Videos/2024-01-15\ 도쿄\ 여행/ --upload
+
+# 방법 2: 기존 파일 업로드 (병합 없이)
+tubearchive --upload-only merged_output.mp4
+
+# 제목 지정
+tubearchive --upload-only video.mp4 --upload-title "나의 여행 영상"
+
+# 공개 설정 변경 (기본: unlisted)
+tubearchive --upload-only video.mp4 --upload-privacy public
+```
+
+#### 업로드 옵션
+
+| 옵션 | 설명 | 기본값 |
+|------|------|--------|
+| `--upload` | 병합 완료 후 YouTube에 업로드 | - |
+| `--upload-only FILE` | 지정된 파일을 YouTube에 업로드 (병합 없이) | - |
+| `--upload-title TITLE` | 영상 제목 | 파일명 또는 디렉토리명 |
+| `--upload-privacy` | 공개 설정 (public/unlisted/private) | unlisted |
+
+#### 자동 설명 생성
+
+`--upload` 옵션 사용 시 Summary의 YouTube 챕터 타임스탬프가 자동으로 설명에 삽입됩니다.
+
+```
+# 자동 생성되는 설명 예시
+0:00 clip1
+1:30 clip2
+3:45 clip3
+```
+
 ### 전체 옵션
 
 ```
 usage: tubearchive [-h] [-o OUTPUT] [--output-dir DIR] [--no-resume]
-                   [--keep-temp] [--dry-run] [-v] [targets ...]
+                   [--keep-temp] [--dry-run] [-v]
+                   [--upload] [--upload-only FILE]
+                   [--upload-title TITLE] [--upload-privacy {public,unlisted,private}]
+                   [--setup-youtube]
+                   [targets ...]
 
 다양한 기기의 4K 영상을 표준화하여 병합합니다.
 
@@ -214,6 +291,11 @@ options:
   --keep-temp          임시 파일 보존 (디버깅용)
   --dry-run            실행 계획만 출력 (실제 실행 안 함)
   -v, --verbose        상세 로그 출력
+  --upload             병합 완료 후 YouTube에 업로드
+  --upload-only FILE   지정된 파일을 YouTube에 업로드 (병합 없이)
+  --upload-title TITLE YouTube 업로드 시 영상 제목
+  --upload-privacy     YouTube 공개 설정 (기본: unlisted)
+  --setup-youtube      YouTube 인증 상태 확인 및 설정 가이드 출력
 ```
 
 ### 환경 변수
@@ -222,11 +304,17 @@ options:
 |-----------|------|--------|
 | `TUBEARCHIVE_OUTPUT_DIR` | 기본 출력 디렉토리 | 출력 파일과 같은 위치 |
 | `TUBEARCHIVE_DB_PATH` | 데이터베이스 파일 경로 | `~/.tubearchive/tubearchive.db` |
+| `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 클라이언트 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
+| `TUBEARCHIVE_YOUTUBE_TOKEN` | OAuth 토큰 저장 경로 | `~/.tubearchive/youtube_token.json` |
 
 ```bash
 # 환경 변수 설정 (~/.zshrc 또는 ~/.bashrc에 추가)
 export TUBEARCHIVE_OUTPUT_DIR="$HOME/Videos/Processed"
 export TUBEARCHIVE_DB_PATH="$HOME/.tubearchive/tubearchive.db"  # 기본값
+
+# YouTube 설정 (기본 경로 외 다른 위치 사용 시)
+export TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS="/path/to/client_secrets.json"
+export TUBEARCHIVE_YOUTUBE_TOKEN="/path/to/youtube_token.json"
 
 # 또는 일회성 실행
 TUBEARCHIVE_OUTPUT_DIR=~/Videos tubearchive ~/Downloads/clips/
@@ -267,6 +355,10 @@ tubearchive/
 ├── models/
 │   ├── video.py          # VideoFile, VideoMetadata
 │   └── job.py            # TranscodingJob, MergeJob
+├── youtube/
+│   ├── __init__.py       # 모듈 exports
+│   ├── auth.py           # OAuth 2.0 인증
+│   └── uploader.py       # YouTube 업로드 (Resumable)
 └── utils/
     ├── validators.py     # 입력 검증
     ├── progress.py       # 진행률 표시
@@ -376,6 +468,32 @@ uv run tubearchive -v --keep-temp ~/Videos/
 # FFmpeg 명령어 확인
 # 로그에서 "Running FFmpeg:" 라인 확인
 ```
+
+### YouTube 업로드 오류
+
+**인증 오류 (client_secrets.json not found)**
+```bash
+# client_secrets.json 위치 확인
+ls -la ~/.tubearchive/client_secrets.json
+
+# 환경 변수로 경로 지정
+export TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS=/path/to/client_secrets.json
+```
+
+**토큰 만료 (Invalid Credentials)**
+```bash
+# 토큰 파일 삭제 후 재인증
+rm ~/.tubearchive/youtube_token.json
+tubearchive --upload-only video.mp4  # 브라우저 인증 다시 진행
+```
+
+**API 할당량 초과**
+- 일일 업로드 한도: 약 6회 (10,000 유닛 / 업로드당 ~1,600 유닛)
+- 24시간 후 자동 리셋
+
+**업로드 실패 (네트워크 오류)**
+- Resumable upload 사용으로 자동 재시도 (최대 10회)
+- 지속적 실패 시 네트워크 연결 확인
 
 ## 라이선스
 

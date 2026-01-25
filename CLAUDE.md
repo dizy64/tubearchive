@@ -16,6 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 테스트
 uv run pytest tests/ -v                                    # 전체
 uv run pytest tests/test_scanner.py::test_specific -v      # 단일
+uv run pytest tests/test_youtube.py -v                     # YouTube 모듈
 
 # 품질 검사
 uv run mypy tubearchive/
@@ -25,13 +26,18 @@ uv run ruff format tubearchive/ tests/
 # CLI 실행
 uv run tubearchive ~/Videos/
 uv run tubearchive --dry-run ~/Videos/
+
+# YouTube 업로드
+uv run tubearchive --setup-youtube                  # 인증 상태 확인
+uv run tubearchive --upload ~/Videos/               # 병합 후 업로드
+uv run tubearchive --upload-only video.mp4          # 파일만 업로드
 ```
 
 ## 아키텍처
 
 ### 파이프라인 흐름 (cli.py:run_pipeline)
 ```
-scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summary()
+scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summary() → [upload_to_youtube()]
 ```
 
 ### 핵심 컴포넌트
@@ -55,8 +61,14 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
 **database/**: SQLite Resume 시스템
 - `videos`: 원본 영상 메타데이터
 - `transcoding_jobs`: 작업 상태 (pending→processing→completed/failed)
-- `merge_jobs`: 병합 이력, YouTube 챕터 정보
+- `merge_jobs`: 병합 이력, YouTube 챕터 정보, `youtube_id` 저장
 - DB 위치: `~/.tubearchive/tubearchive.db` (또는 `TUBEARCHIVE_DB_PATH`)
+
+**youtube/**: YouTube 업로드 모듈
+- `auth.py`: OAuth 2.0 인증 (토큰 저장/갱신, 브라우저 인증 플로우)
+- `uploader.py`: Resumable upload (청크 단위, 재시도 로직)
+- 설정 파일: `~/.tubearchive/client_secrets.json`, `~/.tubearchive/youtube_token.json`
+- 환경 변수: `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS`, `TUBEARCHIVE_YOUTUBE_TOKEN`
 
 ### 테스트 구조
 - `conftest.py`: session-scoped 테스트 DB 격리 (운영 DB와 분리)

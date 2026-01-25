@@ -2,8 +2,8 @@
 
 import os
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import pytest
 
@@ -14,7 +14,7 @@ ENV_TEST_PERSISTENT = "TUBEARCHIVE_TEST_PERSISTENT"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def isolate_test_database() -> Generator[Path | None, None, None]:
+def isolate_test_database() -> Generator[Path | None]:
     """
     테스트용 DB 격리.
 

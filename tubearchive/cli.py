@@ -73,6 +73,7 @@ class ValidatedArgs:
     no_resume: bool
     keep_temp: bool
     dry_run: bool
+    upload: bool = False
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -85,7 +86,13 @@ def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tubearchive",
         description="다양한 기기의 4K 영상을 표준화하여 병합합니다.",
-        epilog="예시: tubearchive video1.mp4 video2.mov -o merged.mp4",
+        epilog=(
+            "예시:\n"
+            "  tubearchive video1.mp4 video2.mov -o merged.mp4  # 병합\n"
+            "  tubearchive ~/Videos/ --upload                   # 병합 후 업로드\n"
+            "  tubearchive --upload-only merged.mp4             # 업로드만"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     parser.add_argument(
@@ -133,6 +140,42 @@ def create_parser() -> argparse.ArgumentParser:
         help=f"출력 파일 저장 디렉토리 (환경변수: {ENV_OUTPUT_DIR})",
     )
 
+    # YouTube 업로드 옵션
+    parser.add_argument(
+        "--upload",
+        action="store_true",
+        help="병합 완료 후 YouTube에 업로드",
+    )
+
+    parser.add_argument(
+        "--upload-only",
+        type=str,
+        metavar="FILE",
+        default=None,
+        help="지정된 파일을 YouTube에 업로드 (병합 없이)",
+    )
+
+    parser.add_argument(
+        "--upload-title",
+        type=str,
+        default=None,
+        help="YouTube 업로드 시 영상 제목 (기본: 파일명)",
+    )
+
+    parser.add_argument(
+        "--upload-privacy",
+        type=str,
+        default="unlisted",
+        choices=["public", "unlisted", "private"],
+        help="YouTube 공개 설정 (기본: unlisted)",
+    )
+
+    parser.add_argument(
+        "--setup-youtube",
+        action="store_true",
+        help="YouTube 인증 상태 확인 및 설정 가이드 출력",
+    )
+
     return parser
 
 
@@ -176,6 +219,9 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     else:
         output_dir = get_default_output_dir()
 
+    # upload 플래그 확인
+    upload = getattr(args, "upload", False)
+
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -183,6 +229,7 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         no_resume=args.no_resume,
         keep_temp=args.keep_temp,
         dry_run=args.dry_run,
+        upload=upload,
     )
 
 
@@ -415,6 +462,149 @@ def save_merge_job_to_db(
         return None
 
 
+def upload_to_youtube(
+    file_path: Path,
+    title: str | None = None,
+    description: str = "",
+    privacy: str = "unlisted",
+    merge_job_id: int | None = None,
+) -> None:
+    """
+    영상을 YouTube에 업로드.
+
+    Args:
+        file_path: 업로드할 영상 파일 경로
+        title: 영상 제목 (None이면 파일명 사용)
+        description: 영상 설명
+        privacy: 공개 설정 (public, unlisted, private)
+        merge_job_id: DB에 저장할 MergeJob ID
+    """
+    from tubearchive.youtube.auth import YouTubeAuthError, get_authenticated_service
+    from tubearchive.youtube.uploader import YouTubeUploader, YouTubeUploadError
+
+    if not file_path.exists():
+        raise FileNotFoundError(f"Video file not found: {file_path}")
+
+    # 제목 결정: 지정값 > 파일명(확장자 제외)
+    video_title = title or file_path.stem
+
+    logger.info(f"Uploading to YouTube: {file_path}")
+    logger.info(f"  Title: {video_title}")
+    logger.info(f"  Privacy: {privacy}")
+
+    try:
+        # 인증
+        service = get_authenticated_service()
+
+        # 업로드
+        uploader = YouTubeUploader(service)
+
+        def on_progress(percent: int) -> None:
+            logger.info(f"Upload progress: {percent}%")
+
+        result = uploader.upload(
+            file_path=file_path,
+            title=video_title,
+            description=description,
+            privacy=privacy,
+            on_progress=on_progress,
+        )
+
+        print("\n✅ YouTube 업로드 완료!")
+        print(f"🎬 URL: {result.url}")
+
+        # DB에 YouTube ID 저장
+        if merge_job_id is not None:
+            try:
+                conn = init_database()
+                repo = MergeJobRepository(conn)
+                repo.update_youtube_id(merge_job_id, result.video_id)
+                conn.close()
+                logger.debug(f"YouTube ID {result.video_id} saved to merge job {merge_job_id}")
+            except Exception as e:
+                logger.warning(f"Failed to save YouTube ID to DB: {e}")
+
+    except YouTubeAuthError as e:
+        logger.error(f"YouTube authentication failed: {e}")
+        print(f"\n❌ YouTube 인증 실패: {e}")
+        raise
+    except YouTubeUploadError as e:
+        logger.error(f"YouTube upload failed: {e}")
+        print(f"\n❌ YouTube 업로드 실패: {e}")
+        raise
+
+
+def cmd_setup_youtube() -> None:
+    """
+    --setup-youtube 옵션 처리.
+
+    YouTube 인증 상태를 확인하고 설정 가이드를 출력합니다.
+    """
+    from tubearchive.youtube.auth import check_auth_status
+
+    print("\n🎬 YouTube 업로드 설정 상태\n")
+    print("=" * 50)
+
+    status = check_auth_status()
+    print(status.get_setup_guide())
+
+    print("=" * 50)
+
+    # 브라우저 인증이 필요하면 바로 실행 제안
+    if status.needs_browser_auth:
+        print("\n💡 지금 바로 인증하려면:")
+        print("   tubearchive --upload-only <영상파일>")
+        print("   (브라우저가 열리며 Google 계정 인증이 진행됩니다)")
+
+
+def cmd_upload_only(args: argparse.Namespace) -> None:
+    """
+    --upload-only 옵션 처리.
+
+    Args:
+        args: 파싱된 인자
+    """
+    file_path = Path(args.upload_only)
+
+    if not file_path.exists():
+        logger.error(f"File not found: {file_path}")
+        sys.exit(1)
+
+    # DB에서 MergeJob 조회 (경로로 찾기)
+    merge_job_id = None
+    description = ""
+
+    try:
+        conn = init_database()
+
+        # 최신 MergeJob에서 일치하는 경로 찾기
+        cursor = conn.execute(
+            """SELECT id, summary_markdown FROM merge_jobs
+            WHERE output_path = ? ORDER BY created_at DESC LIMIT 1""",
+            (str(file_path),),
+        )
+        row = cursor.fetchone()
+        if row:
+            merge_job_id = row["id"]
+            # description이 비어있으면 summary_markdown 사용
+            if row["summary_markdown"]:
+                description = row["summary_markdown"]
+                logger.info("Using summary from database as description")
+
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to load merge job from DB: {e}")
+
+    # 업로드 실행
+    upload_to_youtube(
+        file_path=file_path,
+        title=args.upload_title,
+        description=description,
+        privacy=args.upload_privacy,
+        merge_job_id=merge_job_id,
+    )
+
+
 def main() -> None:
     """CLI 진입점."""
     parser = create_parser()
@@ -423,6 +613,16 @@ def main() -> None:
     setup_logging(args.verbose)
 
     try:
+        # --setup-youtube 옵션 처리 (설정 가이드)
+        if args.setup_youtube:
+            cmd_setup_youtube()
+            return
+
+        # --upload-only 옵션 처리 (업로드만)
+        if args.upload_only:
+            cmd_upload_only(args)
+            return
+
         validated_args = validate_args(args)
 
         if validated_args.dry_run:
@@ -455,6 +655,29 @@ def main() -> None:
         output_path = run_pipeline(validated_args)
         print("\n✅ 완료!")
         print(f"📹 출력 파일: {output_path}")
+
+        # --upload 플래그 처리
+        if validated_args.upload:
+            print("\n📤 YouTube 업로드 시작...")
+            # DB에서 최신 MergeJob ID 조회
+            merge_job_id = None
+            description = ""
+            try:
+                conn = init_database()
+                repo = MergeJobRepository(conn)
+                job = repo.get_latest()
+                if job:
+                    merge_job_id = job.id
+                    description = job.summary_markdown or ""
+                conn.close()
+            except Exception as e:
+                logger.warning(f"Failed to get merge job: {e}")
+
+            upload_to_youtube(
+                file_path=output_path,
+                description=description,
+                merge_job_id=merge_job_id,
+            )
 
     except FileNotFoundError as e:
         logger.error(str(e))

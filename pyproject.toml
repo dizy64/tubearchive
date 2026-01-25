@@ -6,7 +6,11 @@ authors = [
     {name = "Donggeun Lee", email = "i@dizy.me"}
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "google-api-python-client>=2.100.0",
+    "google-auth-oauthlib>=1.0.0",
+    "google-auth-httplib2>=0.2.0",
+]
 readme = "README.md"
 
 [project.scripts]
@@ -38,6 +42,13 @@ python_version = "3.14"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "googleapiclient.*",
+    "google_auth_oauthlib.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
