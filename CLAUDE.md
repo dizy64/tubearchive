@@ -76,6 +76,37 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
 
 ## 개발 규칙
 
+### 버전 관리
+- **버전 위치**: `pyproject.toml`과 `tubearchive/__init__.py` 두 곳에서 관리 (동기화 필수)
+- **버전 올리기**: 안정적인 기능 추가/변경 완료 시 **반드시 마이너 버전 증가** (예: 0.2.1 → 0.2.2)
+- **이유**: uv가 버전 기반으로 wheel 캐시를 재사용하므로, 버전 미변경 시 이전 빌드가 설치될 수 있음
+
+```bash
+# 버전 확인
+grep -E "^version|^__version__" pyproject.toml tubearchive/__init__.py
+```
+
+### uv 캐시 관리
+개발 중 캐시 문제로 이전 버전이 실행될 경우:
+
+```bash
+# 방법 1: 개발 중에는 uv run 사용 (권장, 항상 현재 소스 실행)
+uv run tubearchive --version
+
+# 방법 2: 캐시 정리 후 재설치
+uv cache clean --force && uv tool install . --force
+
+# 방법 3: wheel 재빌드 강제
+uv tool install . --reinstall
+
+# 캐시 위치 확인
+ls ~/.cache/uv/
+```
+
+**권장 워크플로우**:
+- 개발 중: `uv run tubearchive ...`
+- 배포/릴리즈: 버전 올린 후 `uv tool install .`
+
 ### FFmpeg 필터 검증
 모든 필터 체인은 구현 전 CLI로 사전 검증:
 ```bash
