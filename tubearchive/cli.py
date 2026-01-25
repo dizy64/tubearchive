@@ -788,10 +788,35 @@ def upload_to_youtube(
     """
     from tubearchive.youtube.auth import YouTubeAuthError, get_authenticated_service
     from tubearchive.youtube.playlist import PlaylistError, add_to_playlist
-    from tubearchive.youtube.uploader import YouTubeUploader, YouTubeUploadError
+    from tubearchive.youtube.uploader import (
+        YouTubeUploader,
+        YouTubeUploadError,
+        validate_upload,
+    )
 
     if not file_path.exists():
         raise FileNotFoundError(f"Video file not found: {file_path}")
+
+    # 업로드 가능 여부 검증
+    validation = validate_upload(file_path)
+    print(f"\n{validation.get_summary()}")
+
+    if not validation.is_valid:
+        print("\n💡 해결 방법:")
+        print("   - 영상을 더 작은 파트로 분할하여 업로드")
+        print("   - 비트레이트를 낮춰 재인코딩")
+        raise YouTubeUploadError("Video exceeds YouTube limits")
+
+    if validation.warnings:
+        # 경고가 있으면 사용자 확인
+        try:
+            response = input("\n계속 업로드하시겠습니까? (y/N): ").strip().lower()
+            if response not in ("y", "yes"):
+                print("업로드가 취소되었습니다.")
+                return
+        except KeyboardInterrupt:
+            print("\n업로드가 취소되었습니다.")
+            return
 
     # 제목 결정: 지정값 > 파일명(확장자 제외)
     # YYYYMMDD 형식을 'YYYY년 M월 D일'로 변환

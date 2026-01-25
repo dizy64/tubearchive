@@ -2,6 +2,7 @@
 
 import logging
 import os
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,15 @@ if TYPE_CHECKING:
     from googleapiclient._apis.youtube.v3 import YouTubeResource
 
 logger = logging.getLogger(__name__)
+
+# YouTube 업로드 제한
+# - 인증 계정: 256GB / 12시간
+# - 미인증 계정: 128GB / 15분
+# 안전하게 인증 계정 기준 사용 (대부분 API 사용자는 인증됨)
+YOUTUBE_MAX_FILE_SIZE_GB = 256
+YOUTUBE_MAX_DURATION_HOURS = 12
+YOUTUBE_MAX_FILE_SIZE_BYTES = YOUTUBE_MAX_FILE_SIZE_GB * 1024 * 1024 * 1024
+YOUTUBE_MAX_DURATION_SECONDS = YOUTUBE_MAX_DURATION_HOURS * 60 * 60
 
 # 업로드 청크 크기 설정
 # - 환경변수: TUBEARCHIVE_UPLOAD_CHUNK_MB (MB 단위, 1-256)
@@ -57,6 +67,144 @@ def get_chunk_size(chunk_mb: int | None = None) -> int:
         chunk_mb = MAX_CHUNK_MB
 
     return chunk_mb * 1024 * 1024
+
+
+@dataclass
+class UploadValidation:
+    """업로드 검증 결과."""
+
+    is_valid: bool
+    file_size_bytes: int
+    duration_seconds: float
+    errors: list[str]
+    warnings: list[str]
+
+    @property
+    def file_size_gb(self) -> float:
+        """파일 크기 (GB)."""
+        return self.file_size_bytes / (1024 * 1024 * 1024)
+
+    @property
+    def duration_hours(self) -> float:
+        """영상 길이 (시간)."""
+        return self.duration_seconds / 3600
+
+    def get_summary(self) -> str:
+        """검증 결과 요약 메시지."""
+        lines = []
+
+        # 파일 정보
+        if self.file_size_gb >= 1:
+            size_str = f"{self.file_size_gb:.1f}GB"
+        else:
+            size_str = f"{self.file_size_bytes / (1024 * 1024):.0f}MB"
+
+        hours = int(self.duration_seconds // 3600)
+        minutes = int((self.duration_seconds % 3600) // 60)
+        seconds = int(self.duration_seconds % 60)
+        if hours > 0:
+            duration_str = f"{hours}시간 {minutes}분 {seconds}초"
+        elif minutes > 0:
+            duration_str = f"{minutes}분 {seconds}초"
+        else:
+            duration_str = f"{seconds}초"
+
+        lines.append(f"📊 파일 크기: {size_str} (제한: {YOUTUBE_MAX_FILE_SIZE_GB}GB)")
+        lines.append(f"⏱️  영상 길이: {duration_str} (제한: {YOUTUBE_MAX_DURATION_HOURS}시간)")
+
+        if self.errors:
+            lines.append("")
+            lines.append("❌ 업로드 불가:")
+            for err in self.errors:
+                lines.append(f"   - {err}")
+
+        if self.warnings:
+            lines.append("")
+            lines.append("⚠️  경고:")
+            for warn in self.warnings:
+                lines.append(f"   - {warn}")
+
+        return "\n".join(lines)
+
+
+def get_video_duration(file_path: Path) -> float:
+    """
+    FFprobe로 영상 길이 조회.
+
+    Args:
+        file_path: 영상 파일 경로
+
+    Returns:
+        초 단위 영상 길이 (실패 시 0.0)
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(file_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        import json
+
+        data = json.loads(result.stdout)
+        return float(data.get("format", {}).get("duration", 0))
+    except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError) as e:
+        logger.warning(f"Failed to get video duration: {e}")
+        return 0.0
+
+
+def validate_upload(file_path: Path) -> UploadValidation:
+    """
+    YouTube 업로드 가능 여부 검증.
+
+    Args:
+        file_path: 업로드할 영상 파일 경로
+
+    Returns:
+        검증 결과
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # 파일 크기 확인
+    file_size = file_path.stat().st_size
+
+    # 영상 길이 확인
+    duration = get_video_duration(file_path)
+
+    # 파일 크기 검증
+    if file_size > YOUTUBE_MAX_FILE_SIZE_BYTES:
+        excess_gb = (file_size - YOUTUBE_MAX_FILE_SIZE_BYTES) / (1024 * 1024 * 1024)
+        errors.append(f"파일 크기 초과 ({excess_gb:.1f}GB 초과)")
+    elif file_size > YOUTUBE_MAX_FILE_SIZE_BYTES * 0.9:  # 90% 이상이면 경고
+        warnings.append("파일 크기가 제한에 근접함")
+
+    # 영상 길이 검증
+    if duration > YOUTUBE_MAX_DURATION_SECONDS:
+        excess_hours = (duration - YOUTUBE_MAX_DURATION_SECONDS) / 3600
+        errors.append(f"영상 길이 초과 ({excess_hours:.1f}시간 초과)")
+    elif duration > YOUTUBE_MAX_DURATION_SECONDS * 0.9:  # 90% 이상이면 경고
+        warnings.append("영상 길이가 제한에 근접함")
+
+    # 길이를 못 가져온 경우 경고
+    if duration == 0.0:
+        warnings.append("영상 길이를 확인할 수 없음 (ffprobe 필요)")
+
+    return UploadValidation(
+        is_valid=len(errors) == 0,
+        file_size_bytes=file_size,
+        duration_seconds=duration,
+        errors=errors,
+        warnings=warnings,
+    )
 
 
 # 재시도 가능한 HTTP 상태 코드
