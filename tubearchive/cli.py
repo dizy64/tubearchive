@@ -238,6 +238,24 @@ def create_parser() -> argparse.ArgumentParser:
         help="내 플레이리스트 목록 조회",
     )
 
+    parser.add_argument(
+        "--reset-build",
+        type=str,
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help="트랜스코딩/병합 기록 초기화 (다시 빌드, 경로 지정 또는 목록에서 선택)",
+    )
+
+    parser.add_argument(
+        "--reset-upload",
+        type=str,
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help="YouTube 업로드 기록 초기화 (다시 업로드, 경로 지정 또는 목록에서 선택)",
+    )
+
     return parser
 
 
@@ -765,6 +783,149 @@ def cmd_list_playlists() -> None:
         raise
 
 
+def cmd_reset_build(path_arg: str) -> None:
+    """
+    --reset-build 옵션 처리.
+
+    병합 기록을 삭제하여 다시 빌드할 수 있도록 합니다.
+
+    Args:
+        path_arg: 파일 경로 (빈 문자열이면 목록에서 선택)
+    """
+    conn = init_database()
+    repo = MergeJobRepository(conn)
+
+    if path_arg:
+        # 경로가 지정된 경우 해당 경로의 레코드 삭제
+        target_path = Path(path_arg).resolve()
+        deleted = repo.delete_by_output_path(target_path)
+        if deleted > 0:
+            print(f"✅ 빌드 기록 삭제됨: {target_path}")
+            print("   이제 다시 빌드할 수 있습니다.")
+        else:
+            print(f"⚠️ 해당 경로의 기록이 없습니다: {target_path}")
+    else:
+        # 목록에서 선택
+        jobs = repo.get_all()
+        if not jobs:
+            print("📋 빌드 기록이 없습니다.")
+            conn.close()
+            return
+
+        print("\n📋 빌드 기록 목록")
+        print("=" * 80)
+        print(f"{'번호':<4} {'제목':<30} {'날짜':<12} {'YouTube':<10} 경로")
+        print("-" * 80)
+        for i, job in enumerate(jobs, 1):
+            title = (job.title or "-")[:28]
+            date = job.date or "-"
+            yt_status = "✅ 업로드됨" if job.youtube_id else "-"
+            path = str(job.output_path)
+            if len(path) > 40:
+                path = "..." + path[-37:]
+            print(f"{i:<4} {title:<30} {date:<12} {yt_status:<10} {path}")
+        print("=" * 80)
+
+        try:
+            choice = input("\n삭제할 번호 입력 (0: 취소): ").strip()
+            if not choice or choice == "0":
+                print("취소됨")
+                conn.close()
+                return
+
+            idx = int(choice) - 1
+            if 0 <= idx < len(jobs):
+                job = jobs[idx]
+                if job.id is not None:
+                    repo.delete(job.id)
+                print(f"\n✅ 빌드 기록 삭제됨: {job.title or job.output_path}")
+                print("   이제 다시 빌드할 수 있습니다.")
+            else:
+                print("잘못된 번호입니다.")
+        except ValueError:
+            print("숫자를 입력해주세요.")
+        except KeyboardInterrupt:
+            print("\n취소됨")
+
+    conn.close()
+
+
+def cmd_reset_upload(path_arg: str) -> None:
+    """
+    --reset-upload 옵션 처리.
+
+    YouTube 업로드 기록을 초기화하여 다시 업로드할 수 있도록 합니다.
+
+    Args:
+        path_arg: 파일 경로 (빈 문자열이면 목록에서 선택)
+    """
+    conn = init_database()
+    repo = MergeJobRepository(conn)
+
+    if path_arg:
+        # 경로가 지정된 경우 해당 경로의 레코드 초기화
+        target_path = Path(path_arg).resolve()
+        cursor = conn.execute(
+            "SELECT id, youtube_id FROM merge_jobs WHERE output_path = ?",
+            (str(target_path),),
+        )
+        row = cursor.fetchone()
+        if row and row["youtube_id"]:
+            repo.clear_youtube_id(row["id"])
+            print(f"✅ 업로드 기록 초기화됨: {target_path}")
+            print(f"   이전 YouTube ID: {row['youtube_id']}")
+            print("   이제 다시 업로드할 수 있습니다.")
+        elif row:
+            print(f"⚠️ 이미 업로드 기록이 없습니다: {target_path}")
+        else:
+            print(f"⚠️ 해당 경로의 기록이 없습니다: {target_path}")
+    else:
+        # 업로드된 목록에서 선택
+        jobs = repo.get_uploaded()
+        if not jobs:
+            print("📋 업로드된 영상이 없습니다.")
+            conn.close()
+            return
+
+        print("\n📋 업로드된 영상 목록")
+        print("=" * 90)
+        print(f"{'번호':<4} {'제목':<30} {'날짜':<12} {'YouTube ID':<15} 경로")
+        print("-" * 90)
+        for i, job in enumerate(jobs, 1):
+            title = (job.title or "-")[:28]
+            date = job.date or "-"
+            yt_id = job.youtube_id or "-"
+            path = str(job.output_path)
+            if len(path) > 30:
+                path = "..." + path[-27:]
+            print(f"{i:<4} {title:<30} {date:<12} {yt_id:<15} {path}")
+        print("=" * 90)
+
+        try:
+            choice = input("\n초기화할 번호 입력 (0: 취소): ").strip()
+            if not choice or choice == "0":
+                print("취소됨")
+                conn.close()
+                return
+
+            idx = int(choice) - 1
+            if 0 <= idx < len(jobs):
+                job = jobs[idx]
+                if job.id is not None:
+                    repo.clear_youtube_id(job.id)
+                print(f"\n✅ 업로드 기록 초기화됨: {job.title or job.output_path}")
+                print(f"   이전 YouTube ID: {job.youtube_id}")
+                print("   이제 다시 업로드할 수 있습니다.")
+            else:
+                print("잘못된 번호입니다.")
+        except ValueError:
+            print("숫자를 입력해주세요.")
+        except KeyboardInterrupt:
+            print("\n취소됨")
+
+    conn.close()
+
+
 def resolve_playlist_ids(playlist_args: list[str] | None) -> list[str]:
     """
     플레이리스트 인자 처리.
@@ -888,6 +1049,16 @@ def main() -> None:
         # --list-playlists 옵션 처리 (플레이리스트 목록)
         if args.list_playlists:
             cmd_list_playlists()
+            return
+
+        # --reset-build 옵션 처리 (빌드 기록 초기화)
+        if args.reset_build is not None:
+            cmd_reset_build(args.reset_build)
+            return
+
+        # --reset-upload 옵션 처리 (업로드 기록 초기화)
+        if args.reset_upload is not None:
+            cmd_reset_upload(args.reset_upload)
             return
 
         # --upload-only 옵션 처리 (업로드만)

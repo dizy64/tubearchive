@@ -301,6 +301,42 @@ class MergeJobRepository:
         )
         self.conn.commit()
 
+    def clear_youtube_id(self, job_id: int) -> None:
+        """YouTube ID 초기화 (다시 업로드 가능하도록)."""
+        self.conn.execute(
+            "UPDATE merge_jobs SET youtube_id = NULL WHERE id = ?",
+            (job_id,),
+        )
+        self.conn.commit()
+
+    def get_all(self) -> list[MergeJob]:
+        """모든 병합 작업 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM merge_jobs ORDER BY created_at DESC"
+        )
+        return [self._row_to_job(row) for row in cursor.fetchall()]
+
+    def get_uploaded(self) -> list[MergeJob]:
+        """업로드 완료된 작업만 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM merge_jobs WHERE youtube_id IS NOT NULL ORDER BY created_at DESC"
+        )
+        return [self._row_to_job(row) for row in cursor.fetchall()]
+
+    def delete(self, job_id: int) -> None:
+        """병합 작업 삭제."""
+        self.conn.execute("DELETE FROM merge_jobs WHERE id = ?", (job_id,))
+        self.conn.commit()
+
+    def delete_by_output_path(self, output_path: Path) -> int:
+        """출력 경로로 병합 작업 삭제. 삭제된 행 수 반환."""
+        cursor = self.conn.execute(
+            "DELETE FROM merge_jobs WHERE output_path = ?",
+            (str(output_path),),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
     def _row_to_job(self, row: sqlite3.Row) -> MergeJob:
         """Row를 MergeJob으로 변환."""
         return MergeJob(
