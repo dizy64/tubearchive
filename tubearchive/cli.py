@@ -824,7 +824,9 @@ def upload_to_youtube(
     if validation.warnings:
         # 경고가 있으면 사용자 확인
         try:
-            response = input("\n계속 업로드하시겠습니까? (y/N): ").strip().lower()
+            sys.stdout.write("\n계속 업로드하시겠습니까? (y/N): ")
+            sys.stdout.flush()
+            response = sys.stdin.readline().strip().replace("\r", "").lower()
             if response not in ("y", "yes"):
                 print("업로드가 취소되었습니다.")
                 return
@@ -1097,7 +1099,9 @@ def cmd_reset_build(path_arg: str) -> None:
         print("=" * 80)
 
         try:
-            choice = input("\n삭제할 번호 입력 (0: 취소): ").strip()
+            sys.stdout.write("\n삭제할 번호 입력 (0: 취소): ")
+            sys.stdout.flush()
+            choice = sys.stdin.readline().strip().replace("\r", "")
             if not choice or choice == "0":
                 print("취소됨")
                 conn.close()
@@ -1172,7 +1176,9 @@ def cmd_reset_upload(path_arg: str) -> None:
         print("=" * 90)
 
         try:
-            choice = input("\n초기화할 번호 입력 (0: 취소): ").strip()
+            sys.stdout.write("\n초기화할 번호 입력 (0: 취소): ")
+            sys.stdout.flush()
+            choice = sys.stdin.readline().strip().replace("\r", "")
             if not choice or choice == "0":
                 print("취소됨")
                 conn.close()
