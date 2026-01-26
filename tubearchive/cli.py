@@ -14,6 +14,13 @@ from datetime import date
 from pathlib import Path
 from threading import Lock
 
+try:
+    import termios
+
+    HAS_TERMIOS = True
+except ImportError:
+    HAS_TERMIOS = False
+
 from tubearchive import __version__
 from tubearchive.core.detector import detect_metadata
 from tubearchive.core.merger import Merger
@@ -26,6 +33,38 @@ from tubearchive.utils.progress import MultiProgressBar, ProgressInfo
 from tubearchive.utils.summary_generator import generate_single_file_description
 
 logger = logging.getLogger(__name__)
+
+
+def safe_input(prompt: str) -> str:
+    """
+    터미널 상태를 복원하고 안전하게 입력 받기.
+
+    Args:
+        prompt: 입력 프롬프트
+
+    Returns:
+        사용자 입력 (strip 적용)
+    """
+    # 터미널 상태 복원 시도
+    if HAS_TERMIOS and sys.stdin.isatty():
+        try:
+            # 현재 터미널 설정 저장
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            # cooked 모드로 복원 (일반 라인 입력 모드)
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except (termios.error, OSError):
+            pass
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+
+    try:
+        line = sys.stdin.readline()
+        return line.strip().replace("\r", "")
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
 
 # 환경 변수
 ENV_OUTPUT_DIR = "TUBEARCHIVE_OUTPUT_DIR"
@@ -824,9 +863,7 @@ def upload_to_youtube(
     if validation.warnings:
         # 경고가 있으면 사용자 확인
         try:
-            sys.stdout.write("\n계속 업로드하시겠습니까? (y/N): ")
-            sys.stdout.flush()
-            response = sys.stdin.readline().strip().replace("\r", "").lower()
+            response = safe_input("\n계속 업로드하시겠습니까? (y/N): ").lower()
             if response not in ("y", "yes"):
                 print("업로드가 취소되었습니다.")
                 return
@@ -1099,9 +1136,7 @@ def cmd_reset_build(path_arg: str) -> None:
         print("=" * 80)
 
         try:
-            sys.stdout.write("\n삭제할 번호 입력 (0: 취소): ")
-            sys.stdout.flush()
-            choice = sys.stdin.readline().strip().replace("\r", "")
+            choice = safe_input("\n삭제할 번호 입력 (0: 취소): ")
             if not choice or choice == "0":
                 print("취소됨")
                 conn.close()
@@ -1176,9 +1211,7 @@ def cmd_reset_upload(path_arg: str) -> None:
         print("=" * 90)
 
         try:
-            sys.stdout.write("\n초기화할 번호 입력 (0: 취소): ")
-            sys.stdout.flush()
-            choice = sys.stdin.readline().strip().replace("\r", "")
+            choice = safe_input("\n초기화할 번호 입력 (0: 취소): ")
             if not choice or choice == "0":
                 print("취소됨")
                 conn.close()
