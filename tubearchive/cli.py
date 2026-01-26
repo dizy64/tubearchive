@@ -14,13 +14,6 @@ from datetime import date
 from pathlib import Path
 from threading import Lock
 
-try:
-    import termios
-
-    HAS_TERMIOS = True
-except ImportError:
-    HAS_TERMIOS = False
-
 from tubearchive import __version__
 from tubearchive.core.detector import detect_metadata
 from tubearchive.core.merger import Merger
@@ -37,7 +30,9 @@ logger = logging.getLogger(__name__)
 
 def safe_input(prompt: str) -> str:
     """
-    터미널 상태를 복원하고 안전하게 입력 받기.
+    터미널에서 안전하게 입력 받기.
+
+    tmux 등 환경에서도 동작하도록 /dev/tty 직접 사용.
 
     Args:
         prompt: 입력 프롬프트
@@ -45,25 +40,21 @@ def safe_input(prompt: str) -> str:
     Returns:
         사용자 입력 (strip 적용)
     """
-    # 터미널 상태 복원 시도
-    if HAS_TERMIOS and sys.stdin.isatty():
-        try:
-            # 현재 터미널 설정 저장
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
-            # cooked 모드로 복원 (일반 라인 입력 모드)
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-        except (termios.error, OSError):
-            pass
-
     sys.stdout.write(prompt)
     sys.stdout.flush()
 
     try:
-        line = sys.stdin.readline()
-        return line.strip().replace("\r", "")
-    except (EOFError, KeyboardInterrupt):
-        return ""
+        # /dev/tty를 직접 열어서 입력 받기 (tmux 등에서 더 안정적)
+        with open("/dev/tty") as tty:
+            line = tty.readline()
+            return line.strip().replace("\r", "")
+    except OSError:
+        # /dev/tty 사용 불가시 stdin 사용
+        try:
+            line = sys.stdin.readline()
+            return line.strip().replace("\r", "")
+        except (EOFError, KeyboardInterrupt):
+            return ""
 
 
 # 환경 변수
