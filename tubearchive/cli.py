@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
+import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,7 +34,7 @@ def safe_input(prompt: str) -> str:
     """
     터미널에서 안전하게 입력 받기.
 
-    tmux 등 환경에서도 동작하도록 /dev/tty 직접 사용.
+    tmux 등 환경에서도 동작하도록 bash read 사용.
 
     Args:
         prompt: 입력 프롬프트
@@ -44,17 +46,23 @@ def safe_input(prompt: str) -> str:
     sys.stdout.flush()
 
     try:
-        # /dev/tty를 직접 열어서 입력 받기 (tmux 등에서 더 안정적)
-        with open("/dev/tty") as tty:
-            line = tty.readline()
-            return line.strip().replace("\r", "")
-    except OSError:
-        # /dev/tty 사용 불가시 stdin 사용
-        try:
-            line = sys.stdin.readline()
-            return line.strip().replace("\r", "")
-        except (EOFError, KeyboardInterrupt):
-            return ""
+        # bash read 사용 (터미널 설정에 덜 민감)
+        result = subprocess.run(
+            ["bash", "-c", "read -r line </dev/tty && printf '%s' \"$line\""],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    # fallback: 기본 input
+    try:
+        return input().strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
 
 
 # 환경 변수
@@ -1083,11 +1091,39 @@ def cmd_list_playlists() -> None:
         raise
 
 
+def _delete_build_records(conn: sqlite3.Connection, video_ids: list[int]) -> None:
+    """
+    빌드 관련 레코드 삭제 (transcoding_jobs, videos).
+
+    Args:
+        conn: DB 연결
+        video_ids: 삭제할 영상 ID 목록
+    """
+    if not video_ids:
+        return
+
+    placeholders = ",".join("?" * len(video_ids))
+
+    # transcoding_jobs 삭제
+    conn.execute(
+        f"DELETE FROM transcoding_jobs WHERE video_id IN ({placeholders})",
+        video_ids,
+    )
+
+    # videos 삭제
+    conn.execute(
+        f"DELETE FROM videos WHERE id IN ({placeholders})",
+        video_ids,
+    )
+
+    conn.commit()
+
+
 def cmd_reset_build(path_arg: str) -> None:
     """
     --reset-build 옵션 처리.
 
-    병합 기록을 삭제하여 다시 빌드할 수 있도록 합니다.
+    병합 기록과 관련 트랜스코딩 기록을 삭제하여 다시 빌드할 수 있도록 합니다.
 
     Args:
         path_arg: 파일 경로 (빈 문자열이면 목록에서 선택)
@@ -1098,6 +1134,17 @@ def cmd_reset_build(path_arg: str) -> None:
     if path_arg:
         # 경로가 지정된 경우 해당 경로의 레코드 삭제
         target_path = Path(path_arg).resolve()
+
+        # 먼저 merge_job에서 video_ids 조회
+        cursor = conn.execute(
+            "SELECT video_ids FROM merge_jobs WHERE output_path = ?",
+            (str(target_path),),
+        )
+        row = cursor.fetchone()
+        if row:
+            video_ids = json.loads(row[0])
+            _delete_build_records(conn, video_ids)
+
         deleted = repo.delete_by_output_path(target_path)
         if deleted > 0:
             print(f"✅ 빌드 기록 삭제됨: {target_path}")
@@ -1136,6 +1183,8 @@ def cmd_reset_build(path_arg: str) -> None:
             idx = int(choice) - 1
             if 0 <= idx < len(jobs):
                 job = jobs[idx]
+                # 관련 트랜스코딩 기록도 삭제
+                _delete_build_records(conn, job.video_ids)
                 if job.id is not None:
                     repo.delete(job.id)
                 print(f"\n✅ 빌드 기록 삭제됨: {job.title or job.output_path}")

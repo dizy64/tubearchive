@@ -29,10 +29,53 @@
 - macOS 12+ (VideoToolbox 필수)
 - Python 3.14+
 - FFmpeg 6.0+ (VideoToolbox 지원 빌드)
-- asdf (Python 버전 관리)
 - uv (패키지 관리)
 
 ## 설치
+
+### 0. 시스템 의존성 설치 (새 Mac에서 시작하는 경우)
+
+#### Homebrew 설치
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Apple Silicon Mac의 경우 PATH 설정
+echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+#### FFmpeg 설치 (Brewfile 사용)
+```bash
+# 프로젝트 디렉토리에서 한 번에 설치
+brew bundle
+
+# 설치 확인 (videotoolbox 지원 여부)
+ffmpeg -encoders 2>/dev/null | grep hevc_videotoolbox
+# 출력 예: V..... hevc_videotoolbox    VideoToolbox H.265 Encoder (codec hevc)
+```
+
+또는 개별 설치:
+```bash
+brew install ffmpeg
+```
+
+#### Python & uv 설치
+```bash
+# uv 설치 (Python 버전 관리 포함)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.zshrc
+
+# Python 3.14 설치
+uv python install 3.14
+```
+
+#### 설치 확인
+```bash
+# 모든 의존성 확인
+ffmpeg -version | head -1          # FFmpeg 버전
+uv --version                       # uv 버전
+uv python list | grep 3.14         # Python 3.14 설치 확인
+```
 
 ### 1. 프로젝트 설치
 
@@ -41,11 +84,7 @@
 git clone <repository-url>
 cd tubearchive
 
-# Python 버전 설정 (asdf)
-asdf install python 3.14.2
-asdf local python 3.14.2
-
-# 의존성 설치 (uv)
+# 의존성 설치 (uv가 자동으로 Python 버전 관리)
 uv sync
 ```
 

@@ -106,6 +106,9 @@ class FFmpegExecutor:
         if overwrite:
             cmd.append("-y")
 
+        # PTS 재생성 (A/V 싱크 문제 방지)
+        cmd.extend(["-fflags", "+genpts"])
+
         # 시작 위치 (Resume용)
         if seek_start is not None and seek_start > 0:
             cmd.extend(["-ss", str(seek_start)])
@@ -125,6 +128,9 @@ class FFmpegExecutor:
 
         # 인코딩 프로파일 적용
         cmd.extend(profile.to_ffmpeg_args())
+
+        # 음수 타임스탬프 방지 (concat 병합 시 PTS 불연속 해결)
+        cmd.extend(["-avoid_negative_ts", "make_zero"])
 
         # 출력 파일
         cmd.append(str(output_path))
