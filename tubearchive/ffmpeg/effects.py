@@ -71,6 +71,37 @@ def create_portrait_layout_filter(
     return ";".join(filter_parts)
 
 
+def _calculate_fade_params(
+    total_duration: float,
+    fade_duration: float = 0.5,
+) -> tuple[float, float]:
+    """
+    Fade 파라미터 계산 (짧은 영상 처리).
+
+    Args:
+        total_duration: 영상 전체 길이 (초)
+        fade_duration: 원하는 페이드 지속 시간 (기본: 0.5초)
+
+    Returns:
+        (effective_fade_duration, fade_out_start) 튜플
+        - 영상이 충분히 길면: (fade_duration, total_duration - fade_duration)
+        - 영상이 짧으면: fade를 비례 축소하거나 0으로 설정
+    """
+    # 최소 요구 길이: fade_in + fade_out (겹치지 않게)
+    min_duration_for_full_fade = fade_duration * 2
+
+    if total_duration >= min_duration_for_full_fade:
+        # 충분히 긴 영상: 정상 fade 적용
+        return fade_duration, total_duration - fade_duration
+    elif total_duration > 0.1:  # 0.1초 이상이면 축소된 fade 적용
+        # 짧은 영상: fade를 비례 축소 (겹치지 않도록)
+        effective_fade = total_duration / 2
+        return effective_fade, total_duration - effective_fade
+    else:
+        # 매우 짧은 영상 (0.1초 미만): fade 생략
+        return 0.0, 0.0
+
+
 def create_dip_to_black_video_filter(
     total_duration: float,
     fade_duration: float = 0.5,
@@ -85,10 +116,14 @@ def create_dip_to_black_video_filter(
     Returns:
         FFmpeg -vf 필터 문자열
     """
-    fade_out_start = total_duration - fade_duration
+    effective_fade, fade_out_start = _calculate_fade_params(total_duration, fade_duration)
+
+    if effective_fade <= 0:
+        # fade 생략 (매우 짧은 영상)
+        return ""
 
     # fade=in:0:d=0.5,fade=out:st=119.5:d=0.5
-    return f"fade=t=in:st=0:d={fade_duration},fade=t=out:st={fade_out_start}:d={fade_duration}"
+    return f"fade=t=in:st=0:d={effective_fade},fade=t=out:st={fade_out_start}:d={effective_fade}"
 
 
 def create_dip_to_black_audio_filter(
@@ -105,10 +140,14 @@ def create_dip_to_black_audio_filter(
     Returns:
         FFmpeg -af 필터 문자열
     """
-    fade_out_start = total_duration - fade_duration
+    effective_fade, fade_out_start = _calculate_fade_params(total_duration, fade_duration)
+
+    if effective_fade <= 0:
+        # fade 생략 (매우 짧은 영상)
+        return ""
 
     # afade=t=in:st=0:d=0.5,afade=t=out:st=119.5:d=0.5
-    return f"afade=t=in:st=0:d={fade_duration},afade=t=out:st={fade_out_start}:d={fade_duration}"
+    return f"afade=t=in:st=0:d={effective_fade},afade=t=out:st={fade_out_start}:d={effective_fade}"
 
 
 def create_combined_filter(
@@ -139,10 +178,20 @@ def create_combined_filter(
     Returns:
         (video_filter, audio_filter) 튜플
     """
-    fade_out_start = total_duration - fade_duration
+    # 짧은 영상 처리: fade 파라미터 계산
+    effective_fade, fade_out_start = _calculate_fade_params(total_duration, fade_duration)
 
     # HDR→SDR 변환 필터 (필요시)
     hdr_filter = create_hdr_to_sdr_filter(color_transfer)
+
+    # fade 필터 문자열 (짧은 영상이면 빈 문자열)
+    if effective_fade > 0:
+        fade_filters = (
+            f"fade=t=in:st=0:d={effective_fade},"
+            f"fade=t=out:st={fade_out_start}:d={effective_fade}"
+        )
+    else:
+        fade_filters = ""
 
     if is_portrait:
         # 세로 영상: Portrait 레이아웃 + Fade
@@ -151,46 +200,39 @@ def create_combined_filter(
 
         # HDR 변환: split 전에 적용하여 모든 후처리가 BT.709에서 수행되도록 함
         # (색상 일관성 유지, boxblur/overlay 후 변환 시 발생하는 색상 노이즈 방지)
+        base_filter = (
+            f"[bg]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
+            f"crop={target_width}:{target_height},"
+            f"boxblur={blur_radius}:1[bg_blur];"
+            f"[fg]scale={fg_width}:{fg_height}[fg_scaled];"
+            f"[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2"
+        )
         if hdr_filter:
-            video_filter = (
-                f"[0:v]{hdr_filter},split=2[bg][fg];"
-                f"[bg]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
-                f"crop={target_width}:{target_height},"
-                f"boxblur={blur_radius}:1[bg_blur];"
-                f"[fg]scale={fg_width}:{fg_height}[fg_scaled];"
-                f"[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2,"
-                f"fade=t=in:st=0:d={fade_duration},"
-                f"fade=t=out:st={fade_out_start}:d={fade_duration}[v_out]"
-            )
+            split_part = f"[0:v]{hdr_filter},split=2[bg][fg]"
         else:
-            video_filter = (
-                f"[0:v]split=2[bg][fg];"
-                f"[bg]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
-                f"crop={target_width}:{target_height},"
-                f"boxblur={blur_radius}:1[bg_blur];"
-                f"[fg]scale={fg_width}:{fg_height}[fg_scaled];"
-                f"[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2,"
-                f"fade=t=in:st=0:d={fade_duration},"
-                f"fade=t=out:st={fade_out_start}:d={fade_duration}[v_out]"
-            )
+            split_part = "[0:v]split=2[bg][fg]"
+
+        if fade_filters:
+            video_filter = f"{split_part};{base_filter},{fade_filters}[v_out]"
+        else:
+            video_filter = f"{split_part};{base_filter}[v_out]"
     else:
         # 가로 영상: (HDR 변환) + 스케일 + Fade
         # HDR 변환을 먼저 적용하여 이후 처리가 BT.709에서 수행되도록 함
+        scale_pad = (
+            f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+            f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2"
+        )
         if hdr_filter:
-            video_filter = (
-                f"[0:v]{hdr_filter},"
-                f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
-                f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,"
-                f"fade=t=in:st=0:d={fade_duration},"
-                f"fade=t=out:st={fade_out_start}:d={fade_duration}[v_out]"
-            )
+            if fade_filters:
+                video_filter = f"[0:v]{hdr_filter},{scale_pad},{fade_filters}[v_out]"
+            else:
+                video_filter = f"[0:v]{hdr_filter},{scale_pad}[v_out]"
         else:
-            video_filter = (
-                f"[0:v]scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
-                f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,"
-                f"fade=t=in:st=0:d={fade_duration},"
-                f"fade=t=out:st={fade_out_start}:d={fade_duration}[v_out]"
-            )
+            if fade_filters:
+                video_filter = f"[0:v]{scale_pad},{fade_filters}[v_out]"
+            else:
+                video_filter = f"[0:v]{scale_pad}[v_out]"
 
     audio_filter = create_dip_to_black_audio_filter(total_duration, fade_duration)
 

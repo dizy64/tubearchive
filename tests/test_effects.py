@@ -1,6 +1,7 @@
 """FFmpeg 효과 테스트."""
 
 from tubearchive.ffmpeg.effects import (
+    _calculate_fade_params,
     create_combined_filter,
     create_dip_to_black_audio_filter,
     create_dip_to_black_video_filter,
@@ -251,3 +252,103 @@ class TestCombinedFilterWithHdr:
         # 세로 레이아웃 필터와 HDR 변환 모두 포함
         assert "overlay" in video_filter
         assert "colorspace=" in video_filter
+
+
+class TestShortVideoDurationHandling:
+    """짧은 영상 duration 처리 테스트 (GoPro SOS 등)."""
+
+    def test_calculate_fade_params_normal_duration(self) -> None:
+        """일반 영상: 정상 fade 적용."""
+        effective_fade, fade_out_start = _calculate_fade_params(120.0, 0.5)
+
+        assert effective_fade == 0.5
+        assert fade_out_start == 119.5
+
+    def test_calculate_fade_params_short_video(self) -> None:
+        """짧은 영상 (0.5초 미만): fade 축소."""
+        # 0.3초 영상 → fade를 0.15초로 축소
+        effective_fade, fade_out_start = _calculate_fade_params(0.3, 0.5)
+
+        assert effective_fade == 0.15  # 0.3 / 2
+        assert fade_out_start == 0.15  # 0.3 - 0.15
+        assert fade_out_start >= 0  # 음수 방지
+
+    def test_calculate_fade_params_very_short_video(self) -> None:
+        """매우 짧은 영상 (0.1초 미만): fade 생략."""
+        effective_fade, fade_out_start = _calculate_fade_params(0.05, 0.5)
+
+        assert effective_fade == 0.0
+        assert fade_out_start == 0.0
+
+    def test_calculate_fade_params_gopro_sos_case(self) -> None:
+        """GoPro SOS 파일 케이스: ~0.17초 영상."""
+        # 실제 에러 케이스: duration=0.166833
+        effective_fade, fade_out_start = _calculate_fade_params(0.166833, 0.5)
+
+        assert effective_fade > 0  # fade 적용됨
+        assert fade_out_start >= 0  # 음수 아님
+        # 비례 축소: 0.166833 / 2 ≈ 0.083
+        assert abs(effective_fade - 0.0834165) < 0.0001
+
+    def test_video_filter_short_duration_no_negative_st(self) -> None:
+        """짧은 영상에서 음수 st 값 방지."""
+        # 0.2초 영상
+        filter_str = create_dip_to_black_video_filter(0.2, 0.5)
+
+        # st=-X 패턴이 없어야 함
+        assert "st=-" not in filter_str
+        # st=0 이상 값만 존재
+        if filter_str:  # 빈 문자열이 아니면
+            assert "st=0" in filter_str or "st=0.1" in filter_str
+
+    def test_audio_filter_short_duration_no_negative_st(self) -> None:
+        """짧은 오디오에서 음수 st 값 방지."""
+        filter_str = create_dip_to_black_audio_filter(0.2, 0.5)
+
+        assert "st=-" not in filter_str
+
+    def test_combined_filter_short_video_no_crash(self) -> None:
+        """짧은 영상에서 combined filter 생성 가능."""
+        video_filter, audio_filter = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=0.17,  # GoPro SOS 케이스
+            is_portrait=False,
+        )
+
+        # 음수 st 값 없음
+        assert "st=-" not in video_filter
+        assert "st=-" not in audio_filter
+        # 필터가 유효함
+        assert "[v_out]" in video_filter
+
+    def test_combined_filter_very_short_video_no_fade(self) -> None:
+        """매우 짧은 영상: fade 생략, scale만 적용."""
+        video_filter, audio_filter = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=0.05,  # 50ms
+            is_portrait=False,
+        )
+
+        # scale은 적용됨
+        assert "scale=" in video_filter
+        # fade는 생략됨
+        assert "fade=" not in video_filter
+        # audio도 fade 생략
+        assert audio_filter == ""
+
+    def test_combined_filter_portrait_short_video(self) -> None:
+        """짧은 세로 영상: portrait 레이아웃 유지, fade 축소."""
+        video_filter, audio_filter = create_combined_filter(
+            source_width=1080,
+            source_height=1920,
+            total_duration=0.3,  # 짧지만 fade 가능
+            is_portrait=True,
+        )
+
+        # portrait 레이아웃 유지
+        assert "overlay" in video_filter
+        assert "boxblur" in video_filter
+        # 음수 없음
+        assert "st=-" not in video_filter
