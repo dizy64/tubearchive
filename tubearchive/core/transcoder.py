@@ -97,10 +97,10 @@ class Transcoder:
             if completed_job and completed_job.temp_file_path and completed_job.temp_file_path.exists():
                 logger.info(f"Video already processed: {video_file.path}")
                 return completed_job.temp_file_path, video_id
-            elif completed_job and completed_job.temp_file_path and completed_job.id is not None:
-                # DB에는 완료로 기록되어 있지만 파일이 없음 - 재트랜스코딩 필요
-                logger.warning(f"Temp file missing, re-transcoding: {video_file.path}")
-                self.job_repo.update_status(completed_job.id, JobStatus.PENDING)
+            elif completed_job and completed_job.id is not None:
+                # DB에는 완료로 기록되어 있지만 파일이 없음 - 이전 병합에서 정리된 것으로 처리
+                logger.info(f"Completed but temp file gone, marking as merged: {video_file.path}")
+                self.job_repo.update_status(completed_job.id, JobStatus.MERGED)
 
         # 작업 생성 또는 기존 작업 조회
         job_id = self.resume_mgr.get_or_create_job(video_id)

@@ -30,6 +30,29 @@ class TestSchema:
 
         conn.close()
 
+    def test_schema_allows_merged_status(self, tmp_path: Path) -> None:
+        """스키마가 merged 상태를 허용하는지 확인."""
+        db_path = tmp_path / "test.db"
+        conn = init_database(db_path)
+
+        conn.execute(
+            "INSERT INTO videos (original_path, creation_time) VALUES (?, ?)",
+            ("/test/video.mp4", "2024-01-01T00:00:00"),
+        )
+        video_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        conn.execute(
+            "INSERT INTO transcoding_jobs (video_id, status) VALUES (?, 'merged')",
+            (video_id,),
+        )
+        conn.commit()
+
+        cursor = conn.execute(
+            "SELECT status FROM transcoding_jobs WHERE video_id = ?", (video_id,)
+        )
+        assert cursor.fetchone()[0] == "merged"
+        conn.close()
+
     def test_foreign_key_constraint(self, tmp_path: Path) -> None:
         """외래 키 제약 조건."""
         db_path = tmp_path / "test.db"
@@ -266,3 +289,40 @@ class TestTranscodingJobRepository:
 
         assert len(jobs) == 1
         assert jobs[0].id == job_id
+
+    def test_mark_merged(
+        self, job_repo: TranscodingJobRepository, video_id: int, tmp_path: Path
+    ) -> None:
+        """병합 후 상태 업데이트."""
+        job_id = job_repo.create(video_id)
+        job_repo.mark_completed(job_id, tmp_path / "output.mp4")
+
+        job_repo.mark_merged(job_id)
+
+        job = job_repo.get_by_id(job_id)
+        assert job is not None
+        assert job.status == JobStatus.MERGED
+
+    def test_mark_merged_by_video_ids(
+        self, job_repo: TranscodingJobRepository, video_id: int, tmp_path: Path
+    ) -> None:
+        """일괄 merged 상태 업데이트."""
+        job_id = job_repo.create(video_id)
+        job_repo.mark_completed(job_id, tmp_path / "output.mp4")
+
+        count = job_repo.mark_merged_by_video_ids([video_id])
+
+        assert count == 1
+        job = job_repo.get_by_id(job_id)
+        assert job is not None
+        assert job.status == JobStatus.MERGED
+
+    def test_mark_merged_skips_non_completed(
+        self, job_repo: TranscodingJobRepository, video_id: int
+    ) -> None:
+        """pending/processing/failed 상태는 merged로 변경되지 않음."""
+        job_repo.create(video_id)
+
+        count = job_repo.mark_merged_by_video_ids([video_id])
+
+        assert count == 0

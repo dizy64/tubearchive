@@ -59,8 +59,10 @@ CREATE TABLE IF NOT EXISTS transcoding_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     video_id INTEGER NOT NULL,
     temp_file_path TEXT,
-    status TEXT CHECK(status IN ('pending', 'processing', 'completed', 'failed')) DEFAULT 'pending',
-    progress_percent INTEGER DEFAULT 0 CHECK(progress_percent >= 0 AND progress_percent <= 100),
+    status TEXT DEFAULT 'pending'
+        CHECK(status IN ('pending','processing','completed','failed','merged')),
+    progress_percent INTEGER DEFAULT 0
+        CHECK(progress_percent >= 0 AND progress_percent <= 100),
     started_at TEXT,
     completed_at TEXT,
     error_message TEXT,
@@ -91,6 +93,38 @@ CREATE INDEX IF NOT EXISTS idx_videos_path ON videos(original_path);
 """
 
 
+def _migrate_add_merged_status(conn: sqlite3.Connection) -> None:
+    """기존 DB의 transcoding_jobs CHECK 제약에 'merged' 상태 추가."""
+    cursor = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='transcoding_jobs'"
+    )
+    row = cursor.fetchone()
+    if row is None or "'merged'" in row[0]:
+        return
+
+    conn.executescript("""
+        CREATE TABLE transcoding_jobs_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id INTEGER NOT NULL,
+            temp_file_path TEXT,
+            status TEXT DEFAULT 'pending'
+                CHECK(status IN ('pending','processing','completed','failed','merged')),
+            progress_percent INTEGER DEFAULT 0
+                CHECK(progress_percent >= 0 AND progress_percent <= 100),
+            started_at TEXT,
+            completed_at TEXT,
+            error_message TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+        );
+        INSERT INTO transcoding_jobs_new SELECT * FROM transcoding_jobs;
+        DROP TABLE transcoding_jobs;
+        ALTER TABLE transcoding_jobs_new RENAME TO transcoding_jobs;
+        CREATE INDEX IF NOT EXISTS idx_transcoding_status ON transcoding_jobs(status);
+        CREATE INDEX IF NOT EXISTS idx_transcoding_video_id ON transcoding_jobs(video_id);
+    """)
+
+
 def init_database(db_path: Path | None = None) -> sqlite3.Connection:
     """
     데이터베이스 초기화.
@@ -113,6 +147,10 @@ def init_database(db_path: Path | None = None) -> sqlite3.Connection:
 
     # 스키마 적용
     conn.executescript(SCHEMA)
+
+    # 기존 DB 마이그레이션
+    _migrate_add_merged_status(conn)
+
     conn.commit()
 
     return conn

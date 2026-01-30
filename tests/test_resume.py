@@ -227,3 +227,35 @@ class TestResumeManager:
         job_id = resume_mgr.get_or_create_job(sample_video_id)
 
         assert job_id > 0
+
+    def test_is_video_processed_false_for_merged(
+        self,
+        resume_mgr: ResumeManager,
+        job_repo: TranscodingJobRepository,
+        sample_video_id: int,
+        tmp_path: Path,
+    ) -> None:
+        """merged 상태는 처리 완료로 간주하지 않음."""
+        job_id = job_repo.create(sample_video_id)
+        job_repo.mark_completed(job_id, tmp_path / "output.mp4")
+        assert resume_mgr.is_video_processed(sample_video_id) is True
+
+        job_repo.mark_merged(job_id)
+        assert resume_mgr.is_video_processed(sample_video_id) is False
+
+    def test_get_or_create_job_creates_new_when_merged(
+        self,
+        resume_mgr: ResumeManager,
+        job_repo: TranscodingJobRepository,
+        sample_video_id: int,
+        tmp_path: Path,
+    ) -> None:
+        """merged 작업만 있으면 새 작업 생성."""
+        job_id = job_repo.create(sample_video_id)
+        job_repo.mark_completed(job_id, tmp_path / "output.mp4")
+        job_repo.mark_merged(job_id)
+
+        new_job_id = resume_mgr.get_or_create_job(sample_video_id)
+
+        assert new_job_id != job_id
+        assert new_job_id > 0

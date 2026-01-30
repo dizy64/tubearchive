@@ -21,7 +21,7 @@ from tubearchive.core.detector import detect_metadata
 from tubearchive.core.merger import Merger
 from tubearchive.core.scanner import scan_videos
 from tubearchive.core.transcoder import Transcoder
-from tubearchive.database.repository import MergeJobRepository
+from tubearchive.database.repository import MergeJobRepository, TranscodingJobRepository
 from tubearchive.database.schema import init_database
 from tubearchive.models.video import VideoFile
 from tubearchive.utils.progress import MultiProgressBar, ProgressInfo
@@ -709,6 +709,9 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
                 temp_path.unlink()
                 logger.debug(f"  Removed: {temp_path}")
 
+        # DB 상태 업데이트: completed → merged (임시 파일 정리 반영)
+        _mark_transcoding_jobs_merged(video_ids)
+
         # 임시 폴더 삭제 (비어있거나 concat 파일만 남은 경우)
         if temp_dir.exists():
             try:
@@ -726,6 +729,20 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         print("=" * 60 + "\n")
 
     return final_path
+
+
+def _mark_transcoding_jobs_merged(video_ids: list[int]) -> None:
+    """트랜스코딩 작업 상태를 merged로 업데이트 (임시 파일 정리 후)."""
+    if not video_ids:
+        return
+    try:
+        conn = init_database()
+        job_repo = TranscodingJobRepository(conn)
+        count = job_repo.mark_merged_by_video_ids(video_ids)
+        conn.close()
+        logger.debug(f"Marked {count} transcoding jobs as merged")
+    except Exception:
+        logger.warning("Failed to mark transcoding jobs as merged", exc_info=True)
 
 
 def save_merge_job_to_db(

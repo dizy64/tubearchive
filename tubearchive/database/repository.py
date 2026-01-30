@@ -190,6 +190,35 @@ class TranscodingJobRepository:
         )
         self.conn.commit()
 
+    def mark_merged(self, job_id: int) -> None:
+        """병합 완료 후 상태 업데이트 (임시 파일 정리됨)."""
+        self.conn.execute(
+            "UPDATE transcoding_jobs SET status = 'merged' WHERE id = ?",
+            (job_id,),
+        )
+        self.conn.commit()
+
+    def mark_merged_by_video_ids(self, video_ids: list[int]) -> int:
+        """
+        여러 영상의 completed 트랜스코딩 작업을 merged로 일괄 업데이트.
+
+        Args:
+            video_ids: 영상 ID 목록
+
+        Returns:
+            업데이트된 행 수
+        """
+        if not video_ids:
+            return 0
+        placeholders = ",".join("?" * len(video_ids))
+        cursor = self.conn.execute(
+            f"UPDATE transcoding_jobs SET status = 'merged' "  # noqa: S608
+            f"WHERE video_id IN ({placeholders}) AND status = 'completed'",
+            video_ids,
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
     def _row_to_job(self, row: sqlite3.Row) -> TranscodingJob:
         """Row를 TranscodingJob으로 변환."""
         return TranscodingJob(

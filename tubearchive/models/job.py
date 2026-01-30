@@ -13,6 +13,7 @@ class JobStatus(Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    MERGED = "merged"
 
 
 @dataclass
