@@ -1,6 +1,7 @@
 """FFmpeg 실행기."""
 
 import logging
+import os
 import re
 import subprocess
 from collections.abc import Callable
@@ -247,7 +248,7 @@ class FFmpegExecutor:
         """
         loudnorm 1st pass 분석용 FFmpeg 명령어 빌드.
 
-        오디오만 분석하므로 -vn (비디오 무시), 출력은 /dev/null.
+        오디오만 분석하므로 -vn (비디오 무시), 출력은 os.devnull.
 
         Args:
             input_path: 입력 파일 경로
@@ -265,7 +266,7 @@ class FFmpegExecutor:
             "-vn",
             "-f",
             "null",
-            "/dev/null",
+            os.devnull,
         ]
 
     def run_analysis(self, cmd: list[str]) -> str:

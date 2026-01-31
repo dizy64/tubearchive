@@ -249,7 +249,7 @@ def create_loudnorm_filter(
 
 
 _LOUDNORM_JSON_PATTERN = re.compile(
-    r'\{\s*\n\s*"input_i"\s*:.*?\}',
+    r"\[Parsed_loudnorm.*?\].*?(\{.*?\})",
     re.DOTALL,
 )
 
@@ -271,7 +271,7 @@ def parse_loudnorm_stats(ffmpeg_output: str) -> LoudnormAnalysis:
         raise ValueError("loudnorm JSON block not found in FFmpeg output")
 
     try:
-        data = json.loads(match.group())
+        data = json.loads(match.group(1))
     except json.JSONDecodeError as e:
         raise ValueError(f"Failed to parse loudnorm JSON: {e}") from e
 

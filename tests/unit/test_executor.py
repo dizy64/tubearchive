@@ -157,7 +157,8 @@ class TestBuildLoudnessAnalysisCommand:
     """build_loudness_analysis_command 테스트."""
 
     def test_command_structure(self) -> None:
-        """명령어 기본 구조: -i, -af, -vn, -f null /dev/null."""
+        """명령어 기본 구조: -i, -af, -vn, -f null os.devnull."""
+        import os
         from pathlib import Path
 
         executor = FFmpegExecutor()
@@ -172,7 +173,7 @@ class TestBuildLoudnessAnalysisCommand:
         assert "-vn" in cmd
         assert "-f" in cmd
         assert "null" in cmd
-        assert "/dev/null" in cmd
+        assert os.devnull in cmd
 
     def test_audio_filter_placement(self) -> None:
         """-af 뒤에 필터 문자열 위치."""
@@ -189,6 +190,7 @@ class TestBuildLoudnessAnalysisCommand:
 
     def test_no_video_output(self) -> None:
         """-vn으로 비디오 출력 없음."""
+        import os
         from pathlib import Path
 
         executor = FFmpegExecutor()
@@ -199,7 +201,7 @@ class TestBuildLoudnessAnalysisCommand:
         assert "-vn" in cmd
         null_index = cmd.index("-f")
         assert cmd[null_index + 1] == "null"
-        assert cmd[null_index + 2] == "/dev/null"
+        assert cmd[null_index + 2] == os.devnull
 
     def test_custom_ffmpeg_path(self) -> None:
         """커스텀 ffmpeg 경로."""

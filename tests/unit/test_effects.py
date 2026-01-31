@@ -650,6 +650,7 @@ class TestParseLoudnormStats:
     def test_raises_on_invalid_values(self) -> None:
         """숫자 변환 불가능한 값이면 ValueError."""
         output = (
+            "[Parsed_loudnorm_0 @ 0x000]\n"
             "{\n"
             '\t"input_i" : "abc",\n'
             '\t"input_tp" : "1",\n'
