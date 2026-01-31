@@ -35,7 +35,35 @@ uv run tubearchive --dry-run ~/Videos/
 uv run tubearchive --setup-youtube                  # 인증 상태 확인
 uv run tubearchive --upload ~/Videos/               # 병합 후 업로드
 uv run tubearchive --upload-only video.mp4          # 파일만 업로드
+
+# 설정 파일
+uv run tubearchive --init-config                    # ~/.tubearchive/config.toml 생성
+uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 지정
 ```
+
+### 설정 파일 (config.toml)
+
+위치: `~/.tubearchive/config.toml`
+
+우선순위: **CLI 옵션 > 환경변수 > config.toml > 기본값**
+
+환경변수 Shim 패턴: config 값을 환경변수에 주입 (미설정인 경우만). 기존 모듈의 `os.environ.get()` 코드 변경 없이 동작.
+
+```toml
+[general]
+# output_dir = "~/Videos/output"            # TUBEARCHIVE_OUTPUT_DIR
+# parallel = 1                              # TUBEARCHIVE_PARALLEL
+# db_path = "~/.tubearchive/tubearchive.db" # TUBEARCHIVE_DB_PATH
+
+[youtube]
+# client_secrets = "~/.tubearchive/client_secrets.json"
+# token = "~/.tubearchive/youtube_token.json"
+# playlist = ["PLxxxxxxxx"]
+# upload_chunk_mb = 32                      # 1-256
+# upload_privacy = "unlisted"               # public/unlisted/private
+```
+
+에러 정책: 파일 없음 → 빈 config, TOML 문법 오류 → warning + 빈 config, 타입 오류 → 해당 필드 무시
 
 ## 아키텍처
 
@@ -61,6 +89,11 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
 - `PROFILE_SDR`: BT.709 (기본, concat 호환성용)
 - `PROFILE_HDR_HLG/PQ`: BT.2020 (현재 미사용, SDR 통일)
 - 모든 프로파일: `p010le`, `29.97fps`, `50Mbps`
+
+**config.py**: TOML 설정 파일 관리
+- `load_config()`: `~/.tubearchive/config.toml` 파싱 (에러 시 빈 config)
+- `apply_config_to_env()`: 미설정 환경변수에만 config 값 주입
+- `generate_default_config()`: 주석 포함 기본 템플릿 생성
 
 **database/**: SQLite Resume 시스템
 - `videos`: 원본 영상 메타데이터
