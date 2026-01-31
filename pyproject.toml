@@ -1,6 +1,6 @@
 [project]
 name = "tubearchive"
-version = "0.2.25"
+version = "0.2.26"
 description = "4K 영상 표준화 및 병합 CLI 도구 (Project Komorebi)"
 authors = [
     {name = "Donggeun Lee", email = "i@dizy.me"}
@@ -44,7 +44,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106", "S108"]  # assert, fixture token/secret, /tmp 경로
+"tests/**" = ["S101", "S105", "S106", "S108", "S110"]  # assert, fixture token/secret, /tmp 경로, try-except-pass
 "tubearchive/youtube/auth.py" = ["S105"]  # 환경변수명에 TOKEN 포함 (false positive)
 "tubearchive/config.py" = ["S105"]  # 환경변수명에 TOKEN 포함 (false positive)
 

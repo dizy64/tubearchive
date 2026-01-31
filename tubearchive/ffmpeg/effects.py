@@ -7,6 +7,7 @@
     - **HDR → SDR**: BT.2020 → BT.709 색공간 변환
     - **Dip-to-Black**: 클립 시작/끝 페이드 인·아웃
     - **오디오 노이즈 제거**: afftdn 기반 (light/medium/heavy)
+    - **무음 구간 감지/제거**: silencedetect, silenceremove 필터
     - **라우드니스 정규화**: EBU R128 loudnorm 2-pass
     - **영상 안정화**: vidstab detect + transform
 """
@@ -271,6 +272,52 @@ def create_denoise_audio_filter(level: str = "medium") -> str:
     return f"afftdn=nr={nr}"
 
 
+def create_silence_detect_filter(
+    threshold: str = "-30dB",
+    min_duration: float = 2.0,
+) -> str:
+    """
+    무음 구간 감지 필터 생성 (silencedetect).
+
+    Args:
+        threshold: 무음 기준 데시벨 (예: "-30dB")
+        min_duration: 최소 무음 길이 (초)
+
+    Returns:
+        FFmpeg -af 필터 문자열
+    """
+    return f"silencedetect=noise={threshold}:d={min_duration}"
+
+
+def create_silence_remove_filter(
+    threshold: str = "-30dB",
+    min_duration: float = 2.0,
+    trim_start: bool = True,
+    trim_end: bool = True,
+) -> str:
+    """
+    무음 구간 제거 필터 생성 (silenceremove).
+
+    Args:
+        threshold: 무음 기준 데시벨 (예: "-30dB")
+        min_duration: 최소 무음 길이 (초)
+        trim_start: 시작 무음 제거 여부
+        trim_end: 끝 무음 제거 여부
+
+    Returns:
+        FFmpeg -af 필터 문자열
+    """
+    return (
+        f"silenceremove="
+        f"start_periods={1 if trim_start else 0}:"
+        f"start_threshold={threshold}:"
+        f"start_duration={min_duration}:"
+        f"stop_periods={-1 if trim_end else 0}:"
+        f"stop_threshold={threshold}:"
+        f"stop_duration={min_duration}"
+    )
+
+
 @dataclass(frozen=True)
 class LoudnormAnalysis:
     """EBU R128 loudnorm 1st pass 분석 결과."""
@@ -314,6 +361,22 @@ _LOUDNORM_JSON_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# 무음 구간 감지를 위한 정규표현식 패턴
+_SILENCE_START_PATTERN = re.compile(r"silence_start:\s*([0-9.]+)")
+_SILENCE_END_PATTERN = re.compile(r"silence_end:\s*([0-9.]+)")
+
+
+@dataclass(frozen=True)
+class SilenceSegment:
+    """무음 구간 정보."""
+
+    start: float
+    """무음 구간 시작 시간 (초)."""
+    end: float
+    """무음 구간 종료 시간 (초)."""
+    duration: float
+    """무음 구간 길이 (초)."""
+
 
 def parse_loudnorm_stats(ffmpeg_output: str) -> LoudnormAnalysis:
     """FFmpeg stderr에서 loudnorm JSON 블록을 추출하여 파싱한다.
@@ -348,6 +411,36 @@ def parse_loudnorm_stats(ffmpeg_output: str) -> LoudnormAnalysis:
         raise ValueError(f"Invalid loudnorm analysis data: {e}") from e
 
 
+def parse_silence_segments(ffmpeg_output: str) -> list[SilenceSegment]:
+    """FFmpeg stderr에서 silencedetect 로그를 파싱하여 무음 구간 리스트를 반환한다.
+
+    Args:
+        ffmpeg_output: FFmpeg 프로세스의 stderr 전체 출력
+
+    Returns:
+        무음 구간 리스트 (SilenceSegment)
+    """
+    segments: list[SilenceSegment] = []
+    current_start: float | None = None
+
+    for line in ffmpeg_output.split("\n"):
+        # silence_start 매칭
+        start_match = _SILENCE_START_PATTERN.search(line)
+        if start_match:
+            current_start = float(start_match.group(1))
+            continue
+
+        # silence_end 매칭
+        end_match = _SILENCE_END_PATTERN.search(line)
+        if end_match and current_start is not None:
+            end = float(end_match.group(1))
+            duration = end - current_start
+            segments.append(SilenceSegment(start=current_start, end=end, duration=duration))
+            current_start = None
+
+    return segments
+
+
 def create_audio_filter_chain(
     total_duration: float,
     fade_duration: float = 0.5,
@@ -355,16 +448,20 @@ def create_audio_filter_chain(
     fade_out_duration: float | None = None,
     denoise: bool = False,
     denoise_level: str = "medium",
+    silence_remove: str = "",
     loudnorm_analysis: LoudnormAnalysis | None = None,
 ) -> str:
     """
     오디오 필터 체인 생성.
 
-    순서: denoise -> fade -> loudnorm
+    순서: denoise -> silence_remove -> fade -> loudnorm
     """
     filters: list[str] = []
     if denoise:
         filters.append(create_denoise_audio_filter(denoise_level))
+
+    if silence_remove:
+        filters.append(silence_remove)
 
     effective_fade_in = fade_duration if fade_in_duration is None else fade_in_duration
     effective_fade_out = fade_duration if fade_out_duration is None else fade_out_duration
@@ -493,6 +590,7 @@ def create_combined_filter(
     stabilize_filter: str = "",
     denoise: bool = False,
     denoise_level: str = "medium",
+    silence_remove: str = "",
     loudnorm_analysis: LoudnormAnalysis | None = None,
 ) -> tuple[str, str]:
     """영상·오디오 필터를 결합하여 최종 FFmpeg ``-filter_complex`` 문자열을 생성한다.
@@ -568,6 +666,7 @@ def create_combined_filter(
         fade_out_duration=fade_out_duration,
         denoise=denoise,
         denoise_level=denoise_level,
+        silence_remove=silence_remove,
         loudnorm_analysis=loudnorm_analysis,
     )
     return video_filter, audio_filter

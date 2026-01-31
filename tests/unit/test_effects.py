@@ -16,9 +16,12 @@ from tubearchive.ffmpeg.effects import (
     create_loudnorm_analysis_filter,
     create_loudnorm_filter,
     create_portrait_layout_filter,
+    create_silence_detect_filter,
+    create_silence_remove_filter,
     create_vidstab_detect_filter,
     create_vidstab_transform_filter,
     parse_loudnorm_stats,
+    parse_silence_segments,
 )
 
 
@@ -749,3 +752,149 @@ class TestCombinedFilterWithLoudnorm:
             is_portrait=False,
         )
         assert "loudnorm" not in audio_filter
+
+
+class TestSilenceDetectFilter:
+    """무음 감지 필터 테스트."""
+
+    def test_creates_valid_filter_string(self) -> None:
+        """유효한 필터 문자열 생성 확인."""
+        filter_str = create_silence_detect_filter(
+            threshold="-30dB",
+            min_duration=2.0,
+        )
+        assert "silencedetect" in filter_str
+        assert "noise=-30dB" in filter_str
+        assert "d=2.0" in filter_str
+
+    def test_custom_threshold(self) -> None:
+        """커스텀 threshold 확인."""
+        filter_str = create_silence_detect_filter(threshold="-40dB")
+        assert "noise=-40dB" in filter_str
+
+    def test_custom_duration(self) -> None:
+        """커스텀 duration 확인."""
+        filter_str = create_silence_detect_filter(min_duration=1.5)
+        assert "d=1.5" in filter_str
+
+
+class TestSilenceRemoveFilter:
+    """무음 제거 필터 테스트."""
+
+    def test_trim_both_start_and_end(self) -> None:
+        """시작과 끝 모두 트림 확인."""
+        filter_str = create_silence_remove_filter(
+            threshold="-30dB",
+            min_duration=2.0,
+            trim_start=True,
+            trim_end=True,
+        )
+        assert "silenceremove" in filter_str
+        assert "start_periods=1" in filter_str
+        assert "stop_periods=-1" in filter_str
+        assert "start_threshold=-30dB" in filter_str
+        assert "stop_threshold=-30dB" in filter_str
+
+    def test_trim_start_only(self) -> None:
+        """시작만 트림 확인."""
+        filter_str = create_silence_remove_filter(
+            trim_start=True,
+            trim_end=False,
+        )
+        assert "start_periods=1" in filter_str
+        assert "stop_periods=0" in filter_str
+
+    def test_trim_end_only(self) -> None:
+        """끝만 트림 확인."""
+        filter_str = create_silence_remove_filter(
+            trim_start=False,
+            trim_end=True,
+        )
+        assert "start_periods=0" in filter_str
+        assert "stop_periods=-1" in filter_str
+
+
+class TestParseSilenceSegments:
+    """무음 구간 파싱 테스트."""
+
+    def test_parses_single_segment(self) -> None:
+        """단일 세그먼트 파싱 확인."""
+        stderr = """
+[silencedetect @ 0x...] silence_start: 0
+[silencedetect @ 0x...] silence_end: 2.5 | silence_duration: 2.5
+"""
+        segments = parse_silence_segments(stderr)
+        assert len(segments) == 1
+        assert segments[0].start == 0.0
+        assert segments[0].end == 2.5
+        assert segments[0].duration == 2.5
+
+    def test_parses_multiple_segments(self) -> None:
+        """복수 세그먼트 파싱 확인."""
+        stderr = """
+[silencedetect @ 0x...] silence_start: 0.0
+[silencedetect @ 0x...] silence_end: 2.0 | silence_duration: 2.0
+[silencedetect @ 0x...] silence_start: 10.5
+[silencedetect @ 0x...] silence_end: 13.0 | silence_duration: 2.5
+"""
+        segments = parse_silence_segments(stderr)
+        assert len(segments) == 2
+        assert segments[0].start == 0.0
+        assert segments[0].end == 2.0
+        assert segments[1].start == 10.5
+        assert segments[1].end == 13.0
+
+    def test_empty_output_returns_empty_list(self) -> None:
+        """빈 출력 시 빈 리스트 반환 확인."""
+        segments = parse_silence_segments("")
+        assert segments == []
+
+    def test_ignores_incomplete_segments(self) -> None:
+        """불완전한 세그먼트 무시 확인."""
+        stderr = """
+[silencedetect @ 0x...] silence_start: 0.0
+"""
+        segments = parse_silence_segments(stderr)
+        assert segments == []
+
+
+class TestCreateAudioFilterChainWithSilenceRemove:
+    """오디오 필터 체인에 무음 제거 통합 테스트."""
+
+    def test_includes_silence_remove_when_provided(self) -> None:
+        """silence_remove 파라미터 제공 시 포함 확인."""
+        silence_filter = create_silence_remove_filter()
+        audio_filter = create_audio_filter_chain(
+            total_duration=120.0,
+            silence_remove=silence_filter,
+        )
+        assert "silenceremove" in audio_filter
+
+    def test_correct_filter_order(self) -> None:
+        """필터 순서 확인: denoise -> silence_remove -> fade -> loudnorm."""
+        silence_filter = create_silence_remove_filter()
+        loudnorm_analysis = LoudnormAnalysis(
+            input_i=-20.0,
+            input_tp=-1.0,
+            input_lra=10.0,
+            input_thresh=-30.0,
+            target_offset=0.5,
+        )
+        audio_filter = create_audio_filter_chain(
+            total_duration=120.0,
+            denoise=True,
+            silence_remove=silence_filter,
+            loudnorm_analysis=loudnorm_analysis,
+        )
+
+        # 필터 순서 검증
+        filters = audio_filter.split(",")
+        assert any("afftdn" in f for f in filters)  # denoise
+        assert any("silenceremove" in f for f in filters)  # silence_remove
+        assert any("afade" in f for f in filters)  # fade
+        assert any("loudnorm" in f for f in filters)  # loudnorm
+
+        # denoise가 silence_remove보다 먼저 나와야 함
+        denoise_idx = next(i for i, f in enumerate(filters) if "afftdn" in f)
+        silence_idx = next(i for i, f in enumerate(filters) if "silenceremove" in f)
+        assert denoise_idx < silence_idx

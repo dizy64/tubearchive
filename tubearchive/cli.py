@@ -72,6 +72,7 @@ from tubearchive.database.repository import (
     VideoRepository,
 )
 from tubearchive.database.schema import init_database
+from tubearchive.ffmpeg.effects import SilenceSegment
 from tubearchive.models.video import FadeConfig, VideoFile
 from tubearchive.utils import truncate_path
 from tubearchive.utils.progress import MultiProgressBar, ProgressInfo, format_size
@@ -242,6 +243,10 @@ class ValidatedArgs:
     thumbnail: bool = False
     thumbnail_timestamps: list[str] | None = None
     thumbnail_quality: int = 2
+    detect_silence: bool = False
+    trim_silence: bool = False
+    silence_threshold: str = "-30dB"
+    silence_min_duration: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -257,6 +262,9 @@ class TranscodeOptions:
         normalize_audio: EBU R128 loudnorm 2-pass 적용 여부
         fade_map: 파일별 페이드 설정 맵 (그룹 경계 기반)
         fade_duration: 기본 페이드 시간 (초)
+        trim_silence: 무음 구간 제거 여부
+        silence_threshold: 무음 기준 데시벨
+        silence_min_duration: 최소 무음 길이 (초)
     """
 
     denoise: bool = False
@@ -264,6 +272,9 @@ class TranscodeOptions:
     normalize_audio: bool = False
     fade_map: dict[Path, FadeConfig] | None = None
     fade_duration: float = 0.5
+    trim_silence: bool = False
+    silence_threshold: str = "-30dB"
+    silence_min_duration: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -274,11 +285,13 @@ class TranscodeResult:
         output_path: 트랜스코딩된 임시 파일 경로
         video_id: DB ``videos`` 테이블 ID
         clip_info: 클립 메타데이터 (파일명, 길이, 기기명, 촬영시각)
+        silence_segments: 무음 구간 리스트 (trim_silence 활성화 시)
     """
 
     output_path: Path
     video_id: int
     clip_info: ClipInfo
+    silence_segments: list[SilenceSegment] | None = None
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -446,6 +459,34 @@ def create_parser() -> argparse.ArgumentParser:
         "--normalize-audio",
         action="store_true",
         help="EBU R128 오디오 라우드니스 정규화 활성화 (loudnorm 2-pass)",
+    )
+
+    parser.add_argument(
+        "--detect-silence",
+        action="store_true",
+        help="무음 구간 감지 및 목록 출력 (제거하지 않음)",
+    )
+
+    parser.add_argument(
+        "--trim-silence",
+        action="store_true",
+        help="시작/끝 무음 자동 제거",
+    )
+
+    parser.add_argument(
+        "--silence-threshold",
+        type=str,
+        default="-30dB",
+        metavar="DB",
+        help="무음 기준 dB (기본: -30dB)",
+    )
+
+    parser.add_argument(
+        "--silence-duration",
+        type=float,
+        default=2.0,
+        metavar="SECONDS",
+        help="최소 무음 길이(초, 기본: 2.0)",
     )
 
     group_toggle = parser.add_mutually_exclusive_group()
@@ -678,6 +719,17 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     # quality 범위 검증
     if not 1 <= thumbnail_quality <= 31:
         raise ValueError(f"Thumbnail quality must be 1-31, got: {thumbnail_quality}")
+
+    # 무음 관련 옵션
+    detect_silence = getattr(args, "detect_silence", False)
+    trim_silence = getattr(args, "trim_silence", False)
+    silence_threshold = getattr(args, "silence_threshold", "-30dB")
+    silence_min_duration = getattr(args, "silence_duration", 2.0)
+
+    # silence_min_duration 범위 검증
+    if silence_min_duration <= 0:
+        raise ValueError(f"Silence duration must be > 0, got: {silence_min_duration}")
+
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -695,6 +747,10 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         thumbnail=thumbnail,
         thumbnail_timestamps=thumbnail_at,
         thumbnail_quality=thumbnail_quality,
+        detect_silence=detect_silence,
+        trim_silence=trim_silence,
+        silence_threshold=silence_threshold,
+        silence_min_duration=silence_min_duration,
     )
 
 
@@ -864,7 +920,7 @@ def _transcode_single(
     fade_out = fade_config.fade_out if fade_config else None
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
-        output_path, video_id = transcoder.transcode_video(
+        output_path, video_id, silence_segments = transcoder.transcode_video(
             video_file,
             denoise=opts.denoise,
             denoise_level=opts.denoise_level,
@@ -872,9 +928,17 @@ def _transcode_single(
             fade_duration=opts.fade_duration,
             fade_in_duration=fade_in,
             fade_out_duration=fade_out,
+            trim_silence=opts.trim_silence,
+            silence_threshold=opts.silence_threshold,
+            silence_min_duration=opts.silence_min_duration,
         )
         clip_info = _collect_clip_info(video_file)
-        return TranscodeResult(output_path=output_path, video_id=video_id, clip_info=clip_info)
+        return TranscodeResult(
+            output_path=output_path,
+            video_id=video_id,
+            clip_info=clip_info,
+            silence_segments=silence_segments,
+        )
 
 
 def _transcode_parallel(
@@ -975,7 +1039,7 @@ def _transcode_sequential(
             fade_in = fade_config.fade_in if fade_config else None
             fade_out = fade_config.fade_out if fade_config else None
 
-            output_path, video_id = transcoder.transcode_video(
+            output_path, video_id, silence_segments = transcoder.transcode_video(
                 video_file,
                 denoise=opts.denoise,
                 denoise_level=opts.denoise_level,
@@ -983,6 +1047,9 @@ def _transcode_sequential(
                 fade_duration=opts.fade_duration,
                 fade_in_duration=fade_in,
                 fade_out_duration=fade_out,
+                trim_silence=opts.trim_silence,
+                silence_threshold=opts.silence_threshold,
+                silence_min_duration=opts.silence_min_duration,
                 progress_info_callback=on_progress_info,
             )
             clip_info = _collect_clip_info(video_file)
@@ -991,6 +1058,7 @@ def _transcode_sequential(
                     output_path=output_path,
                     video_id=video_id,
                     clip_info=clip_info,
+                    silence_segments=silence_segments,
                 )
             )
             progress.finish_file()
@@ -1080,6 +1148,11 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     for video_file in video_files:
         logger.info(f"  - {video_file.path.name}")
 
+    # --detect-silence: 분석만 수행 후 종료
+    if validated_args.detect_silence:
+        _detect_silence_only(video_files, validated_args)
+        return Path()  # 빈 경로 반환
+
     # 단일 파일 + --upload 시 빠른 경로
     if len(video_files) == 1 and validated_args.upload:
         return handle_single_file_upload(video_files[0], validated_args)
@@ -1113,6 +1186,9 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         normalize_audio=validated_args.normalize_audio,
         fade_map=fade_map,
         fade_duration=validated_args.fade_duration,
+        trim_silence=validated_args.trim_silence,
+        silence_threshold=validated_args.silence_threshold,
+        silence_min_duration=validated_args.silence_min_duration,
     )
 
     parallel = validated_args.parallel
@@ -1159,6 +1235,53 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     _print_summary(summary)
 
     return final_path
+
+
+def _detect_silence_only(
+    video_files: list[VideoFile],
+    validated_args: ValidatedArgs,
+) -> None:
+    """
+    무음 구간 감지 전용 모드.
+
+    각 영상의 무음 구간을 감지하고 콘솔에 출력한다.
+    """
+    from tubearchive.ffmpeg.effects import (
+        create_silence_detect_filter,
+        parse_silence_segments,
+    )
+    from tubearchive.ffmpeg.executor import FFmpegExecutor
+
+    executor = FFmpegExecutor()
+
+    threshold = validated_args.silence_threshold
+    min_duration = validated_args.silence_min_duration
+
+    for video_file in video_files:
+        print(f"\n🔍 분석 중: {video_file.path.name}")
+
+        # silencedetect 필터 생성
+        detect_filter = create_silence_detect_filter(
+            threshold=threshold,
+            min_duration=min_duration,
+        )
+
+        # 분석 명령 실행
+        cmd = executor.build_silence_detection_command(
+            input_path=video_file.path,
+            audio_filter=detect_filter,
+        )
+        stderr = executor.run_analysis(cmd)
+
+        # 파싱
+        segments = parse_silence_segments(stderr)
+
+        if not segments:
+            print("  무음 구간 없음")
+        else:
+            print(f"  무음 구간 {len(segments)}개 발견:")
+            for i, seg in enumerate(segments, 1):
+                print(f"    {i}. {seg.start:.2f}s - {seg.end:.2f}s (길이: {seg.duration:.2f}s)")
 
 
 def _generate_thumbnails(

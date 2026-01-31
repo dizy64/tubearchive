@@ -13,6 +13,24 @@ import pytest
 ENV_TEST_PERSISTENT = "TUBEARCHIVE_TEST_PERSISTENT"
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """pytest 시작 시 환경변수 초기화.
+
+    TUBEARCHIVE_TEST_PERSISTENT=1이 아니면 모든 TubeArchive 환경변수를 제거하여
+    실제 DB 경로가 사용되지 않도록 보장합니다.
+    """
+    use_persistent = os.environ.get(ENV_TEST_PERSISTENT, "0") == "1"
+
+    if not use_persistent:
+        # 격리 모드: 실제 DB 경로를 참조하는 환경변수 제거
+        env_vars_to_clear = [
+            "TUBEARCHIVE_DB_PATH",
+            "TUBEARCHIVE_OUTPUT_DIR",
+        ]
+        for var in env_vars_to_clear:
+            os.environ.pop(var, None)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def isolate_test_database() -> Generator[Path | None]:
     """

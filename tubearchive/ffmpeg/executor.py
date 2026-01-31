@@ -296,6 +296,35 @@ class FFmpegExecutor:
             os.devnull,
         ]
 
+    def build_silence_detection_command(
+        self,
+        input_path: Path,
+        audio_filter: str,
+    ) -> list[str]:
+        """
+        무음 구간 감지용 FFmpeg 명령어 빌드.
+
+        오디오만 분석하므로 -vn (비디오 무시), 출력은 os.devnull.
+
+        Args:
+            input_path: 입력 파일 경로
+            audio_filter: 무음 감지 필터 (silencedetect=noise=...:d=...)
+
+        Returns:
+            FFmpeg 명령어 리스트
+        """
+        return [
+            self.ffmpeg_path,
+            "-i",
+            str(input_path),
+            "-af",
+            audio_filter,
+            "-vn",
+            "-f",
+            "null",
+            os.devnull,
+        ]
+
     def run_analysis(self, cmd: list[str]) -> str:
         """
         분석용 FFmpeg 명령 실행 (stderr 반환).

@@ -26,6 +26,7 @@ from tubearchive.database.resume import ResumeManager
 from tubearchive.database.schema import init_database
 from tubearchive.ffmpeg.effects import (
     LoudnormAnalysis,
+    SilenceSegment,
     create_combined_filter,
     create_loudnorm_analysis_filter,
     parse_loudnorm_stats,
@@ -211,6 +212,38 @@ class Transcoder:
         stderr = self.executor.run_analysis(cmd)
         return parse_loudnorm_stats(stderr)
 
+    def _run_silence_analysis(
+        self,
+        video_file: VideoFile,
+        threshold: str = "-30dB",
+        min_duration: float = 2.0,
+    ) -> list[SilenceSegment]:
+        """무음 구간 분석 (1st pass).
+
+        FFmpeg의 ``silencedetect`` 필터를 사용하여 오디오 트랙의 무음 구간을 감지한다.
+
+        Args:
+            video_file: 분석 대상 영상 파일.
+            threshold: 무음 기준 데시벨 (예: "-30dB")
+            min_duration: 최소 무음 길이 (초)
+
+        Returns:
+            무음 구간 리스트 (:class:`SilenceSegment`).
+        """
+        from tubearchive.ffmpeg.effects import (
+            create_silence_detect_filter,
+            parse_silence_segments,
+        )
+
+        detect_filter = create_silence_detect_filter(threshold, min_duration)
+        cmd = self.executor.build_silence_detection_command(
+            input_path=video_file.path,
+            audio_filter=detect_filter,
+        )
+        logger.info("Running silence detection pass")
+        stderr = self.executor.run_analysis(cmd)
+        return parse_silence_segments(stderr)
+
     def transcode_video(
         self,
         video_file: VideoFile,
@@ -222,8 +255,11 @@ class Transcoder:
         denoise: bool = False,
         denoise_level: str = "medium",
         normalize_audio: bool = False,
+        trim_silence: bool = False,
+        silence_threshold: str = "-30dB",
+        silence_min_duration: float = 2.0,
         progress_info_callback: Callable[[ProgressInfo], None] | None = None,
-    ) -> tuple[Path, int]:
+    ) -> tuple[Path, int, list[SilenceSegment] | None]:
         """
         단일 영상 트랜스코딩.
 
@@ -237,10 +273,13 @@ class Transcoder:
             denoise: 오디오 노이즈 제거 활성화 여부
             denoise_level: 노이즈 제거 강도 (light/medium/heavy)
             normalize_audio: EBU R128 오디오 정규화 활성화 여부
+            trim_silence: 무음 구간 제거 활성화 여부
+            silence_threshold: 무음 기준 데시벨 (예: "-30dB")
+            silence_min_duration: 최소 무음 길이 (초)
             progress_info_callback: 상세 진행률 콜백 (UI 업데이트용)
 
         Returns:
-            (트랜스코딩된 파일 경로, video_id) 튜플
+            (트랜스코딩된 파일 경로, video_id, 무음 구간 리스트) 튜플
 
         Raises:
             FFmpegError: 트랜스코딩 실패
@@ -253,7 +292,7 @@ class Transcoder:
         # 2. 이미 처리된 결과가 있으면 스킵
         existing = self._find_existing_result(video_id, video_file.path)
         if existing:
-            return existing, video_id
+            return existing, video_id, None
 
         # 3. 작업 생성/조회 및 Resume 위치 계산
         job_id = self.resume_mgr.get_or_create_job(video_id)
@@ -285,6 +324,29 @@ class Transcoder:
             except (FFmpegError, ValueError) as e:
                 logger.warning(f"Loudnorm analysis failed, skipping normalization: {e}")
 
+        # 5.5 무음 구간 분석 (활성화된 경우)
+        silence_segments: list[SilenceSegment] | None = None
+        silence_remove_filter = ""
+        if trim_silence:
+            try:
+                silence_segments = self._run_silence_analysis(
+                    video_file,
+                    threshold=silence_threshold,
+                    min_duration=silence_min_duration,
+                )
+                if silence_segments:
+                    from tubearchive.ffmpeg.effects import create_silence_remove_filter
+
+                    silence_remove_filter = create_silence_remove_filter(
+                        threshold=silence_threshold,
+                        min_duration=silence_min_duration,
+                        trim_start=True,
+                        trim_end=True,
+                    )
+                    logger.info(f"Found {len(silence_segments)} silence segments, will trim")
+            except (FFmpegError, ValueError) as e:
+                logger.warning(f"Silence analysis failed, skipping trim: {e}")
+
         # 6. 프로파일 및 필터 준비 (항상 SDR, HDR은 필터에서 변환)
         profile = PROFILE_SDR
         logger.info(f"Using profile: {profile.name}")
@@ -302,6 +364,7 @@ class Transcoder:
             color_transfer=metadata.color_transfer,
             denoise=denoise,
             denoise_level=denoise_level,
+            silence_remove=silence_remove_filter,
             loudnorm_analysis=loudnorm_analysis,
         )
 
@@ -319,7 +382,7 @@ class Transcoder:
             self._run_transcode(cmd, metadata.duration_seconds, job_id, progress_info_callback)
             self.job_repo.mark_completed(job_id, output_path)
             logger.info(f"Transcoding completed: {output_path}")
-            return output_path, video_id
+            return output_path, video_id, silence_segments
 
         except FFmpegError as e:
             if "videotoolbox" not in str(e.stderr or "").lower():
@@ -344,7 +407,7 @@ class Transcoder:
                 self._run_transcode(cmd, metadata.duration_seconds, job_id, progress_info_callback)
                 self.job_repo.mark_completed(job_id, output_path)
                 logger.info(f"Fallback transcoding completed: {output_path}")
-                return output_path, video_id
+                return output_path, video_id, silence_segments
 
             except FFmpegError as fallback_error:
                 self.job_repo.mark_failed(job_id, str(fallback_error))

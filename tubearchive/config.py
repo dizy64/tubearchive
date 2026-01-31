@@ -35,6 +35,9 @@ ENV_DENOISE_LEVEL = "TUBEARCHIVE_DENOISE_LEVEL"
 ENV_NORMALIZE_AUDIO = "TUBEARCHIVE_NORMALIZE_AUDIO"
 ENV_GROUP_SEQUENCES = "TUBEARCHIVE_GROUP_SEQUENCES"
 ENV_FADE_DURATION = "TUBEARCHIVE_FADE_DURATION"
+ENV_TRIM_SILENCE = "TUBEARCHIVE_TRIM_SILENCE"
+ENV_SILENCE_THRESHOLD = "TUBEARCHIVE_SILENCE_THRESHOLD"
+ENV_SILENCE_MIN_DURATION = "TUBEARCHIVE_SILENCE_MIN_DURATION"
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,9 @@ class GeneralConfig:
     normalize_audio: bool | None = None
     group_sequences: bool | None = None
     fade_duration: float | None = None
+    trim_silence: bool | None = None
+    silence_threshold: str | None = None
+    silence_min_duration: float | None = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +148,17 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
     elif raw_fade is not None:
         _warn_type(f"{section}.fade_duration", "float", raw_fade)
 
+    # silence_min_duration: 양수 실수 (int도 허용)
+    silence_min_duration: float | None = None
+    raw_silence_dur = data.get("silence_min_duration")
+    if isinstance(raw_silence_dur, (int, float)) and not isinstance(raw_silence_dur, bool):
+        if raw_silence_dur > 0:
+            silence_min_duration = float(raw_silence_dur)
+        else:
+            logger.warning("config: general.silence_min_duration 값 오류: %r", raw_silence_dur)
+    elif raw_silence_dur is not None:
+        _warn_type(f"{section}.silence_min_duration", "float", raw_silence_dur)
+
     return GeneralConfig(
         output_dir=_parse_str(data, "output_dir", section),
         parallel=_parse_int(data, "parallel", section),
@@ -151,6 +168,9 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
         normalize_audio=_parse_bool(data, "normalize_audio", section),
         group_sequences=_parse_bool(data, "group_sequences", section),
         fade_duration=fade_duration,
+        trim_silence=_parse_bool(data, "trim_silence", section),
+        silence_threshold=_parse_str(data, "silence_threshold", section),
+        silence_min_duration=silence_min_duration,
     )
 
 
@@ -273,6 +293,12 @@ def apply_config_to_env(config: AppConfig) -> None:
         mappings.append((ENV_GROUP_SEQUENCES, str(config.general.group_sequences).lower()))
     if config.general.fade_duration is not None:
         mappings.append((ENV_FADE_DURATION, str(config.general.fade_duration)))
+    if config.general.trim_silence is not None:
+        mappings.append((ENV_TRIM_SILENCE, str(config.general.trim_silence).lower()))
+    if config.general.silence_threshold is not None:
+        mappings.append((ENV_SILENCE_THRESHOLD, config.general.silence_threshold))
+    if config.general.silence_min_duration is not None:
+        mappings.append((ENV_SILENCE_MIN_DURATION, str(config.general.silence_min_duration)))
 
     # playlist: list → CSV
     if config.youtube.playlist:
@@ -301,6 +327,9 @@ def generate_default_config() -> str:
 # normalize_audio = false                   # EBU R128 loudnorm (TUBEARCHIVE_NORMALIZE_AUDIO)
 # group_sequences = true                    # 연속 파일 시퀀스 그룹핑 (TUBEARCHIVE_GROUP_SEQUENCES)
 # fade_duration = 0.5                       # 기본 페이드 시간 (초, TUBEARCHIVE_FADE_DURATION)
+# trim_silence = false                      # 무음 구간 제거 (TUBEARCHIVE_TRIM_SILENCE)
+# silence_threshold = "-30dB"               # 무음 기준 데시벨 (TUBEARCHIVE_SILENCE_THRESHOLD)
+# silence_min_duration = 2.0                # 최소 무음 길이(초, TUBEARCHIVE_SILENCE_MIN_DURATION)
 
 [youtube]
 # client_secrets = "~/.tubearchive/client_secrets.json"

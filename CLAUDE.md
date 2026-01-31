@@ -35,6 +35,11 @@ uv run tubearchive --dry-run ~/Videos/
 uv run tubearchive --normalize-audio ~/Videos/      # EBU R128 loudnorm 2-pass
 uv run tubearchive --denoise ~/Videos/              # 오디오 노이즈 제거
 
+# 무음 구간 감지 및 제거
+uv run tubearchive --detect-silence ~/Videos/                    # 무음 구간 감지만
+uv run tubearchive --trim-silence ~/Videos/                      # 시작/끝 무음 자동 제거
+uv run tubearchive --trim-silence --silence-threshold -35dB ~/Videos/  # 커스텀 설정
+
 # 썸네일
 uv run tubearchive --thumbnail ~/Videos/            # 기본 지점(10%, 33%, 50%) 썸네일
 uv run tubearchive --thumbnail --thumbnail-at 00:01:30 ~/Videos/  # 특정 시점
@@ -122,9 +127,11 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - 세로: split → blur background (`PORTRAIT_BLUR_RADIUS=20`) → overlay foreground
 - HDR→SDR: `colorspace=all=bt709:iall=bt2020` (color_transfer가 HLG/PQ인 경우)
 - Dip-to-Black: fade in/out 0.5초
+- Silence: 무음 구간 감지 및 제거
+  - `create_silence_detect_filter()` (1st pass) → `parse_silence_segments()` → `create_silence_remove_filter()` (2nd pass)
 - Loudnorm: EBU R128 타겟 상수 (`LOUDNORM_TARGET_I=-14.0`, `TP=-1.5`, `LRA=11.0`)
   - `create_loudnorm_analysis_filter()` (1st pass) → `parse_loudnorm_stats()` → `create_loudnorm_filter()` (2nd pass)
-- `create_audio_filter_chain()`: denoise → fade → loudnorm 오디오 필터 체인 통합
+- `create_audio_filter_chain()`: denoise → silence_remove → fade → loudnorm 오디오 필터 체인 통합
 
 **ffmpeg/thumbnail.py**: 썸네일 추출
 - 병합 영상에서 지정 시점(기본: 10%, 33%, 50%) JPEG 썸네일 생성
@@ -183,6 +190,9 @@ scan_videos() → group_sequences() → reorder_with_groups()
 | `TUBEARCHIVE_NORMALIZE_AUDIO` | EBU R128 loudnorm (true/false) | false |
 | `TUBEARCHIVE_GROUP_SEQUENCES` | 연속 파일 시퀀스 그룹핑 (true/false) | true |
 | `TUBEARCHIVE_FADE_DURATION` | 기본 페이드 시간(초) | 0.5 |
+| `TUBEARCHIVE_TRIM_SILENCE` | 무음 구간 제거 (true/false) | false |
+| `TUBEARCHIVE_SILENCE_THRESHOLD` | 무음 기준 데시벨 | -30dB |
+| `TUBEARCHIVE_SILENCE_MIN_DURATION` | 최소 무음 길이(초) | 2.0 |
 | `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
 | `TUBEARCHIVE_YOUTUBE_TOKEN` | 토큰 파일 경로 | `~/.tubearchive/youtube_token.json` |
 | `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID | - |
