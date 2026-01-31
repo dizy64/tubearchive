@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date
@@ -774,9 +775,8 @@ def save_merge_job_to_db(
     Args:
         output_path: 출력 파일 경로
         video_clips: (파일명, 재생시간, 기종, 촬영시간) 튜플 리스트
-        targets: 대상 경로 목록
-        video_ids: 병합된 영상들의 DB ID 목록
         targets: 입력 타겟 목록 (제목 추출용)
+        video_ids: 병합된 영상들의 DB ID 목록
 
     Returns:
         생성된 Summary 마크다운 (실패 시 None)
@@ -1153,6 +1153,37 @@ def _delete_build_records(conn: sqlite3.Connection, video_ids: list[int]) -> Non
     conn.commit()
 
 
+def _interactive_select(items: Sequence[object], prompt: str) -> int | None:
+    """
+    대화형 목록 선택.
+
+    Args:
+        items: 선택 대상 목록
+        prompt: 사용자에게 표시할 프롬프트
+
+    Returns:
+        선택된 인덱스(0-based) 또는 취소 시 None
+    """
+    try:
+        choice = safe_input(prompt)
+        if not choice or choice == "0":
+            print("취소됨")
+            return None
+
+        idx = int(choice) - 1
+        if 0 <= idx < len(items):
+            return idx
+
+        print("잘못된 번호입니다.")
+        return None
+    except ValueError:
+        print("숫자를 입력해주세요.")
+        return None
+    except KeyboardInterrupt:
+        print("\n취소됨")
+        return None
+
+
 def cmd_reset_build(path_arg: str) -> None:
     """
     --reset-build 옵션 처리.
@@ -1207,28 +1238,17 @@ def cmd_reset_build(path_arg: str) -> None:
             print(f"{i:<4} {title:<30} {date:<12} {yt_status:<10} {path}")
         print("=" * 80)
 
-        try:
-            choice = safe_input("\n삭제할 번호 입력 (0: 취소): ")
-            if not choice or choice == "0":
-                print("취소됨")
-                conn.close()
-                return
+        idx = _interactive_select(jobs, "\n삭제할 번호 입력 (0: 취소): ")
+        if idx is None:
+            conn.close()
+            return
 
-            idx = int(choice) - 1
-            if 0 <= idx < len(jobs):
-                job = jobs[idx]
-                # 관련 트랜스코딩 기록도 삭제
-                _delete_build_records(conn, job.video_ids)
-                if job.id is not None:
-                    repo.delete(job.id)
-                print(f"\n✅ 빌드 기록 삭제됨: {job.title or job.output_path}")
-                print("   이제 다시 빌드할 수 있습니다.")
-            else:
-                print("잘못된 번호입니다.")
-        except ValueError:
-            print("숫자를 입력해주세요.")
-        except KeyboardInterrupt:
-            print("\n취소됨")
+        job = jobs[idx]
+        _delete_build_records(conn, job.video_ids)
+        if job.id is not None:
+            repo.delete(job.id)
+        print(f"\n✅ 빌드 기록 삭제됨: {job.title or job.output_path}")
+        print("   이제 다시 빌드할 수 있습니다.")
 
     conn.close()
 
@@ -1284,27 +1304,17 @@ def cmd_reset_upload(path_arg: str) -> None:
             print(f"{i:<4} {title:<30} {date:<12} {yt_id:<15} {path}")
         print("=" * 90)
 
-        try:
-            choice = safe_input("\n초기화할 번호 입력 (0: 취소): ")
-            if not choice or choice == "0":
-                print("취소됨")
-                conn.close()
-                return
+        idx = _interactive_select(jobs, "\n초기화할 번호 입력 (0: 취소): ")
+        if idx is None:
+            conn.close()
+            return
 
-            idx = int(choice) - 1
-            if 0 <= idx < len(jobs):
-                job = jobs[idx]
-                if job.id is not None:
-                    repo.clear_youtube_id(job.id)
-                print(f"\n✅ 업로드 기록 초기화됨: {job.title or job.output_path}")
-                print(f"   이전 YouTube ID: {job.youtube_id}")
-                print("   이제 다시 업로드할 수 있습니다.")
-            else:
-                print("잘못된 번호입니다.")
-        except ValueError:
-            print("숫자를 입력해주세요.")
-        except KeyboardInterrupt:
-            print("\n취소됨")
+        job = jobs[idx]
+        if job.id is not None:
+            repo.clear_youtube_id(job.id)
+        print(f"\n✅ 업로드 기록 초기화됨: {job.title or job.output_path}")
+        print(f"   이전 YouTube ID: {job.youtube_id}")
+        print("   이제 다시 업로드할 수 있습니다.")
 
     conn.close()
 
