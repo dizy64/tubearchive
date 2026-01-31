@@ -14,7 +14,7 @@ from tubearchive.database.resume import ResumeManager
 from tubearchive.database.schema import init_database
 from tubearchive.ffmpeg.effects import create_combined_filter
 from tubearchive.ffmpeg.executor import FFmpegError, FFmpegExecutor
-from tubearchive.ffmpeg.profiles import PROFILE_SDR, get_fallback_profile
+from tubearchive.ffmpeg.profiles import PROFILE_SDR, EncodingProfile, get_fallback_profile
 from tubearchive.models.job import JobStatus
 from tubearchive.models.video import VideoFile
 from tubearchive.utils.progress import ProgressInfo
@@ -51,6 +51,90 @@ class Transcoder:
         self.temp_dir = temp_dir
         self.temp_dir.mkdir(exist_ok=True)
 
+    # ---------- 내부 헬퍼 ----------
+
+    def _register_video(self, video_file: VideoFile, metadata: VideoMetadata) -> int:
+        """영상을 DB에 등록하고 video_id를 반환한다 (이미 존재하면 기존 ID)."""
+        existing = self.video_repo.get_by_path(video_file.path)
+        if existing:
+            return int(existing["id"])
+        return self.video_repo.insert(video_file, metadata)
+
+    def _find_existing_result(self, video_id: int, path: Path) -> Path | None:
+        """이미 처리 완료된 결과 파일을 찾는다. 없으면 None."""
+        if not self.resume_mgr.is_video_processed(video_id):
+            return None
+
+        jobs = self.job_repo.get_by_video_id(video_id)
+        completed_job = next(
+            (j for j in jobs if j.status == JobStatus.COMPLETED and j.temp_file_path),
+            None,
+        )
+
+        # 파일이 실제 존재하면 스킵
+        if completed_job and completed_job.temp_file_path and completed_job.temp_file_path.exists():
+            logger.info(f"Video already processed: {path}")
+            return completed_job.temp_file_path
+
+        # DB에만 완료 기록이 남아있고 파일이 없으면 → merged로 전이
+        if completed_job and completed_job.id is not None:
+            logger.info(f"Completed but temp file gone, marking as merged: {path}")
+            self.job_repo.update_status(completed_job.id, JobStatus.MERGED)
+
+        return None
+
+    def _build_transcode_cmd(
+        self,
+        video_file: VideoFile,
+        metadata: VideoMetadata,
+        output_path: Path,
+        profile: EncodingProfile,
+        video_filter: str,
+        audio_filter: str,
+        seek_start: float | None,
+    ) -> list[str]:
+        """세로/가로 영상에 맞는 FFmpeg 커맨드를 생성한다."""
+        # 세로: filter_complex (split → blur → overlay), 가로: -vf
+        if metadata.is_portrait:
+            return self.executor.build_transcode_command(
+                input_path=video_file.path,
+                output_path=output_path,
+                profile=profile,
+                filter_complex=video_filter,
+                audio_filter=audio_filter,
+                seek_start=seek_start,
+            )
+        return self.executor.build_transcode_command(
+            input_path=video_file.path,
+            output_path=output_path,
+            profile=profile,
+            video_filter=video_filter,
+            audio_filter=audio_filter,
+            seek_start=seek_start,
+        )
+
+    def _run_transcode(
+        self,
+        cmd: list[str],
+        duration: float,
+        job_id: int,
+        progress_info_callback: Callable[[ProgressInfo], None] | None,
+    ) -> None:
+        """FFmpeg를 실행하고 진행률을 DB(+UI)에 보고한다."""
+        if progress_info_callback:
+            def on_progress_info(info: ProgressInfo) -> None:
+                self.resume_mgr.save_progress(job_id, info.percent)
+                progress_info_callback(info)
+
+            self.executor.run(cmd, duration, progress_info_callback=on_progress_info)
+        else:
+            self.executor.run(
+                cmd, duration,
+                lambda percent: self.resume_mgr.save_progress(job_id, percent),
+            )
+
+    # ---------- 공개 API ----------
+
     def transcode_video(
         self,
         video_file: VideoFile,
@@ -75,59 +159,37 @@ class Transcoder:
         Raises:
             FFmpegError: 트랜스코딩 실패
         """
-        # 메타데이터 감지
+        # 1. 메타데이터 감지 및 DB 등록
         metadata = detect_metadata(video_file.path)
         logger.info(f"Detected: {metadata.device_model}, {metadata.width}x{metadata.height}")
+        video_id = self._register_video(video_file, metadata)
 
-        # 데이터베이스에 영상 등록
-        existing = self.video_repo.get_by_path(video_file.path)
+        # 2. 이미 처리된 결과가 있으면 스킵
+        existing = self._find_existing_result(video_id, video_file.path)
         if existing:
-            video_id = existing["id"]
-        else:
-            video_id = self.video_repo.insert(video_file, metadata)
+            return existing, video_id
 
-        # 이미 처리된 영상인지 확인
-        if self.resume_mgr.is_video_processed(video_id):
-            jobs = self.job_repo.get_by_video_id(video_id)
-            completed_job = next(
-                (j for j in jobs if j.status == JobStatus.COMPLETED and j.temp_file_path),
-                None,
-            )
-            # temp_file_path가 있고 실제 파일도 존재하는 경우만 스킵
-            if completed_job and completed_job.temp_file_path and completed_job.temp_file_path.exists():
-                logger.info(f"Video already processed: {video_file.path}")
-                return completed_job.temp_file_path, video_id
-            elif completed_job and completed_job.id is not None:
-                # DB에는 완료로 기록되어 있지만 파일이 없음 - 이전 병합에서 정리된 것으로 처리
-                logger.info(f"Completed but temp file gone, marking as merged: {video_file.path}")
-                self.job_repo.update_status(completed_job.id, JobStatus.MERGED)
-
-        # 작업 생성 또는 기존 작업 조회
+        # 3. 작업 생성/조회 및 Resume 위치 계산
         job_id = self.resume_mgr.get_or_create_job(video_id)
         job = self.job_repo.get_by_id(job_id)
-
         if job is None:
             raise RuntimeError(f"Failed to create job for video {video_id}")
 
-        # 출력 파일 경로
         output_path = self.temp_dir / f"transcoded_{video_id}.mp4"
 
-        # Resume 시작 위치 계산
         seek_start: float | None = None
         if job.status == JobStatus.PROCESSING and job.progress_percent > 0:
             seek_start = self.resume_mgr.calculate_resume_position(job, metadata.duration_seconds)
             logger.info(f"Resuming from {seek_start:.2f}s ({job.progress_percent}%)")
 
-        # 작업 시작
+        # 4. 작업 시작
         self.job_repo.update_status(job_id, JobStatus.PROCESSING)
         self.resume_mgr.set_temp_file(job_id, output_path)
 
-        # 프로파일: 항상 SDR로 통일 (concat 호환성)
-        # HDR 소스는 필터에서 SDR로 변환됨
+        # 5. 프로파일 및 필터 준비 (항상 SDR, HDR은 필터에서 변환)
         profile = PROFILE_SDR
         logger.info(f"Using profile: {profile.name}")
 
-        # 필터 생성 (HDR 소스는 SDR로 변환)
         video_filter, audio_filter = create_combined_filter(
             source_width=metadata.width,
             source_height=metadata.height,
@@ -139,127 +201,40 @@ class Transcoder:
             color_transfer=metadata.color_transfer,
         )
 
-        # 진행률 콜백 (DB 저장용)
-        def on_progress(percent: int) -> None:
-            self.resume_mgr.save_progress(job_id, percent)
-
-        # 상세 진행률 콜백 (UI + DB)
-        def on_progress_info(info: ProgressInfo) -> None:
-            self.resume_mgr.save_progress(job_id, info.percent)
-            if progress_info_callback:
-                progress_info_callback(info)
-
-        # 트랜스코딩 실행
+        # 6. 실행: VideoToolbox → (실패 시) libx265 폴백
         try:
-            if metadata.is_portrait:
-                # 세로 영상: filter_complex 사용
-                cmd = self.executor.build_transcode_command(
-                    input_path=video_file.path,
-                    output_path=output_path,
-                    profile=profile,
-                    filter_complex=video_filter,
-                    audio_filter=audio_filter,
-                    seek_start=seek_start,
-                )
-            else:
-                # 가로 영상: -vf 사용
-                cmd = self.executor.build_transcode_command(
-                    input_path=video_file.path,
-                    output_path=output_path,
-                    profile=profile,
-                    video_filter=video_filter,
-                    audio_filter=audio_filter,
-                    seek_start=seek_start,
-                )
-
-            # UI 콜백이 있으면 상세 정보 사용, 없으면 기존 방식
-            if progress_info_callback:
-                self.executor.run(
-                    cmd,
-                    metadata.duration_seconds,
-                    progress_info_callback=on_progress_info,
-                )
-            else:
-                self.executor.run(cmd, metadata.duration_seconds, on_progress)
+            cmd = self._build_transcode_cmd(
+                video_file, metadata, output_path, profile,
+                video_filter, audio_filter, seek_start,
+            )
+            self._run_transcode(cmd, metadata.duration_seconds, job_id, progress_info_callback)
             self.job_repo.mark_completed(job_id, output_path)
             logger.info(f"Transcoding completed: {output_path}")
-
             return output_path, video_id
 
         except FFmpegError as e:
-            # VideoToolbox 실패 시 폴백 시도
-            if "videotoolbox" in str(e.stderr or "").lower():
-                logger.warning("VideoToolbox failed, trying libx265 fallback")
-                return self._transcode_with_fallback(
-                    video_file,
-                    metadata,
-                    video_id,
-                    job_id,
-                    output_path,
-                    video_filter,
-                    audio_filter,
-                    seek_start,
-                    on_progress if not progress_info_callback else None,
-                    on_progress_info if progress_info_callback else None,
-                )
-            else:
+            if "videotoolbox" not in str(e.stderr or "").lower():
                 self.job_repo.mark_failed(job_id, str(e))
                 raise
 
-    def _transcode_with_fallback(
-        self,
-        video_file: VideoFile,
-        metadata: VideoMetadata,
-        video_id: int,
-        job_id: int,
-        output_path: Path,
-        video_filter: str,
-        audio_filter: str,
-        seek_start: float | None,
-        on_progress: Callable[[int], None] | None,
-        on_progress_info: Callable[[ProgressInfo], None] | None = None,
-    ) -> tuple[Path, int]:
-        """libx265 폴백 트랜스코딩."""
+            # VideoToolbox 실패 → libx265 폴백
+            logger.warning("VideoToolbox failed, trying libx265 fallback")
+            fallback = get_fallback_profile()
+            logger.info(f"Using fallback profile: {fallback.name}")
 
-        fallback_profile = get_fallback_profile()
-        logger.info(f"Using fallback profile: {fallback_profile.name}")
-
-        try:
-            if metadata.is_portrait:
-                cmd = self.executor.build_transcode_command(
-                    input_path=video_file.path,
-                    output_path=output_path,
-                    profile=fallback_profile,
-                    filter_complex=video_filter,
-                    audio_filter=audio_filter,
-                    seek_start=seek_start,
+            try:
+                cmd = self._build_transcode_cmd(
+                    video_file, metadata, output_path, fallback,
+                    video_filter, audio_filter, seek_start,
                 )
-            else:
-                cmd = self.executor.build_transcode_command(
-                    input_path=video_file.path,
-                    output_path=output_path,
-                    profile=fallback_profile,
-                    video_filter=video_filter,
-                    audio_filter=audio_filter,
-                    seek_start=seek_start,
-                )
+                self._run_transcode(cmd, metadata.duration_seconds, job_id, progress_info_callback)
+                self.job_repo.mark_completed(job_id, output_path)
+                logger.info(f"Fallback transcoding completed: {output_path}")
+                return output_path, video_id
 
-            if on_progress_info:
-                self.executor.run(
-                    cmd,
-                    metadata.duration_seconds,
-                    progress_info_callback=on_progress_info,
-                )
-            else:
-                self.executor.run(cmd, metadata.duration_seconds, on_progress)
-            self.job_repo.mark_completed(job_id, output_path)
-            logger.info(f"Fallback transcoding completed: {output_path}")
-
-            return output_path, video_id
-
-        except FFmpegError as e:
-            self.job_repo.mark_failed(job_id, str(e))
-            raise
+            except FFmpegError as fallback_error:
+                self.job_repo.mark_failed(job_id, str(fallback_error))
+                raise
 
     def close(self) -> None:
         """리소스 정리."""
