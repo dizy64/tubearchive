@@ -93,6 +93,40 @@ class TestCreateParser:
 
         assert args.denoise_level == "heavy"
 
+    def test_parses_config_option(self) -> None:
+        """--config 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(["--config", "/tmp/custom.toml"])
+
+        assert args.config == "/tmp/custom.toml"
+
+    def test_config_default_is_none(self) -> None:
+        """--config 미지정 시 None."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.config is None
+
+    def test_parses_init_config_flag(self) -> None:
+        """--init-config 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--init-config"])
+
+        assert args.init_config is True
+
+    def test_init_config_default_is_false(self) -> None:
+        """--init-config 미지정 시 False."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.init_config is False
+
+    def test_upload_privacy_default_is_none(self) -> None:
+        """upload_privacy 기본값은 None (config 통합 위해)."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.upload_privacy is None
 
 class TestValidateArgs:
     """인자 검증 테스트."""
@@ -261,6 +295,58 @@ class TestValidateArgs:
 
         with pytest.raises(FileNotFoundError, match="Output directory"):
             validate_args(args)
+
+
+class TestCmdInitConfig:
+    """cmd_init_config 테스트."""
+
+    @patch("tubearchive.config.get_default_config_path")
+    def test_creates_config_file(self, mock_path: MagicMock, tmp_path: Path) -> None:
+        """설정 파일 생성."""
+        from tubearchive.cli import cmd_init_config
+
+        config_path = tmp_path / ".tubearchive" / "config.toml"
+        mock_path.return_value = config_path
+
+        cmd_init_config()
+
+        assert config_path.exists()
+        content = config_path.read_text()
+        assert "[general]" in content
+        assert "[youtube]" in content
+
+    @patch("tubearchive.cli.safe_input", return_value="n")
+    @patch("tubearchive.config.get_default_config_path")
+    def test_skips_overwrite_when_declined(
+        self, mock_path: MagicMock, mock_input: MagicMock, tmp_path: Path
+    ) -> None:
+        """덮어쓰기 거부 시 스킵."""
+        from tubearchive.cli import cmd_init_config
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("existing content")
+        mock_path.return_value = config_path
+
+        cmd_init_config()
+
+        assert config_path.read_text() == "existing content"
+
+    @patch("tubearchive.cli.safe_input", return_value="y")
+    @patch("tubearchive.config.get_default_config_path")
+    def test_overwrites_when_confirmed(
+        self, mock_path: MagicMock, mock_input: MagicMock, tmp_path: Path
+    ) -> None:
+        """덮어쓰기 확인 시 덮어씀."""
+        from tubearchive.cli import cmd_init_config
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("old content")
+        mock_path.return_value = config_path
+
+        cmd_init_config()
+
+        content = config_path.read_text()
+        assert "[general]" in content
 
 
 class TestMain:

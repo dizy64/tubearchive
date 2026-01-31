@@ -323,7 +323,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--upload-privacy",
         type=str,
-        default="unlisted",
+        default=None,
         choices=["public", "unlisted", "private"],
         help="YouTube 공개 설정 (기본: unlisted)",
     )
@@ -384,6 +384,20 @@ def create_parser() -> argparse.ArgumentParser:
         choices=["light", "medium", "heavy"],
         default=None,
         help="노이즈 제거 강도 (light/medium/heavy, 기본: medium)",
+    )
+
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="설정 파일 경로 (기본: ~/.tubearchive/config.toml)",
+    )
+
+    parser.add_argument(
+        "--init-config",
+        action="store_true",
+        help="기본 설정 파일(config.toml) 생성",
     )
 
     parser.add_argument(
@@ -1702,10 +1716,47 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
     )
 
 
+def cmd_init_config() -> None:
+    """
+    --init-config 옵션 처리.
+
+    기본 설정 파일(config.toml) 템플릿을 생성합니다.
+    """
+    from tubearchive.config import generate_default_config, get_default_config_path
+
+    config_path = get_default_config_path()
+
+    if config_path.exists():
+        response = safe_input(f"이미 존재합니다: {config_path}\n덮어쓰시겠습니까? (y/N): ")
+        if response.lower() not in ("y", "yes"):
+            print("취소됨")
+            return
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(generate_default_config())
+    print(f"설정 파일 생성됨: {config_path}")
+
+
 def main() -> None:
     """CLI 진입점."""
     parser = create_parser()
     args = parser.parse_args()
+
+    # --init-config 처리 (가장 먼저, 로깅/설정 로드 전)
+    if args.init_config:
+        cmd_init_config()
+        return
+
+    # 설정 파일 로드 및 환경변수 적용
+    from tubearchive.config import apply_config_to_env, load_config
+
+    config_path = Path(args.config) if args.config else None
+    config = load_config(config_path)
+    apply_config_to_env(config)
+
+    # upload_privacy: CLI > config > "unlisted"
+    if args.upload_privacy is None:
+        args.upload_privacy = config.youtube.upload_privacy or "unlisted"
 
     setup_logging(args.verbose)
 

@@ -136,7 +136,7 @@ def init_database(db_path: Path | None = None) -> sqlite3.Connection:
         SQLite 연결 객체
     """
     if db_path is None:
-        db_path = DEFAULT_DB_PATH
+        db_path = get_default_db_path()
 
     # 부모 디렉토리 생성 보장
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,7 +167,7 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
         SQLite 연결 객체
     """
     if db_path is None:
-        db_path = DEFAULT_DB_PATH
+        db_path = get_default_db_path()
 
     # 부모 디렉토리 생성 보장
     db_path.parent.mkdir(parents=True, exist_ok=True)
