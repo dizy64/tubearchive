@@ -79,6 +79,20 @@ class TestCreateParser:
 
         assert args.dry_run is True
 
+    def test_parses_denoise_flag(self) -> None:
+        """--denoise 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--denoise"])
+
+        assert args.denoise is True
+
+    def test_parses_denoise_level(self) -> None:
+        """--denoise-level 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(["--denoise-level", "heavy"])
+
+        assert args.denoise_level == "heavy"
+
 
 class TestValidateArgs:
     """인자 검증 테스트."""
@@ -164,6 +178,74 @@ class TestValidateArgs:
         result = validate_args(args)
 
         assert result.output == tmp_path / "output.mp4"
+
+    def test_denoise_level_enables_denoise(self, tmp_path: Path) -> None:
+        """--denoise-level 지정 시 denoise 자동 활성화."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level="heavy",
+        )
+
+        result = validate_args(args)
+
+        assert result.denoise is True
+        assert result.denoise_level == "heavy"
+
+    def test_env_denoise_defaults(self, tmp_path: Path) -> None:
+        """환경 변수로 denoise 기본 활성화."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level=None,
+        )
+
+        with patch.dict("os.environ", {"TUBEARCHIVE_DENOISE": "true"}):
+            result = validate_args(args)
+
+        assert result.denoise is True
+        assert result.denoise_level == "medium"
+
+    def test_env_denoise_level_defaults(self, tmp_path: Path) -> None:
+        """환경 변수 denoise level 지정 시 자동 활성화."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level=None,
+        )
+
+        with patch.dict("os.environ", {"TUBEARCHIVE_DENOISE_LEVEL": "heavy"}):
+            result = validate_args(args)
+
+        assert result.denoise is True
+        assert result.denoise_level == "heavy"
 
     def test_raises_for_invalid_output_parent(self) -> None:
         """출력 파일 부모 디렉토리 없으면 에러."""

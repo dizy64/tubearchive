@@ -143,6 +143,8 @@ class Transcoder:
         target_width: int = 3840,
         target_height: int = 2160,
         fade_duration: float = 0.5,
+        denoise: bool = False,
+        denoise_level: str = "medium",
         progress_info_callback: Callable[[ProgressInfo], None] | None = None,
     ) -> tuple[Path, int]:
         """
@@ -153,6 +155,8 @@ class Transcoder:
             target_width: 타겟 너비
             target_height: 타겟 높이
             fade_duration: 페이드 지속 시간
+            denoise: 오디오 노이즈 제거 활성화 여부
+            denoise_level: 노이즈 제거 강도 (light/medium/heavy)
             progress_info_callback: 상세 진행률 콜백 (UI 업데이트용)
 
         Returns:
@@ -201,6 +205,8 @@ class Transcoder:
             target_height=target_height,
             fade_duration=fade_duration,
             color_transfer=metadata.color_transfer,
+            denoise=denoise,
+            denoise_level=denoise_level,
         )
 
         # 6. 실행: VideoToolbox → (실패 시) libx265 폴백

@@ -5,6 +5,13 @@ from enum import Enum
 # HDR 색공간 식별자
 HDR_COLOR_TRANSFERS = {"arib-std-b67", "smpte2084"}
 
+# 오디오 노이즈 제거 강도 (afftdn 기준)
+DENOISE_AFFTDN_LEVELS = {
+    "light": 6,
+    "medium": 12,
+    "heavy": 18,
+}
+
 
 class StabilizeStrength(Enum):
     """영상 안정화 강도."""
@@ -181,6 +188,45 @@ def create_dip_to_black_audio_filter(
     return f"afade=t=in:st=0:d={effective_fade},afade=t=out:st={fade_out_start}:d={effective_fade}"
 
 
+def create_denoise_audio_filter(level: str = "medium") -> str:
+    """
+    오디오 노이즈 제거 필터 생성 (afftdn).
+
+    Args:
+        level: 강도 (light/medium/heavy)
+
+    Returns:
+        FFmpeg -af 필터 문자열
+    """
+    key = level.lower()
+    if key not in DENOISE_AFFTDN_LEVELS:
+        raise ValueError(f"Unsupported denoise level: {level}")
+    nr = DENOISE_AFFTDN_LEVELS[key]
+    return f"afftdn=nr={nr}"
+
+
+def create_audio_filter_chain(
+    total_duration: float,
+    fade_duration: float = 0.5,
+    denoise: bool = False,
+    denoise_level: str = "medium",
+) -> str:
+    """
+    오디오 필터 체인 생성.
+
+    순서: denoise -> fade (향후 loudnorm 등과 결합 가능)
+    """
+    filters: list[str] = []
+    if denoise:
+        filters.append(create_denoise_audio_filter(denoise_level))
+
+    fade_filter = create_dip_to_black_audio_filter(total_duration, fade_duration)
+    if fade_filter:
+        filters.append(fade_filter)
+
+    return ",".join(filters)
+
+
 def create_vidstab_detect_filter(
     strength: StabilizeStrength = StabilizeStrength.MEDIUM,
     trf_path: str = "",
@@ -288,6 +334,8 @@ def create_combined_filter(
     blur_radius: int = 20,
     color_transfer: str | None = None,
     stabilize_filter: str = "",
+    denoise: bool = False,
+    denoise_level: str = "medium",
 ) -> tuple[str, str]:
     """
     모든 효과를 결합한 필터 생성.
@@ -303,6 +351,8 @@ def create_combined_filter(
         blur_radius: 배경 블러 반경 (기본: 20)
         color_transfer: 소스 영상의 color_transfer (HDR 변환 판단용)
         stabilize_filter: vidstabtransform 필터 문자열 (빈 문자열이면 미적용)
+        denoise: 오디오 노이즈 제거 활성화 여부
+        denoise_level: 노이즈 제거 강도 (light/medium/heavy)
 
     Returns:
         (video_filter, audio_filter) 튜플
@@ -336,5 +386,10 @@ def create_combined_filter(
             stabilize_filter,
         )
 
-    audio_filter = create_dip_to_black_audio_filter(total_duration, fade_duration)
+    audio_filter = create_audio_filter_chain(
+        total_duration=total_duration,
+        fade_duration=fade_duration,
+        denoise=denoise,
+        denoise_level=denoise_level,
+    )
     return video_filter, audio_filter

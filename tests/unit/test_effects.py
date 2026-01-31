@@ -4,7 +4,9 @@ from tubearchive.ffmpeg.effects import (
     StabilizeCrop,
     StabilizeStrength,
     _calculate_fade_params,
+    create_audio_filter_chain,
     create_combined_filter,
+    create_denoise_audio_filter,
     create_dip_to_black_audio_filter,
     create_dip_to_black_video_filter,
     create_hdr_to_sdr_filter,
@@ -170,6 +172,28 @@ class TestDipToBlackAudioFilter:
         audio_fadeout_st = audio_filter.split("afade=t=out:st=")[1].split(":")[0]
 
         assert video_fadeout_st == audio_fadeout_st == "59.5"
+
+
+class TestDenoiseAudioFilter:
+    """오디오 노이즈 제거 필터 테스트."""
+
+    def test_creates_afftdn_with_level(self) -> None:
+        """강도별 afftdn 파라미터."""
+        assert create_denoise_audio_filter("light") == "afftdn=nr=6"
+        assert create_denoise_audio_filter("medium") == "afftdn=nr=12"
+        assert create_denoise_audio_filter("heavy") == "afftdn=nr=18"
+
+    def test_audio_chain_orders_denoise_before_fade(self) -> None:
+        """denoise -> fade 순서 확인."""
+        chain = create_audio_filter_chain(
+            total_duration=60.0,
+            fade_duration=0.5,
+            denoise=True,
+            denoise_level="medium",
+        )
+
+        assert chain.startswith("afftdn=nr=12")
+        assert "afade=t=in" in chain
 
 
 class TestHdrToSdrFilter:

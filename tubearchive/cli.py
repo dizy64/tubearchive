@@ -89,6 +89,8 @@ def safe_input(prompt: str) -> str:
 ENV_OUTPUT_DIR = "TUBEARCHIVE_OUTPUT_DIR"
 ENV_YOUTUBE_PLAYLIST = "TUBEARCHIVE_YOUTUBE_PLAYLIST"
 ENV_PARALLEL = "TUBEARCHIVE_PARALLEL"
+ENV_DENOISE = "TUBEARCHIVE_DENOISE"
+ENV_DENOISE_LEVEL = "TUBEARCHIVE_DENOISE_LEVEL"
 
 # YYYYMMDD 패턴 (파일명 시작 부분)
 DATE_PATTERN = re.compile(r"^(\d{4})(\d{2})(\d{2})\s*(.*)$")
@@ -173,6 +175,31 @@ def get_default_parallel() -> int:
     return 1  # 기본값: 순차 처리
 
 
+def _parse_env_bool(value: str) -> bool:
+    """환경 변수 bool 파싱."""
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def get_default_denoise() -> bool:
+    """환경 변수에서 기본 denoise 여부 가져오기."""
+    env_denoise = os.environ.get(ENV_DENOISE)
+    if env_denoise is None:
+        return False
+    return _parse_env_bool(env_denoise)
+
+
+def get_default_denoise_level() -> str | None:
+    """환경 변수에서 기본 denoise level 가져오기."""
+    env_level = os.environ.get(ENV_DENOISE_LEVEL)
+    if not env_level:
+        return None
+    normalized = env_level.strip().lower()
+    if normalized in {"light", "medium", "heavy"}:
+        return normalized
+    logger.warning(f"{ENV_DENOISE_LEVEL}={env_level} is not a valid level")
+    return None
+
+
 @dataclass
 class ValidatedArgs:
     """검증된 CLI 인자."""
@@ -183,6 +210,8 @@ class ValidatedArgs:
     no_resume: bool
     keep_temp: bool
     dry_run: bool
+    denoise: bool = False
+    denoise_level: str = "medium"
     upload: bool = False
     parallel: int = 1
 
@@ -344,6 +373,20 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--denoise",
+        action="store_true",
+        help="FFmpeg 오디오 노이즈 제거 활성화 (afftdn)",
+    )
+
+    parser.add_argument(
+        "--denoise-level",
+        type=str,
+        choices=["light", "medium", "heavy"],
+        default=None,
+        help="노이즈 제거 강도 (light/medium/heavy, 기본: medium)",
+    )
+
+    parser.add_argument(
         "--reset-build",
         type=str,
         nargs="?",
@@ -426,6 +469,17 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     if parallel < 1:
         parallel = 1
 
+    # denoise 설정 (CLI 인자 > 환경 변수 > 기본값)
+    denoise_flag = bool(getattr(args, "denoise", False))
+    denoise_level = getattr(args, "denoise_level", None)
+    env_denoise = get_default_denoise()
+    env_denoise_level = get_default_denoise_level()
+    if denoise_level is not None:
+        denoise_flag = True
+    resolved_denoise_level = denoise_level or env_denoise_level or "medium"
+    if env_denoise_level is not None or env_denoise:
+        denoise_flag = True
+
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -433,6 +487,8 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         no_resume=args.no_resume,
         keep_temp=args.keep_temp,
         dry_run=args.dry_run,
+        denoise=denoise_flag,
+        denoise_level=resolved_denoise_level,
         upload=upload,
         parallel=parallel,
     )
@@ -559,10 +615,19 @@ def _collect_clip_info(vf: VideoFile) -> tuple[str, float, str | None, str | Non
         return (vf.path.name, 0.0, None, None)
 
 
-def _transcode_single(vf: VideoFile, temp_dir: Path) -> TranscodeResult:
+def _transcode_single(
+    vf: VideoFile,
+    temp_dir: Path,
+    denoise: bool,
+    denoise_level: str,
+) -> TranscodeResult:
     """단일 파일 트랜스코딩 (병렬 처리용, 자체 Transcoder 컨텍스트 사용)."""
     with Transcoder(temp_dir=temp_dir) as transcoder:
-        output_path, video_id = transcoder.transcode_video(vf)
+        output_path, video_id = transcoder.transcode_video(
+            vf,
+            denoise=denoise,
+            denoise_level=denoise_level,
+        )
         clip_info = _collect_clip_info(vf)
         return TranscodeResult(output_path=output_path, video_id=video_id, clip_info=clip_info)
 
@@ -571,6 +636,8 @@ def _transcode_parallel(
     video_files: list[VideoFile],
     temp_dir: Path,
     max_workers: int,
+    denoise: bool,
+    denoise_level: str,
 ) -> list[TranscodeResult]:
     """병렬 트랜스코딩 (ThreadPoolExecutor 사용)."""
     results: dict[int, TranscodeResult] = {}
@@ -592,7 +659,8 @@ def _transcode_parallel(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(_transcode_single, vf, temp_dir): i for i, vf in enumerate(video_files)
+            executor.submit(_transcode_single, vf, temp_dir, denoise, denoise_level): i
+            for i, vf in enumerate(video_files)
         }
         for future in as_completed(futures):
             idx = futures[future]
@@ -611,6 +679,8 @@ def _transcode_parallel(
 def _transcode_sequential(
     video_files: list[VideoFile],
     temp_dir: Path,
+    denoise: bool,
+    denoise_level: str,
 ) -> list[TranscodeResult]:
     """순차 트랜스코딩 (진행률 표시)."""
     results: list[TranscodeResult] = []
@@ -625,6 +695,8 @@ def _transcode_sequential(
 
             output_path, video_id = transcoder.transcode_video(
                 vf,
+                denoise=denoise,
+                denoise_level=denoise_level,
                 progress_info_callback=on_progress_info,
             )
             clip_info = _collect_clip_info(vf)
@@ -720,10 +792,21 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     parallel = validated_args.parallel
     if parallel > 1:
         logger.info(f"Starting parallel transcoding (workers: {parallel})...")
-        results = _transcode_parallel(video_files, temp_dir, parallel)
+        results = _transcode_parallel(
+            video_files,
+            temp_dir,
+            parallel,
+            validated_args.denoise,
+            validated_args.denoise_level,
+        )
     else:
         logger.info("Starting transcoding...")
-        results = _transcode_sequential(video_files, temp_dir)
+        results = _transcode_sequential(
+            video_files,
+            temp_dir,
+            validated_args.denoise,
+            validated_args.denoise_level,
+        )
 
     # 3. 병합
     logger.info("Merging videos...")
@@ -1583,6 +1666,8 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     print(f"Resume enabled: {not validated_args.no_resume}")
     print(f"Keep temp files: {validated_args.keep_temp}")
     print(f"Parallel workers: {validated_args.parallel}")
+    print(f"Denoise enabled: {validated_args.denoise}")
+    print(f"Denoise level: {validated_args.denoise_level}")
     print("=" * 30)
 
 
