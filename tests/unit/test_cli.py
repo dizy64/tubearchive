@@ -93,6 +93,62 @@ class TestCreateParser:
 
         assert args.denoise_level == "heavy"
 
+    def test_parses_thumbnail_flag(self) -> None:
+        """--thumbnail 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--thumbnail"])
+
+        assert args.thumbnail is True
+
+    def test_thumbnail_flag_default_false(self) -> None:
+        """--thumbnail 기본값은 False."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.thumbnail is False
+
+    def test_parses_thumbnail_at_single(self) -> None:
+        """--thumbnail-at 단일 값."""
+        parser = create_parser()
+        args = parser.parse_args(["--thumbnail-at", "00:01:30"])
+
+        assert args.thumbnail_at == ["00:01:30"]
+
+    def test_parses_thumbnail_at_multiple(self) -> None:
+        """--thumbnail-at 반복 지정."""
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                "--thumbnail-at",
+                "00:01:30",
+                "--thumbnail-at",
+                "00:05:00",
+            ]
+        )
+
+        assert args.thumbnail_at == ["00:01:30", "00:05:00"]
+
+    def test_thumbnail_at_default_none(self) -> None:
+        """--thumbnail-at 기본값은 None."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.thumbnail_at is None
+
+    def test_parses_thumbnail_quality(self) -> None:
+        """--thumbnail-quality 값."""
+        parser = create_parser()
+        args = parser.parse_args(["--thumbnail-quality", "5"])
+
+        assert args.thumbnail_quality == 5
+
+    def test_thumbnail_quality_default(self) -> None:
+        """--thumbnail-quality 기본값 2."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.thumbnail_quality == 2
+
     def test_parses_config_option(self) -> None:
         """--config 옵션."""
         parser = create_parser()

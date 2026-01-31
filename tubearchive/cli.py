@@ -91,6 +91,7 @@ ENV_YOUTUBE_PLAYLIST = "TUBEARCHIVE_YOUTUBE_PLAYLIST"
 ENV_PARALLEL = "TUBEARCHIVE_PARALLEL"
 ENV_DENOISE = "TUBEARCHIVE_DENOISE"
 ENV_DENOISE_LEVEL = "TUBEARCHIVE_DENOISE_LEVEL"
+ENV_NORMALIZE_AUDIO = "TUBEARCHIVE_NORMALIZE_AUDIO"
 
 # YYYYMMDD 패턴 (파일명 시작 부분)
 DATE_PATTERN = re.compile(r"^(\d{4})(\d{2})(\d{2})\s*(.*)$")
@@ -200,6 +201,14 @@ def get_default_denoise_level() -> str | None:
     return None
 
 
+def get_default_normalize_audio() -> bool:
+    """환경 변수에서 기본 normalize_audio 여부 가져오기."""
+    env_val = os.environ.get(ENV_NORMALIZE_AUDIO)
+    if env_val is None:
+        return False
+    return _parse_env_bool(env_val)
+
+
 @dataclass
 class ValidatedArgs:
     """검증된 CLI 인자."""
@@ -212,8 +221,12 @@ class ValidatedArgs:
     dry_run: bool
     denoise: bool = False
     denoise_level: str = "medium"
+    normalize_audio: bool = False
     upload: bool = False
     parallel: int = 1
+    thumbnail: bool = False
+    thumbnail_timestamps: list[str] | None = None
+    thumbnail_quality: int = 2
 
 
 @dataclass(frozen=True)
@@ -387,6 +400,12 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--normalize-audio",
+        action="store_true",
+        help="EBU R128 오디오 라우드니스 정규화 활성화 (loudnorm 2-pass)",
+    )
+
+    parser.add_argument(
         "--config",
         type=str,
         default=None,
@@ -416,6 +435,30 @@ def create_parser() -> argparse.ArgumentParser:
         const="",
         metavar="PATH",
         help="YouTube 업로드 기록 초기화 (다시 업로드, 경로 지정 또는 목록에서 선택)",
+    )
+
+    # 썸네일 옵션
+    parser.add_argument(
+        "--thumbnail",
+        action="store_true",
+        help="병합 영상에서 썸네일 자동 생성 (기본: 10%%, 33%%, 50%% 지점)",
+    )
+
+    parser.add_argument(
+        "--thumbnail-at",
+        type=str,
+        action="append",
+        default=None,
+        metavar="TIMESTAMP",
+        help="특정 시점에서 썸네일 추출 (예: '00:01:30', 반복 가능)",
+    )
+
+    parser.add_argument(
+        "--thumbnail-quality",
+        type=int,
+        default=2,
+        metavar="Q",
+        help="썸네일 JPEG 품질 (1-31, 낮을수록 고품질, 기본: 2)",
     )
 
     parser.add_argument(
@@ -494,6 +537,21 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     if env_denoise_level is not None or env_denoise:
         denoise_flag = True
 
+    # normalize_audio 설정 (CLI 인자 > 환경 변수 > 기본값)
+    normalize_audio = bool(getattr(args, "normalize_audio", False)) or get_default_normalize_audio()
+
+    # 썸네일 옵션 검증
+    thumbnail = getattr(args, "thumbnail", False)
+    thumbnail_at: list[str] | None = getattr(args, "thumbnail_at", None)
+    thumbnail_quality: int = getattr(args, "thumbnail_quality", 2)
+
+    # --thumbnail-at만 지정해도 암묵적 활성화
+    if thumbnail_at and not thumbnail:
+        thumbnail = True
+
+    # quality 범위 검증
+    if not 1 <= thumbnail_quality <= 31:
+        raise ValueError(f"Thumbnail quality must be 1-31, got: {thumbnail_quality}")
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -503,8 +561,12 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         dry_run=args.dry_run,
         denoise=denoise_flag,
         denoise_level=resolved_denoise_level,
+        normalize_audio=normalize_audio,
         upload=upload,
         parallel=parallel,
+        thumbnail=thumbnail,
+        thumbnail_timestamps=thumbnail_at,
+        thumbnail_quality=thumbnail_quality,
     )
 
 
@@ -836,6 +898,14 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     video_clips = [r.clip_info for r in results]
     summary = save_merge_job_to_db(final_path, video_clips, validated_args.targets, video_ids)
 
+    # 4.5 썸네일 생성 (비필수)
+    if validated_args.thumbnail:
+        thumbnail_paths = _generate_thumbnails(final_path, validated_args)
+        if thumbnail_paths:
+            print(f"\n🖼️  썸네일 {len(thumbnail_paths)}장 생성:")
+            for tp in thumbnail_paths:
+                print(f"  - {tp}")
+
     # 5. 임시 파일 정리
     if not validated_args.keep_temp:
         _cleanup_temp(temp_dir, results, final_path, video_ids)
@@ -844,6 +914,38 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     _print_summary(summary)
 
     return final_path
+
+
+def _generate_thumbnails(
+    video_path: Path,
+    validated_args: ValidatedArgs,
+) -> list[Path]:
+    """병합 영상에서 썸네일 생성.
+
+    실패 시 경고만 남기고 빈 리스트 반환 (파이프라인 중단 없음).
+    """
+    from tubearchive.ffmpeg.thumbnail import extract_thumbnails, parse_timestamp
+
+    timestamps: list[float] | None = None
+    if validated_args.thumbnail_timestamps:
+        parsed: list[float] = []
+        for ts in validated_args.thumbnail_timestamps:
+            try:
+                parsed.append(parse_timestamp(ts))
+            except ValueError as e:
+                logger.warning("Invalid thumbnail timestamp '%s': %s", ts, e)
+        timestamps = parsed if parsed else None
+
+    try:
+        return extract_thumbnails(
+            video_path,
+            timestamps=timestamps,
+            output_dir=validated_args.output_dir,
+            quality=validated_args.thumbnail_quality,
+        )
+    except Exception:
+        logger.warning("Failed to generate thumbnails", exc_info=True)
+        return []
 
 
 def _mark_transcoding_jobs_merged(video_ids: list[int]) -> None:
@@ -1682,6 +1784,12 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     print(f"Parallel workers: {validated_args.parallel}")
     print(f"Denoise enabled: {validated_args.denoise}")
     print(f"Denoise level: {validated_args.denoise_level}")
+    if validated_args.thumbnail:
+        print(f"Thumbnail: enabled (quality={validated_args.thumbnail_quality})")
+        if validated_args.thumbnail_timestamps:
+            print(f"  timestamps: {validated_args.thumbnail_timestamps}")
+        else:
+            print("  timestamps: auto (10%, 33%, 50%)")
     print("=" * 30)
 
 
