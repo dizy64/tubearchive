@@ -47,9 +47,7 @@ class TestSchema:
         )
         conn.commit()
 
-        cursor = conn.execute(
-            "SELECT status FROM transcoding_jobs WHERE video_id = ?", (video_id,)
-        )
+        cursor = conn.execute("SELECT status FROM transcoding_jobs WHERE video_id = ?", (video_id,))
         assert cursor.fetchone()[0] == "merged"
         conn.close()
 

@@ -52,8 +52,12 @@ def _create_test_video(
         audio: 오디오 포함 여부
     """
     cmd = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", f"testsrc=duration={duration}:size={width}x{height}:rate={fps}",
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=duration={duration}:size={width}x{height}:rate={fps}",
     ]
     if audio:
         cmd += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}"]
@@ -70,9 +74,13 @@ def _create_test_video(
 def _probe_video(path: Path) -> dict[str, Any]:
     """ffprobe로 영상 메타데이터를 조회한다."""
     cmd = [
-        "ffprobe", "-v", "quiet",
-        "-print_format", "json",
-        "-show_streams", "-show_format",
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_streams",
+        "-show_format",
         str(path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
@@ -111,7 +119,8 @@ def portrait_video(e2e_video_dir: Path) -> Path:
     """세로 영상 1개 (1080x1920)."""
     return _create_test_video(
         e2e_video_dir / "portrait.mov",
-        width=1080, height=1920,
+        width=1080,
+        height=1920,
         duration=2.0,
     )
 
@@ -122,7 +131,8 @@ def mixed_videos(e2e_video_dir: Path) -> Path:
     _create_test_video(e2e_video_dir / "landscape.mov", duration=2.0)
     _create_test_video(
         e2e_video_dir / "portrait.mov",
-        width=1080, height=1920,
+        width=1080,
+        height=1920,
         duration=2.0,
     )
     return e2e_video_dir

@@ -235,18 +235,25 @@ def create_combined_filter(
     fade_filters = ""
     if effective_fade > 0:
         fade_filters = (
-            f"fade=t=in:st=0:d={effective_fade},"
-            f"fade=t=out:st={fade_out_start}:d={effective_fade}"
+            f"fade=t=in:st=0:d={effective_fade},fade=t=out:st={fade_out_start}:d={effective_fade}"
         )
 
     if is_portrait:
         video_filter = _build_portrait_video_filter(
-            source_width, source_height, target_width, target_height,
-            blur_radius, hdr_filter, fade_filters,
+            source_width,
+            source_height,
+            target_width,
+            target_height,
+            blur_radius,
+            hdr_filter,
+            fade_filters,
         )
     else:
         video_filter = _build_landscape_video_filter(
-            target_width, target_height, hdr_filter, fade_filters,
+            target_width,
+            target_height,
+            hdr_filter,
+            fade_filters,
         )
 
     audio_filter = create_dip_to_black_audio_filter(total_duration, fade_duration)

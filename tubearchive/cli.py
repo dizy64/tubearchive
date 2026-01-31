@@ -597,8 +597,7 @@ def _transcode_parallel(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(_transcode_single, vf, temp_dir): i
-            for i, vf in enumerate(video_files)
+            executor.submit(_transcode_single, vf, temp_dir): i for i, vf in enumerate(video_files)
         }
         for future in as_completed(futures):
             idx = futures[future]
@@ -630,12 +629,17 @@ def _transcode_sequential(
                 progress.update_with_info(info)
 
             output_path, video_id = transcoder.transcode_video(
-                vf, progress_info_callback=on_progress_info,
+                vf,
+                progress_info_callback=on_progress_info,
             )
             clip_info = _collect_clip_info(vf)
-            results.append(TranscodeResult(
-                output_path=output_path, video_id=video_id, clip_info=clip_info,
-            ))
+            results.append(
+                TranscodeResult(
+                    output_path=output_path,
+                    video_id=video_id,
+                    clip_info=clip_info,
+                )
+            )
             progress.finish_file()
 
     return results
@@ -730,7 +734,8 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     logger.info("Merging videos...")
     output_path = _resolve_output_path(validated_args)
     final_path = Merger(temp_dir=temp_dir).merge(
-        [r.output_path for r in results], output_path,
+        [r.output_path for r in results],
+        output_path,
     )
     logger.info(f"Final output: {final_path}")
 

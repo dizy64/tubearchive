@@ -122,6 +122,7 @@ class Transcoder:
     ) -> None:
         """FFmpeg를 실행하고 진행률을 DB(+UI)에 보고한다."""
         if progress_info_callback:
+
             def on_progress_info(info: ProgressInfo) -> None:
                 self.resume_mgr.save_progress(job_id, info.percent)
                 progress_info_callback(info)
@@ -129,7 +130,8 @@ class Transcoder:
             self.executor.run(cmd, duration, progress_info_callback=on_progress_info)
         else:
             self.executor.run(
-                cmd, duration,
+                cmd,
+                duration,
                 lambda percent: self.resume_mgr.save_progress(job_id, percent),
             )
 
@@ -204,8 +206,13 @@ class Transcoder:
         # 6. 실행: VideoToolbox → (실패 시) libx265 폴백
         try:
             cmd = self._build_transcode_cmd(
-                video_file, metadata, output_path, profile,
-                video_filter, audio_filter, seek_start,
+                video_file,
+                metadata,
+                output_path,
+                profile,
+                video_filter,
+                audio_filter,
+                seek_start,
             )
             self._run_transcode(cmd, metadata.duration_seconds, job_id, progress_info_callback)
             self.job_repo.mark_completed(job_id, output_path)
@@ -224,8 +231,13 @@ class Transcoder:
 
             try:
                 cmd = self._build_transcode_cmd(
-                    video_file, metadata, output_path, fallback,
-                    video_filter, audio_filter, seek_start,
+                    video_file,
+                    metadata,
+                    output_path,
+                    fallback,
+                    video_filter,
+                    audio_filter,
+                    seek_start,
                 )
                 self._run_transcode(cmd, metadata.duration_seconds, job_id, progress_info_callback)
                 self.job_repo.mark_completed(job_id, output_path)
