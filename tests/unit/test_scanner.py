@@ -28,7 +28,7 @@ class TestScanner:
             ]
 
             created_files = []
-            for filename, delay in files:
+            for filename, _delay in files:
                 filepath = tmp_path / filename
                 filepath.write_text("")
                 time.sleep(0.01)  # 파일 생성 시간 차이 보장

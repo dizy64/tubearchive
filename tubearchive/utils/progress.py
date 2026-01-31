@@ -152,10 +152,7 @@ class ProgressBar:
         Returns:
             렌더링된 프로그레스 바
         """
-        if self.total == 0:
-            percent = 100
-        else:
-            percent = int((self.current / self.total) * 100)
+        percent = 100 if self.total == 0 else int(self.current / self.total * 100)
 
         filled = int(self.width * self.current / max(self.total, 1))
         bar = "█" * filled + "░" * (self.width - filled)

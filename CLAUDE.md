@@ -13,6 +13,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 명령어
 
 ```bash
+# 개발 환경 설정
+bash scripts/install-hooks.sh                                   # pre-commit hook 설치 (최초 1회)
+
 # 테스트
 uv run pytest tests/ -v                                         # 전체 (unit + e2e)
 uv run pytest tests/unit/ -v                                    # 단위 테스트만

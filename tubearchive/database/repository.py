@@ -225,7 +225,7 @@ class TranscodingJobRepository:
             return 0
         placeholders = ",".join("?" * len(video_ids))
         cursor = self.conn.execute(
-            f"UPDATE transcoding_jobs SET status = ? "  # noqa: S608
+            f"UPDATE transcoding_jobs SET status = ? "
             f"WHERE video_id IN ({placeholders}) AND status = ?",
             [JobStatus.MERGED.value, *video_ids, JobStatus.COMPLETED.value],
         )

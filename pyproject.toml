@@ -27,6 +27,8 @@ dev = [
     "pytest-cov>=4.1.0",
     "mypy>=1.8.0",
     "ruff>=0.1.0",
+    "pip-audit>=2.7.0",
+    "radon>=6.0.0",
 ]
 
 [tool.ruff]
@@ -34,8 +36,16 @@ line-length = 100
 target-version = "py314"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP"]
-ignore = []
+select = ["E", "F", "I", "N", "W", "UP", "S", "B", "A", "C4", "SIM", "PTH", "RUF"]
+ignore = [
+    "S603",  # subprocess 호출은 FFmpeg CLI 도구의 핵심 기능
+    "S607",  # ffmpeg/ffprobe는 PATH에서 실행하는 것이 표준
+    "S608",  # SQL은 파라미터 바인딩(?) 사용, placeholder 생성만 동적
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105"]  # assert는 pytest 표준, 테스트 fixture의 token/secret 값
+"tubearchive/youtube/auth.py" = ["S105"]  # 환경변수명에 TOKEN 포함 (false positive)
 
 [tool.mypy]
 python_version = "3.14"

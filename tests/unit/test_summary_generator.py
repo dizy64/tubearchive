@@ -70,7 +70,7 @@ class TestExtractTopicFromPath:
     def test_handles_root_path(self) -> None:
         """현재 디렉토리 처리."""
         path = Path("video.mp4")
-        date, topic = extract_topic_from_path(path)
+        _date, topic = extract_topic_from_path(path)
         assert topic is not None  # Should return something
 
 

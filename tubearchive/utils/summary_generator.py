@@ -22,7 +22,7 @@ def format_timestamp(seconds: float) -> str:
     Returns:
         H:MM:SS 또는 M:SS 형식 문자열
     """
-    total_seconds = int(round(seconds))
+    total_seconds = round(seconds)
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
     secs = total_seconds % 60

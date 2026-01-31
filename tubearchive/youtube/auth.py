@@ -283,14 +283,13 @@ def get_authenticated_service(
     credentials = load_credentials(token_file)
 
     # 2. 토큰이 있고 만료되었으면 갱신
-    if credentials is not None:
-        if credentials.expired and credentials.refresh_token:
-            try:
-                credentials = refresh_credentials(credentials)
-                save_credentials(credentials, token_file)
-            except Exception as e:
-                logger.warning(f"Failed to refresh credentials: {e}")
-                credentials = None
+    if credentials is not None and credentials.expired and credentials.refresh_token:
+        try:
+            credentials = refresh_credentials(credentials)
+            save_credentials(credentials, token_file)
+        except Exception as e:
+            logger.warning(f"Failed to refresh credentials: {e}")
+            credentials = None
 
     # 3. 유효한 토큰이 없으면 새 인증 플로우
     if credentials is None or not credentials.valid:

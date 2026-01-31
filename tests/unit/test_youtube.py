@@ -401,17 +401,19 @@ class TestCheckAuthStatus:
         }
         token_file.write_text(json.dumps(token_data))
 
-        with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
-            with patch("tubearchive.youtube.auth.Credentials") as mock_creds:
-                mock_cred_instance = MagicMock()
-                mock_cred_instance.valid = True
-                mock_cred_instance.expired = False
-                mock_creds.from_authorized_user_info.return_value = mock_cred_instance
+        with (
+            patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False),
+            patch("tubearchive.youtube.auth.Credentials") as mock_creds,
+        ):
+            mock_cred_instance = MagicMock()
+            mock_cred_instance.valid = True
+            mock_cred_instance.expired = False
+            mock_creds.from_authorized_user_info.return_value = mock_cred_instance
 
-                status = check_auth_status()
-                assert status.has_client_secrets is True
-                assert status.has_valid_token is True
-                assert status.needs_browser_auth is False
+            status = check_auth_status()
+            assert status.has_client_secrets is True
+            assert status.has_valid_token is True
+            assert status.needs_browser_auth is False
 
     def test_check_auth_status_expired_token(self, tmp_path: Path) -> None:
         """토큰이 만료되었을 때."""
@@ -435,18 +437,20 @@ class TestCheckAuthStatus:
         }
         token_file.write_text(json.dumps(token_data))
 
-        with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
-            with patch("tubearchive.youtube.auth.Credentials") as mock_creds:
-                mock_cred_instance = MagicMock()
-                mock_cred_instance.valid = False
-                mock_cred_instance.expired = True
-                mock_cred_instance.refresh_token = "test_refresh"
-                mock_creds.from_authorized_user_info.return_value = mock_cred_instance
+        with (
+            patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False),
+            patch("tubearchive.youtube.auth.Credentials") as mock_creds,
+        ):
+            mock_cred_instance = MagicMock()
+            mock_cred_instance.valid = False
+            mock_cred_instance.expired = True
+            mock_cred_instance.refresh_token = "test_refresh"
+            mock_creds.from_authorized_user_info.return_value = mock_cred_instance
 
-                status = check_auth_status()
-                assert status.has_client_secrets is True
-                assert status.has_valid_token is False
-                assert status.needs_browser_auth is True  # 재인증 필요
+            status = check_auth_status()
+            assert status.has_client_secrets is True
+            assert status.has_valid_token is False
+            assert status.needs_browser_auth is True  # 재인증 필요
 
 
 class TestAuthStatusMessage:

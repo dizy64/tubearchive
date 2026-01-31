@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Pre-commit hook: ruff check → ruff format → mypy → pytest unit
+# 설치: bash scripts/install-hooks.sh
+
+set -euo pipefail
+
+# 색상 정의
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+info() { echo -e "${GREEN}[pre-commit]${NC} $*"; }
+warn() { echo -e "${YELLOW}[pre-commit]${NC} $*"; }
+fail() { echo -e "${RED}[pre-commit]${NC} $*"; exit 1; }
+
+# 프로젝트 루트로 이동
+cd "$(git rev-parse --show-toplevel)"
+
+# --no-verify 사용 시 안내
+# (git 자체가 --no-verify로 hook을 건너뛰므로 여기 도달하면 항상 실행)
+
+# 1. ruff check (lint)
+info "ruff check 실행 중..."
+if ! uv run ruff check tubearchive/ tests/; then
+    fail "ruff check 실패. 위반 사항을 수정한 후 다시 커밋하세요."
+fi
+
+# 2. ruff format (자동 수정 + 변경 감지)
+info "ruff format 실행 중..."
+uv run ruff format tubearchive/ tests/
+if ! git diff --quiet; then
+    warn "ruff format이 파일을 수정했습니다:"
+    git diff --name-only
+    echo ""
+    warn "수정된 파일을 git add 한 후 다시 커밋하세요."
+    exit 1
+fi
+
+# 3. mypy (strict 타입 검사)
+info "mypy 실행 중..."
+if ! uv run mypy tubearchive/; then
+    fail "mypy 실패. 타입 오류를 수정한 후 다시 커밋하세요."
+fi
+
+# 4. pytest unit (단위 테스트만, e2e 제외)
+info "pytest unit 실행 중..."
+if ! uv run pytest tests/unit/ -q; then
+    fail "단위 테스트 실패. 테스트를 수정한 후 다시 커밋하세요."
+fi
+
+info "모든 검사 통과!"

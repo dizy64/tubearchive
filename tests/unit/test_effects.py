@@ -340,7 +340,7 @@ class TestShortVideoDurationHandling:
 
     def test_combined_filter_portrait_short_video(self) -> None:
         """짧은 세로 영상: portrait 레이아웃 유지, fade 축소."""
-        video_filter, audio_filter = create_combined_filter(
+        video_filter, _audio_filter = create_combined_filter(
             source_width=1080,
             source_height=1920,
             total_duration=0.3,  # 짧지만 fade 가능

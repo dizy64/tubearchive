@@ -469,12 +469,7 @@ def get_output_filename(targets: list[Path]) -> str:
         return "output.mp4"
 
     first_target = targets[0]
-    if first_target.is_dir():
-        # 디렉토리면 디렉토리명 사용
-        name = first_target.name
-    else:
-        # 파일이면 부모 디렉토리명 사용
-        name = first_target.parent.name
+    name = first_target.name if first_target.is_dir() else first_target.parent.name
 
     # 빈 이름이거나 현재 디렉토리면 기본값
     if not name or name == ".":
@@ -817,10 +812,7 @@ def save_merge_job_to_db(
         title = None
         if targets:
             first_target = targets[0]
-            if first_target.is_dir():
-                title = first_target.name
-            else:
-                title = first_target.parent.name
+            title = first_target.name if first_target.is_dir() else first_target.parent.name
             if not title or title == ".":
                 title = output_path.stem
 
@@ -1145,13 +1137,13 @@ def _delete_build_records(conn: sqlite3.Connection, video_ids: list[int]) -> Non
 
     # transcoding_jobs 삭제
     conn.execute(
-        f"DELETE FROM transcoding_jobs WHERE video_id IN ({placeholders})",
+        "DELETE FROM transcoding_jobs WHERE video_id IN (" + placeholders + ")",
         video_ids,
     )
 
     # videos 삭제
     conn.execute(
-        f"DELETE FROM videos WHERE id IN ({placeholders})",
+        "DELETE FROM videos WHERE id IN (" + placeholders + ")",
         video_ids,
     )
 
@@ -1483,10 +1475,7 @@ def cmd_status() -> None:
             duration_str = _format_duration(job["total_duration_seconds"] or 0)
 
             # YouTube 상태
-            if job["youtube_id"]:
-                yt_status = f"✅ {job['youtube_id'][:8]}..."
-            else:
-                yt_status = "- 미업로드"
+            yt_status = f"✅ {job['youtube_id'][:8]}..." if job["youtube_id"] else "- 미업로드"
 
             row = f"{job_id:<4} {status_icon:<10} {title:<25} {date:<12} {duration_str:<10}"
             print(f"{row} {yt_status}")
