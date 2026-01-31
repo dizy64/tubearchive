@@ -24,6 +24,8 @@ ENV_YOUTUBE_CLIENT_SECRETS = "TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS"
 ENV_YOUTUBE_TOKEN = "TUBEARCHIVE_YOUTUBE_TOKEN"
 ENV_YOUTUBE_PLAYLIST = "TUBEARCHIVE_YOUTUBE_PLAYLIST"
 ENV_UPLOAD_CHUNK_MB = "TUBEARCHIVE_UPLOAD_CHUNK_MB"
+ENV_DENOISE = "TUBEARCHIVE_DENOISE"
+ENV_DENOISE_LEVEL = "TUBEARCHIVE_DENOISE_LEVEL"
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,8 @@ class GeneralConfig:
     output_dir: str | None = None
     parallel: int | None = None
     db_path: str | None = None
+    denoise: bool | None = None
+    denoise_level: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,8 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
     output_dir: str | None = None
     parallel: int | None = None
     db_path: str | None = None
+    denoise: bool | None = None
+    denoise_level: str | None = None
 
     raw_output_dir = data.get("output_dir")
     if isinstance(raw_output_dir, str):
@@ -93,7 +99,28 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
     elif raw_db_path is not None:
         _warn_type("general.db_path", "str", raw_db_path)
 
-    return GeneralConfig(output_dir=output_dir, parallel=parallel, db_path=db_path)
+    raw_denoise = data.get("denoise")
+    if isinstance(raw_denoise, bool):
+        denoise = raw_denoise
+    elif raw_denoise is not None:
+        _warn_type("general.denoise", "bool", raw_denoise)
+
+    raw_denoise_level = data.get("denoise_level")
+    if isinstance(raw_denoise_level, str):
+        if raw_denoise_level in ("light", "medium", "heavy"):
+            denoise_level = raw_denoise_level
+        else:
+            logger.warning("config: general.denoise_level 값 오류: %r", raw_denoise_level)
+    elif raw_denoise_level is not None:
+        _warn_type("general.denoise_level", "str", raw_denoise_level)
+
+    return GeneralConfig(
+        output_dir=output_dir,
+        parallel=parallel,
+        db_path=db_path,
+        denoise=denoise,
+        denoise_level=denoise_level,
+    )
 
 
 def _parse_youtube(data: dict[str, object]) -> YouTubeConfig:
@@ -118,7 +145,13 @@ def _parse_youtube(data: dict[str, object]) -> YouTubeConfig:
 
     raw_playlist = data.get("playlist")
     if isinstance(raw_playlist, list):
-        playlist = [str(item) for item in raw_playlist if isinstance(item, str)]
+        playlist = [item for item in raw_playlist if isinstance(item, str)]
+        skipped = len(raw_playlist) - len(playlist)
+        if skipped > 0:
+            logger.warning(
+                "config: youtube.playlist에 비문자열 항목 %d개 무시됨",
+                skipped,
+            )
     elif isinstance(raw_playlist, str):
         # 단일 문자열도 허용
         playlist = [raw_playlist]
@@ -127,7 +160,10 @@ def _parse_youtube(data: dict[str, object]) -> YouTubeConfig:
 
     raw_chunk = data.get("upload_chunk_mb")
     if isinstance(raw_chunk, int) and not isinstance(raw_chunk, bool):
-        upload_chunk_mb = raw_chunk
+        if 1 <= raw_chunk <= 256:
+            upload_chunk_mb = raw_chunk
+        else:
+            logger.warning("config: youtube.upload_chunk_mb 범위 초과: %d (1-256)", raw_chunk)
     elif raw_chunk is not None:
         _warn_type("youtube.upload_chunk_mb", "int", raw_chunk)
 
@@ -177,8 +213,25 @@ def load_config(path: Path | None = None) -> AppConfig:
     general_data = raw.get("general", {})
     youtube_data = raw.get("youtube", {})
 
-    general = _parse_general(general_data) if isinstance(general_data, dict) else GeneralConfig()
-    youtube = _parse_youtube(youtube_data) if isinstance(youtube_data, dict) else YouTubeConfig()
+    if isinstance(general_data, dict):
+        general = _parse_general(general_data)
+    else:
+        if general_data:
+            logger.warning(
+                "config: [general] 섹션이 테이블이 아닙니다 (got %s)",
+                type(general_data).__name__,
+            )
+        general = GeneralConfig()
+
+    if isinstance(youtube_data, dict):
+        youtube = _parse_youtube(youtube_data)
+    else:
+        if youtube_data:
+            logger.warning(
+                "config: [youtube] 섹션이 테이블이 아닙니다 (got %s)",
+                type(youtube_data).__name__,
+            )
+        youtube = YouTubeConfig()
 
     return AppConfig(general=general, youtube=youtube)
 
@@ -202,6 +255,12 @@ def apply_config_to_env(config: AppConfig) -> None:
     if config.youtube.upload_chunk_mb is not None:
         mappings.append((ENV_UPLOAD_CHUNK_MB, str(config.youtube.upload_chunk_mb)))
 
+    # denoise (bool → "true"/"false")
+    if config.general.denoise is not None:
+        mappings.append((ENV_DENOISE, str(config.general.denoise).lower()))
+    if config.general.denoise_level is not None:
+        mappings.append((ENV_DENOISE_LEVEL, config.general.denoise_level))
+
     # playlist: list → CSV
     if config.youtube.playlist:
         mappings.append((ENV_YOUTUBE_PLAYLIST, ",".join(config.youtube.playlist)))
@@ -224,6 +283,8 @@ def generate_default_config() -> str:
 # output_dir = "~/Videos/output"            # TUBEARCHIVE_OUTPUT_DIR
 # parallel = 1                              # TUBEARCHIVE_PARALLEL
 # db_path = "~/.tubearchive/tubearchive.db" # TUBEARCHIVE_DB_PATH
+# denoise = false                           # TUBEARCHIVE_DENOISE
+# denoise_level = "medium"                  # light/medium/heavy (TUBEARCHIVE_DENOISE_LEVEL)
 
 [youtube]
 # client_secrets = "~/.tubearchive/client_secrets.json"

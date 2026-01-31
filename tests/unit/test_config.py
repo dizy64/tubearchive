@@ -387,6 +387,8 @@ class TestGenerateDefaultConfig:
             "output_dir",
             "parallel",
             "db_path",
+            "denoise",
+            "denoise_level",
             "client_secrets",
             "token",
             "playlist",
@@ -417,6 +419,185 @@ class TestGenerateDefaultConfig:
         parsed = tomllib.loads(toml_str)
         assert "general" in parsed
         assert "youtube" in parsed
+
+
+class TestDenoiseConfig:
+    """denoise 설정 테스트."""
+
+    def test_loads_denoise_config(self, tmp_path: Path) -> None:
+        """denoise=true, denoise_level="heavy" 파싱."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[general]
+denoise = true
+denoise_level = "heavy"
+""")
+        config = load_config(config_file)
+
+        assert config.general.denoise is True
+        assert config.general.denoise_level == "heavy"
+
+    def test_denoise_default_none(self, tmp_path: Path) -> None:
+        """미설정 시 None."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[general]
+parallel = 2
+""")
+        config = load_config(config_file)
+
+        assert config.general.denoise is None
+        assert config.general.denoise_level is None
+
+    def test_denoise_type_error(self, tmp_path: Path) -> None:
+        """denoise="yes" → 타입 경고 + None."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[general]
+denoise = "yes"
+""")
+        config = load_config(config_file)
+
+        assert config.general.denoise is None
+
+    def test_denoise_level_invalid_value(self, tmp_path: Path) -> None:
+        """denoise_level="extreme" → 경고 + None."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[general]
+denoise_level = "extreme"
+""")
+        config = load_config(config_file)
+
+        assert config.general.denoise_level is None
+
+    def test_denoise_env_injection(self) -> None:
+        """apply_config_to_env로 환경변수 주입 확인."""
+        config = AppConfig(
+            general=GeneralConfig(denoise=True, denoise_level="heavy"),
+        )
+
+        env_keys = ["TUBEARCHIVE_DENOISE", "TUBEARCHIVE_DENOISE_LEVEL"]
+        saved = {k: os.environ.pop(k, None) for k in env_keys}
+
+        try:
+            apply_config_to_env(config)
+            assert os.environ.get("TUBEARCHIVE_DENOISE") == "true"
+            assert os.environ.get("TUBEARCHIVE_DENOISE_LEVEL") == "heavy"
+        finally:
+            for k in env_keys:
+                os.environ.pop(k, None)
+                if saved[k] is not None:
+                    os.environ[k] = saved[k]
+
+    def test_denoise_env_preserves_existing(self) -> None:
+        """기존 환경변수 미덮어쓰기."""
+        config = AppConfig(
+            general=GeneralConfig(denoise=True, denoise_level="heavy"),
+        )
+
+        saved_denoise = os.environ.get("TUBEARCHIVE_DENOISE")
+        saved_level = os.environ.get("TUBEARCHIVE_DENOISE_LEVEL")
+        os.environ["TUBEARCHIVE_DENOISE"] = "false"
+        os.environ["TUBEARCHIVE_DENOISE_LEVEL"] = "light"
+
+        try:
+            apply_config_to_env(config)
+            assert os.environ.get("TUBEARCHIVE_DENOISE") == "false"
+            assert os.environ.get("TUBEARCHIVE_DENOISE_LEVEL") == "light"
+        finally:
+            for k, v in [
+                ("TUBEARCHIVE_DENOISE", saved_denoise),
+                ("TUBEARCHIVE_DENOISE_LEVEL", saved_level),
+            ]:
+                if v is not None:
+                    os.environ[k] = v
+                else:
+                    os.environ.pop(k, None)
+
+    def test_denoise_false_env_injection(self) -> None:
+        """denoise=False → "false" 주입."""
+        config = AppConfig(
+            general=GeneralConfig(denoise=False),
+        )
+
+        saved = os.environ.pop("TUBEARCHIVE_DENOISE", None)
+        try:
+            apply_config_to_env(config)
+            assert os.environ.get("TUBEARCHIVE_DENOISE") == "false"
+        finally:
+            os.environ.pop("TUBEARCHIVE_DENOISE", None)
+            if saved is not None:
+                os.environ["TUBEARCHIVE_DENOISE"] = saved
+
+    def test_denoise_level_all_values(self, tmp_path: Path) -> None:
+        """denoise_level 허용 값 테스트 (light/medium/heavy)."""
+        for level in ("light", "medium", "heavy"):
+            config_file = tmp_path / "config.toml"
+            config_file.write_text(f"""\
+[general]
+denoise_level = "{level}"
+""")
+            config = load_config(config_file)
+            assert config.general.denoise_level == level
+
+
+class TestConfigValidation:
+    """PR 리뷰 반영 검증 테스트."""
+
+    def test_playlist_mixed_type_warns(self, tmp_path: Path) -> None:
+        """playlist 혼합 타입 → 비문자열 항목 무시 경고."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[youtube]
+playlist = ["PL111", 123, "PL222"]
+""")
+        config = load_config(config_file)
+
+        assert config.youtube.playlist == ["PL111", "PL222"]
+
+    def test_section_not_table_warns(self, tmp_path: Path) -> None:
+        """비-dict 섹션 → 경고 + 기본값."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+general = "not a table"
+""")
+        config = load_config(config_file)
+
+        assert config.general == GeneralConfig()
+
+    def test_upload_chunk_mb_out_of_range(self, tmp_path: Path) -> None:
+        """upload_chunk_mb 범위 초과 → 경고 + None."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[youtube]
+upload_chunk_mb = 999
+""")
+        config = load_config(config_file)
+
+        assert config.youtube.upload_chunk_mb is None
+
+    def test_upload_chunk_mb_zero_out_of_range(self, tmp_path: Path) -> None:
+        """upload_chunk_mb = 0 → 범위 초과."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[youtube]
+upload_chunk_mb = 0
+""")
+        config = load_config(config_file)
+
+        assert config.youtube.upload_chunk_mb is None
+
+    def test_upload_chunk_mb_boundary_valid(self, tmp_path: Path) -> None:
+        """upload_chunk_mb 경계값 1, 256 정상."""
+        for val in (1, 256):
+            config_file = tmp_path / "config.toml"
+            config_file.write_text(f"""\
+[youtube]
+upload_chunk_mb = {val}
+""")
+            config = load_config(config_file)
+            assert config.youtube.upload_chunk_mb == val
 
 
 class TestDataclassFrozen:

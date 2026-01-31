@@ -1710,6 +1710,7 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
         file_path=output_path,
         title=title,
         description=description,
+        privacy=args.upload_privacy,
         merge_job_id=merge_job_id,
         playlist_ids=playlist_ids,
         chunk_mb=args.upload_chunk,

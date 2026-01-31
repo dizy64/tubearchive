@@ -128,6 +128,7 @@ class TestCreateParser:
 
         assert args.upload_privacy is None
 
+
 class TestValidateArgs:
     """인자 검증 테스트."""
 
@@ -389,3 +390,43 @@ class TestMain:
         mock_pipeline.assert_not_called()
         captured = capsys.readouterr()
         assert "Dry run" in captured.out or "dry" in captured.out.lower()
+
+
+class TestUploadAfterPipeline:
+    """_upload_after_pipeline 테스트."""
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.cli.init_database")
+    def test_upload_after_pipeline_passes_privacy(
+        self,
+        mock_db: MagicMock,
+        mock_playlist: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """privacy 파라미터 전달 확인."""
+        from tubearchive.cli import _upload_after_pipeline
+
+        mock_conn = MagicMock()
+        mock_db.return_value = mock_conn
+        mock_conn.close = MagicMock()
+
+        # MergeJobRepository mock
+        mock_repo = MagicMock()
+        mock_repo.get_latest.return_value = None
+
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        args = argparse.Namespace(
+            upload_privacy="private",
+            playlist=None,
+            upload_chunk=32,
+        )
+
+        with patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo):
+            _upload_after_pipeline(output_path, args)
+
+        mock_upload.assert_called_once()
+        call_kwargs = mock_upload.call_args[1]
+        assert call_kwargs["privacy"] == "private"
