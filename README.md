@@ -525,6 +525,29 @@ uv run ruff check tubearchive/ tests/
 uv run ruff format tubearchive/ tests/
 ```
 
+### 버전/빌드
+
+버전은 `pyproject.toml`과 `tubearchive/__init__.py`에 동시에 반영됩니다.
+
+```bash
+# 패치 버전 증가 (기본값)
+scripts/bump_version.py
+
+# 마이너/메이저 증가
+scripts/bump_version.py --part minor
+scripts/bump_version.py --part major
+
+# 다음 버전만 확인 (파일 변경 없음)
+scripts/bump_version.py --dry-run
+```
+
+빌드는 로컬에서만 사용하도록 `uv build`로 패키징합니다.
+
+```bash
+# 리패키징 (dist/ 생성)
+scripts/repackage.py
+```
+
 ### 커밋 규칙
 
 ```
