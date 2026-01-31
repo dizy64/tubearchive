@@ -167,6 +167,15 @@ class ValidatedArgs:
     parallel: int = 1
 
 
+@dataclass(frozen=True)
+class TranscodeResult:
+    """단일 트랜스코딩 결과."""
+
+    output_path: Path
+    video_id: int
+    clip_info: tuple[str, float, str | None, str | None]
+
+
 def create_parser() -> argparse.ArgumentParser:
     """
     CLI 파서 생성.
@@ -524,47 +533,144 @@ def handle_single_file_upload(
     return video_file.path
 
 
-def _transcode_single(
-    vf: VideoFile,
-    temp_dir: Path,
-    index: int,
-) -> tuple[int, Path, int, tuple[str, float, str | None, str | None]]:
-    """
-    단일 파일 트랜스코딩 (병렬 처리용).
+def _collect_clip_info(vf: VideoFile) -> tuple[str, float, str | None, str | None]:
+    """영상 파일에서 Summary용 클립 메타데이터를 수집한다."""
+    try:
+        metadata = detect_metadata(vf.path)
+        creation_time_str = vf.creation_time.strftime("%H:%M:%S")
+        return (vf.path.name, metadata.duration_seconds, metadata.device_model, creation_time_str)
+    except Exception as e:
+        logger.warning(f"Failed to get metadata for {vf.path}: {e}")
+        return (vf.path.name, 0.0, None, None)
 
-    Args:
-        vf: VideoFile 객체
-        temp_dir: 임시 디렉토리
-        index: 파일 인덱스 (순서 유지용)
 
-    Returns:
-        (인덱스, 출력 경로, video_id, 클립 정보) 튜플
-    """
-
+def _transcode_single(vf: VideoFile, temp_dir: Path) -> TranscodeResult:
+    """단일 파일 트랜스코딩 (병렬 처리용, 자체 Transcoder 컨텍스트 사용)."""
     with Transcoder(temp_dir=temp_dir) as transcoder:
         output_path, video_id = transcoder.transcode_video(vf)
+        clip_info = _collect_clip_info(vf)
+        return TranscodeResult(output_path=output_path, video_id=video_id, clip_info=clip_info)
 
-        # 메타데이터 수집 (Summary용)
-        clip_info: tuple[str, float, str | None, str | None]
-        try:
-            metadata = detect_metadata(vf.path)
-            creation_time_str = vf.creation_time.strftime("%H:%M:%S")
-            clip_info = (
-                vf.path.name,
-                metadata.duration_seconds,
-                metadata.device_model,
-                creation_time_str,
+
+def _transcode_parallel(
+    video_files: list[VideoFile],
+    temp_dir: Path,
+    max_workers: int,
+) -> list[TranscodeResult]:
+    """병렬 트랜스코딩 (ThreadPoolExecutor 사용)."""
+    results: dict[int, TranscodeResult] = {}
+    completed_count = 0
+    total_count = len(video_files)
+    print_lock = Lock()
+
+    def on_complete(idx: int, filename: str, status: str) -> None:
+        nonlocal completed_count
+        with print_lock:
+            completed_count += 1
+            print(
+                f"\r🎬 트랜스코딩: [{completed_count}/{total_count}] {status}: {filename}",
+                end="",
+                flush=True,
             )
-        except Exception as e:
-            logger.warning(f"Failed to get metadata for {vf.path}: {e}")
-            clip_info = (vf.path.name, 0.0, None, None)
+            if completed_count == total_count:
+                print()  # 줄바꿈
 
-        return index, output_path, video_id, clip_info
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_transcode_single, vf, temp_dir): i
+            for i, vf in enumerate(video_files)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                result = future.result()
+                results[idx] = result
+                on_complete(idx, video_files[idx].path.name, "완료")
+            except Exception as e:
+                logger.error(f"Failed to transcode {video_files[idx].path}: {e}")
+                on_complete(idx, video_files[idx].path.name, "실패")
+                raise
+
+    return [results[i] for i in range(total_count)]
+
+
+def _transcode_sequential(
+    video_files: list[VideoFile],
+    temp_dir: Path,
+) -> list[TranscodeResult]:
+    """순차 트랜스코딩 (진행률 표시)."""
+    results: list[TranscodeResult] = []
+    progress = MultiProgressBar(total_files=len(video_files))
+
+    with Transcoder(temp_dir=temp_dir) as transcoder:
+        for vf in video_files:
+            progress.start_file(vf.path.name)
+
+            def on_progress_info(info: ProgressInfo) -> None:
+                progress.update_with_info(info)
+
+            output_path, video_id = transcoder.transcode_video(
+                vf, progress_info_callback=on_progress_info,
+            )
+            clip_info = _collect_clip_info(vf)
+            results.append(TranscodeResult(
+                output_path=output_path, video_id=video_id, clip_info=clip_info,
+            ))
+            progress.finish_file()
+
+    return results
+
+
+def _resolve_output_path(validated_args: ValidatedArgs) -> Path:
+    """출력 파일 경로를 결정한다."""
+    if validated_args.output:
+        return validated_args.output
+    output_filename = get_output_filename(validated_args.targets)
+    output_dir = validated_args.output_dir or Path.cwd()
+    return output_dir / output_filename
+
+
+def _cleanup_temp(
+    temp_dir: Path,
+    results: list[TranscodeResult],
+    final_path: Path,
+    video_ids: list[int],
+) -> None:
+    """임시 파일 및 폴더를 정리하고 DB 상태를 업데이트한다."""
+    logger.info("Cleaning up temporary files...")
+    for r in results:
+        if r.output_path.exists() and r.output_path != final_path:
+            r.output_path.unlink()
+            logger.debug(f"  Removed: {r.output_path}")
+
+    # DB 상태 업데이트: completed → merged
+    _mark_transcoding_jobs_merged(video_ids)
+
+    # 임시 폴더 삭제
+    if temp_dir.exists():
+        try:
+            shutil.rmtree(temp_dir)
+            logger.info(f"Removed temp directory: {temp_dir}")
+        except OSError as e:
+            logger.warning(f"Failed to remove temp directory: {e}")
+
+
+def _print_summary(summary_markdown: str | None) -> None:
+    """Summary 마크다운을 콘솔에 출력한다."""
+    if not summary_markdown:
+        return
+    print("\n" + "=" * 60)
+    print("📋 SUMMARY (Copy & Paste)")
+    print("=" * 60)
+    print(summary_markdown)
+    print("=" * 60 + "\n")
 
 
 def run_pipeline(validated_args: ValidatedArgs) -> Path:
     """
     전체 파이프라인 실행.
+
+    스캔 → 트랜스코딩 → 병합 → DB 저장 → 정리 → Summary 출력
 
     Args:
         validated_args: 검증된 인자
@@ -584,149 +690,41 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     for vf in video_files:
         logger.info(f"  - {vf.path.name}")
 
-    # 단일 파일 + --upload 시 빠른 경로 (인코딩/병합 건너뛰기)
+    # 단일 파일 + --upload 시 빠른 경로
     if len(video_files) == 1 and validated_args.upload:
         return handle_single_file_upload(video_files[0], validated_args)
 
-    # 2. 트랜스코딩 (임시 파일은 /tmp에 저장)
+    # 2. 트랜스코딩
     temp_dir = get_temp_dir()
     logger.info(f"Using temp directory: {temp_dir}")
 
     parallel = validated_args.parallel
     if parallel > 1:
         logger.info(f"Starting parallel transcoding (workers: {parallel})...")
+        results = _transcode_parallel(video_files, temp_dir, parallel)
     else:
         logger.info("Starting transcoding...")
-
-    # 결과 저장용 (인덱스로 순서 유지): (출력 경로, video_id, 클립 정보)
-    results: dict[int, tuple[Path, int, tuple[str, float, str | None, str | None]]] = {}
-
-    if parallel > 1:
-        # 병렬 처리
-        completed_count = 0
-        total_count = len(video_files)
-        print_lock = Lock()
-
-        def print_progress(idx: int, filename: str, status: str) -> None:
-            nonlocal completed_count
-            with print_lock:
-                completed_count += 1
-                print(
-                    f"\r🎬 트랜스코딩: [{completed_count}/{total_count}] {status}: {filename}",
-                    end="",
-                    flush=True,
-                )
-                if completed_count == total_count:
-                    print()  # 줄바꿈
-
-        with ThreadPoolExecutor(max_workers=parallel) as executor:
-            futures = {
-                executor.submit(_transcode_single, vf, temp_dir, i): i
-                for i, vf in enumerate(video_files)
-            }
-
-            for future in as_completed(futures):
-                try:
-                    idx, output_path, video_id, clip_info = future.result()
-                    results[idx] = (output_path, video_id, clip_info)
-                    print_progress(idx, video_files[idx].path.name, "완료")
-                except Exception as e:
-                    idx = futures[future]
-                    logger.error(f"Failed to transcode {video_files[idx].path}: {e}")
-                    print_progress(idx, video_files[idx].path.name, "실패")
-                    raise
-
-    else:
-        # 순차 처리 (기존 방식)
-        progress = MultiProgressBar(total_files=len(video_files))
-
-        with Transcoder(temp_dir=temp_dir) as transcoder:
-            for i, vf in enumerate(video_files):
-                progress.start_file(vf.path.name)
-
-                # 상세 진행률 콜백
-                def on_progress_info(info: ProgressInfo) -> None:
-                    progress.update_with_info(info)
-
-                output_path, video_id = transcoder.transcode_video(
-                    vf,
-                    progress_info_callback=on_progress_info,
-                )
-
-                # 메타데이터 수집 (Summary용)
-                try:
-                    metadata = detect_metadata(vf.path)
-                    creation_time_str = vf.creation_time.strftime("%H:%M:%S")
-                    clip_info = (
-                        vf.path.name,
-                        metadata.duration_seconds,
-                        metadata.device_model,
-                        creation_time_str,
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to get metadata for {vf.path}: {e}")
-                    clip_info = (vf.path.name, 0.0, None, None)
-
-                results[i] = (output_path, video_id, clip_info)
-                progress.finish_file()
-
-    # 인덱스 순서대로 결과 정렬
-    transcoded_paths: list[Path] = []
-    video_ids: list[int] = []
-    video_clips: list[tuple[str, float, str | None, str | None]] = []
-    for i in range(len(video_files)):
-        output_path, video_id, clip_info = results[i]
-        transcoded_paths.append(output_path)
-        video_ids.append(video_id)
-        video_clips.append(clip_info)
+        results = _transcode_sequential(video_files, temp_dir)
 
     # 3. 병합
     logger.info("Merging videos...")
-
-    # 출력 파일 경로 결정
-    if validated_args.output:
-        output_path = validated_args.output
-    else:
-        output_filename = get_output_filename(validated_args.targets)
-        output_dir = validated_args.output_dir or Path.cwd()
-        output_path = output_dir / output_filename
-
-    merger = Merger(temp_dir=temp_dir)
-    final_path = merger.merge(transcoded_paths, output_path)
-
+    output_path = _resolve_output_path(validated_args)
+    final_path = Merger(temp_dir=temp_dir).merge(
+        [r.output_path for r in results], output_path,
+    )
     logger.info(f"Final output: {final_path}")
 
-    # 4. DB에 타임라인 정보 저장 및 Summary 생성
-    summary_markdown = save_merge_job_to_db(
-        final_path, video_clips, validated_args.targets, video_ids
-    )
+    # 4. DB 저장 및 Summary 생성
+    video_ids = [r.video_id for r in results]
+    video_clips = [r.clip_info for r in results]
+    summary = save_merge_job_to_db(final_path, video_clips, validated_args.targets, video_ids)
 
-    # 5. 임시 파일 및 폴더 정리
+    # 5. 임시 파일 정리
     if not validated_args.keep_temp:
-        logger.info("Cleaning up temporary files...")
-        for temp_path in transcoded_paths:
-            if temp_path.exists() and temp_path != final_path:
-                temp_path.unlink()
-                logger.debug(f"  Removed: {temp_path}")
+        _cleanup_temp(temp_dir, results, final_path, video_ids)
 
-        # DB 상태 업데이트: completed → merged (임시 파일 정리 반영)
-        _mark_transcoding_jobs_merged(video_ids)
-
-        # 임시 폴더 삭제 (비어있거나 concat 파일만 남은 경우)
-        if temp_dir.exists():
-            try:
-                shutil.rmtree(temp_dir)
-                logger.info(f"Removed temp directory: {temp_dir}")
-            except OSError as e:
-                logger.warning(f"Failed to remove temp directory: {e}")
-
-    # 6. Summary 출력 (복사해서 바로 사용 가능)
-    if summary_markdown:
-        print("\n" + "=" * 60)
-        print("📋 SUMMARY (Copy & Paste)")
-        print("=" * 60)
-        print(summary_markdown)
-        print("=" * 60 + "\n")
+    # 6. Summary 출력
+    _print_summary(summary)
 
     return final_path
 
