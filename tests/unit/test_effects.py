@@ -1,6 +1,9 @@
 """FFmpeg 효과 테스트."""
 
+import pytest
+
 from tubearchive.ffmpeg.effects import (
+    LoudnormAnalysis,
     StabilizeCrop,
     StabilizeStrength,
     _calculate_fade_params,
@@ -10,9 +13,12 @@ from tubearchive.ffmpeg.effects import (
     create_dip_to_black_audio_filter,
     create_dip_to_black_video_filter,
     create_hdr_to_sdr_filter,
+    create_loudnorm_analysis_filter,
+    create_loudnorm_filter,
     create_portrait_layout_filter,
     create_vidstab_detect_filter,
     create_vidstab_transform_filter,
+    parse_loudnorm_stats,
 )
 
 
@@ -527,3 +533,207 @@ class TestCombinedFilterWithStabilize:
             stabilize_filter="",
         )
         assert "vidstabtransform" not in video_filter
+
+
+class TestLoudnormAnalysisFilter:
+    """create_loudnorm_analysis_filter 테스트."""
+
+    def test_default_parameters(self) -> None:
+        """기본 파라미터: I=-14, TP=-1.5, LRA=11, print_format=json."""
+        result = create_loudnorm_analysis_filter()
+        assert "loudnorm" in result
+        assert "I=-14" in result
+        assert "TP=-1.5" in result
+        assert "LRA=11" in result
+        assert "print_format=json" in result
+
+    def test_custom_parameters(self) -> None:
+        """커스텀 파라미터 전달."""
+        result = create_loudnorm_analysis_filter(target_i=-16.0, target_tp=-2.0, target_lra=7.0)
+        assert "I=-16" in result
+        assert "TP=-2" in result
+        assert "LRA=7" in result
+
+
+class TestLoudnormFilter:
+    """create_loudnorm_filter 2nd pass 테스트."""
+
+    def test_includes_measured_values(self) -> None:
+        """measured_I/TP/LRA/thresh, offset, linear=true 포함."""
+        analysis = LoudnormAnalysis(
+            input_i=-23.5,
+            input_tp=-7.2,
+            input_lra=14.3,
+            input_thresh=-34.5,
+            target_offset=0.5,
+        )
+        result = create_loudnorm_filter(analysis)
+        assert "measured_I=-23.5" in result
+        assert "measured_TP=-7.2" in result
+        assert "measured_LRA=14.3" in result
+        assert "measured_thresh=-34.5" in result
+        assert "offset=0.5" in result
+        assert "linear=true" in result
+
+    def test_default_targets(self) -> None:
+        """기본 타겟: I=-14, TP=-1.5, LRA=11."""
+        analysis = LoudnormAnalysis(
+            input_i=-20.0,
+            input_tp=-5.0,
+            input_lra=10.0,
+            input_thresh=-30.0,
+            target_offset=0.0,
+        )
+        result = create_loudnorm_filter(analysis)
+        assert "I=-14" in result
+        assert "TP=-1.5" in result
+        assert "LRA=11" in result
+
+
+class TestParseLoudnormStats:
+    """parse_loudnorm_stats 테스트."""
+
+    def test_parse_valid_json(self) -> None:
+        """정상 loudnorm JSON 파싱."""
+        output = (
+            "[Parsed_loudnorm_0 @ 0x...]\n"
+            "{\n"
+            '\t"input_i" : "-24.56",\n'
+            '\t"input_tp" : "-7.23",\n'
+            '\t"input_lra" : "14.30",\n'
+            '\t"input_thresh" : "-35.12",\n'
+            '\t"output_i" : "-14.02",\n'
+            '\t"output_tp" : "-1.49",\n'
+            '\t"output_lra" : "3.50",\n'
+            '\t"output_thresh" : "-24.50",\n'
+            '\t"normalization_type" : "dynamic",\n'
+            '\t"target_offset" : "0.02"\n'
+            "}"
+        )
+        result = parse_loudnorm_stats(output)
+        assert result.input_i == -24.56
+        assert result.input_tp == -7.23
+        assert result.input_lra == 14.30
+        assert result.input_thresh == -35.12
+        assert result.target_offset == 0.02
+
+    def test_parse_from_mixed_output(self) -> None:
+        """ffmpeg 진행률 로그가 섞인 출력에서 추출."""
+        output = (
+            "frame=  100 fps=25.0 q=28.0 size=    1234kB time=00:00:04.00\n"
+            "bitrate= 2528.0kbits/s speed=1.50x\n"
+            "[Parsed_loudnorm_0 @ 0x7fa]\n"
+            "{\n"
+            '\t"input_i" : "-20.00",\n'
+            '\t"input_tp" : "-5.00",\n'
+            '\t"input_lra" : "10.00",\n'
+            '\t"input_thresh" : "-30.00",\n'
+            '\t"output_i" : "-14.00",\n'
+            '\t"output_tp" : "-1.50",\n'
+            '\t"output_lra" : "3.00",\n'
+            '\t"output_thresh" : "-24.00",\n'
+            '\t"normalization_type" : "dynamic",\n'
+            '\t"target_offset" : "0.00"\n'
+            "}\n"
+            "video:0kB audio:123kB subtitle:0kB\n"
+        )
+        result = parse_loudnorm_stats(output)
+        assert result.input_i == -20.0
+        assert result.input_tp == -5.0
+
+    def test_raises_on_missing_json(self) -> None:
+        """JSON 블록 없으면 ValueError."""
+        output = "frame=100 fps=25 q=28 size=1234kB time=00:00:04.00"
+        with pytest.raises(ValueError, match="loudnorm JSON block not found"):
+            parse_loudnorm_stats(output)
+
+    def test_raises_on_invalid_values(self) -> None:
+        """숫자 변환 불가능한 값이면 ValueError."""
+        output = (
+            "{\n"
+            '\t"input_i" : "abc",\n'
+            '\t"input_tp" : "1",\n'
+            '\t"input_lra" : "1",\n'
+            '\t"input_thresh" : "1",\n'
+            '\t"target_offset" : "1"\n'
+            "}"
+        )
+        with pytest.raises(ValueError, match="Invalid loudnorm analysis data"):
+            parse_loudnorm_stats(output)
+
+
+class TestAudioFilterChainWithLoudnorm:
+    """create_audio_filter_chain + loudnorm 통합 테스트."""
+
+    def test_loudnorm_appended_after_fade(self) -> None:
+        """afade 뒤에 loudnorm이 위치."""
+        analysis = LoudnormAnalysis(
+            input_i=-20.0,
+            input_tp=-5.0,
+            input_lra=10.0,
+            input_thresh=-30.0,
+            target_offset=0.0,
+        )
+        result = create_audio_filter_chain(
+            total_duration=120.0,
+            loudnorm_analysis=analysis,
+        )
+        parts = result.split(",")
+        afade_indices = [i for i, p in enumerate(parts) if "afade" in p]
+        loudnorm_indices = [i for i, p in enumerate(parts) if "loudnorm" in p]
+        assert afade_indices
+        assert loudnorm_indices
+        assert max(afade_indices) < min(loudnorm_indices)
+
+    def test_no_loudnorm_when_none(self) -> None:
+        """loudnorm_analysis=None이면 loudnorm 미적용."""
+        result = create_audio_filter_chain(total_duration=120.0)
+        assert "loudnorm" not in result
+
+    def test_loudnorm_only_for_very_short_video(self) -> None:
+        """매우 짧은 영상: fade 없이 loudnorm만 적용."""
+        analysis = LoudnormAnalysis(
+            input_i=-20.0,
+            input_tp=-5.0,
+            input_lra=10.0,
+            input_thresh=-30.0,
+            target_offset=0.0,
+        )
+        result = create_audio_filter_chain(
+            total_duration=0.05,
+            loudnorm_analysis=analysis,
+        )
+        assert "afade" not in result
+        assert "loudnorm" in result
+
+
+class TestCombinedFilterWithLoudnorm:
+    """create_combined_filter + loudnorm 통합 테스트."""
+
+    def test_loudnorm_in_audio_filter(self) -> None:
+        """loudnorm_analysis 전달 시 오디오 필터에 loudnorm 포함."""
+        analysis = LoudnormAnalysis(
+            input_i=-20.0,
+            input_tp=-5.0,
+            input_lra=10.0,
+            input_thresh=-30.0,
+            target_offset=0.0,
+        )
+        _, audio_filter = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=120.0,
+            is_portrait=False,
+            loudnorm_analysis=analysis,
+        )
+        assert "loudnorm" in audio_filter
+
+    def test_no_loudnorm_by_default(self) -> None:
+        """기본값(None)이면 loudnorm 미적용."""
+        _, audio_filter = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=120.0,
+            is_portrait=False,
+        )
+        assert "loudnorm" not in audio_filter

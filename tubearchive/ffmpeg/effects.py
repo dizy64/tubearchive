@@ -1,5 +1,10 @@
 """FFmpeg 영상 효과 필터."""
 
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
 from enum import Enum
 
 # HDR 색공간 식별자
@@ -205,16 +210,94 @@ def create_denoise_audio_filter(level: str = "medium") -> str:
     return f"afftdn=nr={nr}"
 
 
+@dataclass(frozen=True)
+class LoudnormAnalysis:
+    """EBU R128 loudnorm 1st pass 분석 결과."""
+
+    input_i: float
+    input_tp: float
+    input_lra: float
+    input_thresh: float
+    target_offset: float
+
+
+def create_loudnorm_analysis_filter(
+    target_i: float = -14.0,
+    target_tp: float = -1.5,
+    target_lra: float = 11.0,
+) -> str:
+    """1st pass: loudnorm 분석용 필터 문자열 생성."""
+    return f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}:print_format=json"
+
+
+def create_loudnorm_filter(
+    analysis: LoudnormAnalysis,
+    target_i: float = -14.0,
+    target_tp: float = -1.5,
+    target_lra: float = 11.0,
+) -> str:
+    """2nd pass: loudnorm 적용 필터 문자열 생성 (measured 값 포함)."""
+    return (
+        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
+        f":measured_I={analysis.input_i}"
+        f":measured_TP={analysis.input_tp}"
+        f":measured_LRA={analysis.input_lra}"
+        f":measured_thresh={analysis.input_thresh}"
+        f":offset={analysis.target_offset}"
+        f":linear=true"
+    )
+
+
+_LOUDNORM_JSON_PATTERN = re.compile(
+    r'\{\s*\n\s*"input_i"\s*:.*?\}',
+    re.DOTALL,
+)
+
+
+def parse_loudnorm_stats(ffmpeg_output: str) -> LoudnormAnalysis:
+    """FFmpeg stderr에서 loudnorm JSON 블록을 추출하여 파싱한다.
+
+    Args:
+        ffmpeg_output: FFmpeg 프로세스의 stderr 전체 출력
+
+    Returns:
+        LoudnormAnalysis 분석 결과
+
+    Raises:
+        ValueError: JSON 블록을 찾을 수 없거나 파싱 실패
+    """
+    match = _LOUDNORM_JSON_PATTERN.search(ffmpeg_output)
+    if not match:
+        raise ValueError("loudnorm JSON block not found in FFmpeg output")
+
+    try:
+        data = json.loads(match.group())
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse loudnorm JSON: {e}") from e
+
+    try:
+        return LoudnormAnalysis(
+            input_i=float(data["input_i"]),
+            input_tp=float(data["input_tp"]),
+            input_lra=float(data["input_lra"]),
+            input_thresh=float(data["input_thresh"]),
+            target_offset=float(data["target_offset"]),
+        )
+    except (KeyError, ValueError) as e:
+        raise ValueError(f"Invalid loudnorm analysis data: {e}") from e
+
+
 def create_audio_filter_chain(
     total_duration: float,
     fade_duration: float = 0.5,
     denoise: bool = False,
     denoise_level: str = "medium",
+    loudnorm_analysis: LoudnormAnalysis | None = None,
 ) -> str:
     """
     오디오 필터 체인 생성.
 
-    순서: denoise -> fade (향후 loudnorm 등과 결합 가능)
+    순서: denoise -> fade -> loudnorm
     """
     filters: list[str] = []
     if denoise:
@@ -223,6 +306,9 @@ def create_audio_filter_chain(
     fade_filter = create_dip_to_black_audio_filter(total_duration, fade_duration)
     if fade_filter:
         filters.append(fade_filter)
+
+    if loudnorm_analysis is not None:
+        filters.append(create_loudnorm_filter(loudnorm_analysis))
 
     return ",".join(filters)
 
@@ -336,6 +422,7 @@ def create_combined_filter(
     stabilize_filter: str = "",
     denoise: bool = False,
     denoise_level: str = "medium",
+    loudnorm_analysis: LoudnormAnalysis | None = None,
 ) -> tuple[str, str]:
     """
     모든 효과를 결합한 필터 생성.
@@ -353,6 +440,7 @@ def create_combined_filter(
         stabilize_filter: vidstabtransform 필터 문자열 (빈 문자열이면 미적용)
         denoise: 오디오 노이즈 제거 활성화 여부
         denoise_level: 노이즈 제거 강도 (light/medium/heavy)
+        loudnorm_analysis: EBU R128 loudnorm 분석 결과 (None이면 미적용)
 
     Returns:
         (video_filter, audio_filter) 튜플
@@ -391,5 +479,6 @@ def create_combined_filter(
         fade_duration=fade_duration,
         denoise=denoise,
         denoise_level=denoise_level,
+        loudnorm_analysis=loudnorm_analysis,
     )
     return video_filter, audio_filter

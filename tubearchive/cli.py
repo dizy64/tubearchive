@@ -696,6 +696,7 @@ def _transcode_single(
     temp_dir: Path,
     denoise: bool,
     denoise_level: str,
+    normalize_audio: bool = False,
 ) -> TranscodeResult:
     """단일 파일 트랜스코딩 (병렬 처리용, 자체 Transcoder 컨텍스트 사용)."""
     with Transcoder(temp_dir=temp_dir) as transcoder:
@@ -703,6 +704,7 @@ def _transcode_single(
             vf,
             denoise=denoise,
             denoise_level=denoise_level,
+            normalize_audio=normalize_audio,
         )
         clip_info = _collect_clip_info(vf)
         return TranscodeResult(output_path=output_path, video_id=video_id, clip_info=clip_info)
@@ -714,6 +716,7 @@ def _transcode_parallel(
     max_workers: int,
     denoise: bool,
     denoise_level: str,
+    normalize_audio: bool = False,
 ) -> list[TranscodeResult]:
     """병렬 트랜스코딩 (ThreadPoolExecutor 사용)."""
     results: dict[int, TranscodeResult] = {}
@@ -735,7 +738,9 @@ def _transcode_parallel(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(_transcode_single, vf, temp_dir, denoise, denoise_level): i
+            executor.submit(
+                _transcode_single, vf, temp_dir, denoise, denoise_level, normalize_audio
+            ): i
             for i, vf in enumerate(video_files)
         }
         for future in as_completed(futures):
@@ -757,6 +762,7 @@ def _transcode_sequential(
     temp_dir: Path,
     denoise: bool,
     denoise_level: str,
+    normalize_audio: bool = False,
 ) -> list[TranscodeResult]:
     """순차 트랜스코딩 (진행률 표시)."""
     results: list[TranscodeResult] = []
@@ -773,6 +779,7 @@ def _transcode_sequential(
                 vf,
                 denoise=denoise,
                 denoise_level=denoise_level,
+                normalize_audio=normalize_audio,
                 progress_info_callback=on_progress_info,
             )
             clip_info = _collect_clip_info(vf)
@@ -874,6 +881,7 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
             parallel,
             validated_args.denoise,
             validated_args.denoise_level,
+            validated_args.normalize_audio,
         )
     else:
         logger.info("Starting transcoding...")
@@ -882,6 +890,7 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
             temp_dir,
             validated_args.denoise,
             validated_args.denoise_level,
+            validated_args.normalize_audio,
         )
 
     # 3. 병합
@@ -1784,6 +1793,7 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     print(f"Parallel workers: {validated_args.parallel}")
     print(f"Denoise enabled: {validated_args.denoise}")
     print(f"Denoise level: {validated_args.denoise_level}")
+    print(f"Normalize audio: {validated_args.normalize_audio}")
     if validated_args.thumbnail:
         print(f"Thumbnail: enabled (quality={validated_args.thumbnail_quality})")
         if validated_args.thumbnail_timestamps:

@@ -239,6 +239,68 @@ class FFmpegExecutor:
 
         logger.info("FFmpeg completed successfully")
 
+    def build_loudness_analysis_command(
+        self,
+        input_path: Path,
+        audio_filter: str,
+    ) -> list[str]:
+        """
+        loudnorm 1st pass 분석용 FFmpeg 명령어 빌드.
+
+        오디오만 분석하므로 -vn (비디오 무시), 출력은 /dev/null.
+
+        Args:
+            input_path: 입력 파일 경로
+            audio_filter: 오디오 분석 필터 (loudnorm=I=...:print_format=json)
+
+        Returns:
+            FFmpeg 명령어 리스트
+        """
+        return [
+            self.ffmpeg_path,
+            "-i",
+            str(input_path),
+            "-af",
+            audio_filter,
+            "-vn",
+            "-f",
+            "null",
+            "/dev/null",
+        ]
+
+    def run_analysis(self, cmd: list[str]) -> str:
+        """
+        분석용 FFmpeg 명령 실행 (stderr 반환).
+
+        진행률 콜백 없이 실행하고 stderr 전체를 반환한다.
+
+        Args:
+            cmd: FFmpeg 명령어 리스트
+
+        Returns:
+            FFmpeg stderr 전체 출력
+
+        Raises:
+            FFmpegError: FFmpeg 실행 실패
+        """
+        logger.info(f"Running FFmpeg analysis: {' '.join(cmd)}")
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode != 0:
+            logger.error(f"FFmpeg analysis failed with code {result.returncode}: {result.stderr}")
+            raise FFmpegError(
+                f"FFmpeg analysis failed with exit code {result.returncode}",
+                stderr=result.stderr,
+            )
+
+        logger.info("FFmpeg analysis completed successfully")
+        return result.stderr
+
     @staticmethod
     def calculate_progress_percent(
         current_time: float,
