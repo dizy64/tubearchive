@@ -7,8 +7,29 @@ on:
     branches: [main]
 
 jobs:
-  pytest:
-    name: Pytest
+  unit-test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run unit tests
+        run: uv run pytest tests/ --ignore=tests/test_e2e.py -v --tb=short
+
+  e2e-test:
+    name: E2E Tests
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,8 +49,8 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      - name: Run tests
-        run: uv run pytest tests/ -v --tb=short
+      - name: Run E2E tests
+        run: uv run pytest tests/test_e2e.py -v --tb=short
 
   ruff-lint:
     name: Ruff Lint
