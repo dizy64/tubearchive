@@ -130,7 +130,20 @@ class TranscodingJobRepository:
     def get_incomplete_jobs(self) -> list[TranscodingJob]:
         """미완료(processing) 작업 조회."""
         cursor = self.conn.execute(
-            "SELECT * FROM transcoding_jobs WHERE status = 'processing' ORDER BY started_at"
+            "SELECT * FROM transcoding_jobs WHERE status = ? ORDER BY started_at",
+            (JobStatus.PROCESSING.value,),
+        )
+        return [self._row_to_job(row) for row in cursor.fetchall()]
+
+    def get_resumable(self) -> list[TranscodingJob]:
+        """Resume 가능한 작업 조회 (processing 상태이고 temp_file_path 존재)."""
+        cursor = self.conn.execute(
+            """
+            SELECT * FROM transcoding_jobs
+            WHERE status = ? AND temp_file_path IS NOT NULL
+            ORDER BY started_at
+            """,
+            (JobStatus.PROCESSING.value,),
         )
         return [self._row_to_job(row) for row in cursor.fetchall()]
 
@@ -169,11 +182,11 @@ class TranscodingJobRepository:
         self.conn.execute(
             """
             UPDATE transcoding_jobs
-            SET status = 'completed', progress_percent = 100,
+            SET status = ?, progress_percent = 100,
                 temp_file_path = ?, completed_at = ?
             WHERE id = ?
             """,
-            (str(output_path), now, job_id),
+            (JobStatus.COMPLETED.value, str(output_path), now, job_id),
         )
         self.conn.commit()
 
@@ -183,18 +196,18 @@ class TranscodingJobRepository:
         self.conn.execute(
             """
             UPDATE transcoding_jobs
-            SET status = 'failed', error_message = ?, completed_at = ?
+            SET status = ?, error_message = ?, completed_at = ?
             WHERE id = ?
             """,
-            (error_message, now, job_id),
+            (JobStatus.FAILED.value, error_message, now, job_id),
         )
         self.conn.commit()
 
     def mark_merged(self, job_id: int) -> None:
         """병합 완료 후 상태 업데이트 (임시 파일 정리됨)."""
         self.conn.execute(
-            "UPDATE transcoding_jobs SET status = 'merged' WHERE id = ?",
-            (job_id,),
+            "UPDATE transcoding_jobs SET status = ? WHERE id = ?",
+            (JobStatus.MERGED.value, job_id),
         )
         self.conn.commit()
 
@@ -212,9 +225,9 @@ class TranscodingJobRepository:
             return 0
         placeholders = ",".join("?" * len(video_ids))
         cursor = self.conn.execute(
-            f"UPDATE transcoding_jobs SET status = 'merged' "  # noqa: S608
-            f"WHERE video_id IN ({placeholders}) AND status = 'completed'",
-            video_ids,
+            f"UPDATE transcoding_jobs SET status = ? "  # noqa: S608
+            f"WHERE video_id IN ({placeholders}) AND status = ?",
+            [JobStatus.MERGED.value, *video_ids, JobStatus.COMPLETED.value],
         )
         self.conn.commit()
         return cursor.rowcount
@@ -321,8 +334,8 @@ class MergeJobRepository:
     def update_youtube_id(self, job_id: int, youtube_id: str) -> None:
         """YouTube ID 업데이트 및 상태를 completed로 변경."""
         self.conn.execute(
-            "UPDATE merge_jobs SET youtube_id = ?, status = 'completed' WHERE id = ?",
-            (youtube_id, job_id),
+            "UPDATE merge_jobs SET youtube_id = ?, status = ? WHERE id = ?",
+            (youtube_id, JobStatus.COMPLETED.value, job_id),
         )
         self.conn.commit()
 

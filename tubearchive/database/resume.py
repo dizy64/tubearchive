@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from tubearchive.database.repository import TranscodingJobRepository
-from tubearchive.models.job import TranscodingJob
+from tubearchive.models.job import JobStatus, TranscodingJob
 
 
 class ResumeManager:
@@ -46,14 +46,7 @@ class ResumeManager:
         Returns:
             PROCESSING 상태이고 temp_file_path가 있는 작업 목록
         """
-        cursor = self.conn.execute(
-            """
-            SELECT * FROM transcoding_jobs
-            WHERE status = 'processing' AND temp_file_path IS NOT NULL
-            ORDER BY started_at
-            """
-        )
-        return [self.job_repo._row_to_job(row) for row in cursor.fetchall()]
+        return self.job_repo.get_resumable()
 
     def calculate_resume_position(self, job: TranscodingJob, total_duration: float) -> float:
         """
@@ -78,11 +71,11 @@ class ResumeManager:
         self.conn.execute(
             """
             UPDATE transcoding_jobs
-            SET status = 'pending', progress_percent = 0,
+            SET status = ?, progress_percent = 0,
                 error_message = NULL, started_at = NULL, completed_at = NULL
             WHERE id = ?
             """,
-            (job_id,),
+            (JobStatus.PENDING.value, job_id),
         )
         self.conn.commit()
 
@@ -94,14 +87,11 @@ class ResumeManager:
             video_id: 영상 ID
 
         Returns:
-            완료된 작업이 있으면 True
+            completed 상태 작업이 있으면 True (merged는 제외)
         """
         cursor = self.conn.execute(
-            """
-            SELECT COUNT(*) FROM transcoding_jobs
-            WHERE video_id = ? AND status = 'completed'
-            """,
-            (video_id,),
+            "SELECT COUNT(*) FROM transcoding_jobs WHERE video_id = ? AND status = ?",
+            (video_id, JobStatus.COMPLETED.value),
         )
         count: int = cursor.fetchone()[0]
         return count > 0
@@ -122,11 +112,11 @@ class ResumeManager:
         cursor = self.conn.execute(
             """
             SELECT id FROM transcoding_jobs
-            WHERE video_id = ? AND status IN ('pending', 'processing')
+            WHERE video_id = ? AND status IN (?, ?)
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (video_id,),
+            (video_id, JobStatus.PENDING.value, JobStatus.PROCESSING.value),
         )
         row = cursor.fetchone()
 
