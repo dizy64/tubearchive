@@ -251,10 +251,7 @@ def _default_input(prompt: str) -> str:
     except (OSError, subprocess.SubprocessError):
         pass
 
-    try:
-        return input().strip()
-    except (EOFError, KeyboardInterrupt):
-        return ""
+    return input().strip()
 
 
 def _process_reorder_command(

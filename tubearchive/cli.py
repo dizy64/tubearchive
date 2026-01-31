@@ -542,7 +542,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--sort",
         type=str,
         default=None,
-        choices=["time", "name", "size", "device"],
+        choices=[k.value for k in SortKey],
         help="정렬 기준 변경 (기본: time, 옵션: name/size/device)",
     )
 
@@ -777,12 +777,6 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     include_only_patterns: list[str] | None = getattr(args, "include_only", None)
     sort_key_str: str = getattr(args, "sort", None) or "time"
     reorder_flag: bool = getattr(args, "reorder", False)
-
-    valid_sort_keys = {k.value for k in SortKey}
-    if sort_key_str not in valid_sort_keys:
-        raise ValueError(
-            f"Invalid sort key: {sort_key_str} (valid: {', '.join(sorted(valid_sort_keys))})"
-        )
 
     return ValidatedArgs(
         targets=targets,
@@ -1124,6 +1118,46 @@ def _transcode_sequential(
     return results
 
 
+def _apply_ordering(
+    video_files: list[VideoFile],
+    validated_args: ValidatedArgs,
+    *,
+    allow_interactive: bool = True,
+) -> list[VideoFile]:
+    """필터링·정렬·인터랙티브 재정렬을 순차 적용한다.
+
+    Args:
+        video_files: 스캔된 영상 파일 리스트
+        validated_args: 검증된 CLI 인자
+        allow_interactive: ``--reorder`` 인터랙티브 모드 허용 여부
+            (dry-run에서는 False)
+
+    Returns:
+        최종 순서의 영상 파일 리스트
+
+    Raises:
+        ValueError: 필터 적용 후 파일이 없거나 재정렬 후 파일이 없을 때
+    """
+    if validated_args.exclude_patterns or validated_args.include_only_patterns:
+        video_files = filter_videos(
+            video_files,
+            exclude_patterns=validated_args.exclude_patterns,
+            include_only_patterns=validated_args.include_only_patterns,
+        )
+        if not video_files:
+            raise ValueError("All files excluded by filter patterns")
+
+    if validated_args.sort_key != "time":
+        video_files = sort_videos(video_files, SortKey(validated_args.sort_key))
+
+    if allow_interactive and validated_args.reorder:
+        video_files = interactive_reorder(video_files)
+        if not video_files:
+            raise ValueError("No files remaining after reorder")
+
+    return video_files
+
+
 def _resolve_output_path(validated_args: ValidatedArgs) -> Path:
     """출력 파일 경로를 결정한다.
 
@@ -1206,27 +1240,7 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     for video_file in video_files:
         logger.info(f"  - {video_file.path.name}")
 
-    # 1.1 필터링 (--exclude / --include-only)
-    if validated_args.exclude_patterns or validated_args.include_only_patterns:
-        video_files = filter_videos(
-            video_files,
-            exclude_patterns=validated_args.exclude_patterns,
-            include_only_patterns=validated_args.include_only_patterns,
-        )
-        if not video_files:
-            logger.error("All files excluded by filter patterns")
-            raise ValueError("All files excluded by filter patterns")
-
-    # 1.2 정렬 (--sort)
-    if validated_args.sort_key != "time":
-        video_files = sort_videos(video_files, SortKey(validated_args.sort_key))
-
-    # 1.3 인터랙티브 재정렬 (--reorder)
-    if validated_args.reorder:
-        video_files = interactive_reorder(video_files)
-        if not video_files:
-            logger.error("No files remaining after reorder")
-            raise ValueError("No files remaining after reorder")
+    video_files = _apply_ordering(video_files, validated_args)
 
     # --detect-silence: 분석만 수행 후 종료
     if validated_args.detect_silence:
@@ -2131,17 +2145,7 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
 
     video_files = scan_videos(validated_args.targets)
     original_count = len(video_files)
-
-    if validated_args.exclude_patterns or validated_args.include_only_patterns:
-        video_files = filter_videos(
-            video_files,
-            exclude_patterns=validated_args.exclude_patterns,
-            include_only_patterns=validated_args.include_only_patterns,
-        )
-
-    if validated_args.sort_key != "time":
-        video_files = sort_videos(video_files, SortKey(validated_args.sort_key))
-
+    video_files = _apply_ordering(video_files, validated_args, allow_interactive=False)
     output_str = str(_resolve_output_path(validated_args))
 
     print("\n=== Dry Run Execution Plan ===")
