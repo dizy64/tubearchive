@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.cli import create_parser, main, validate_args
+from tubearchive.cli import CATALOG_STATUS_SENTINEL, create_parser, main, validate_args
 
 
 class TestCreateParser:
@@ -202,6 +202,62 @@ class TestCreateParser:
         args = parser.parse_args([])
 
         assert args.upload_privacy is None
+
+    def test_parses_catalog_flag(self) -> None:
+        """--catalog 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--catalog"])
+
+        assert args.catalog is True
+
+    def test_parses_search_pattern(self) -> None:
+        """--search 패턴 값."""
+        parser = create_parser()
+        args = parser.parse_args(["--search", "2026-01"])
+
+        assert args.search == "2026-01"
+
+    def test_parses_search_empty(self) -> None:
+        """--search 값 없이 사용."""
+        parser = create_parser()
+        args = parser.parse_args(["--search"])
+
+        assert args.search == ""
+
+    def test_parses_device_filter(self) -> None:
+        """--device 필터."""
+        parser = create_parser()
+        args = parser.parse_args(["--device", "GoPro"])
+
+        assert args.device == "GoPro"
+
+    def test_parses_status_filter(self) -> None:
+        """--status 값 지정."""
+        parser = create_parser()
+        args = parser.parse_args(["--status", "completed"])
+
+        assert args.status == "completed"
+
+    def test_parses_status_view(self) -> None:
+        """--status 단독 사용."""
+        parser = create_parser()
+        args = parser.parse_args(["--status"])
+
+        assert args.status == CATALOG_STATUS_SENTINEL
+
+    def test_parses_json_flag(self) -> None:
+        """--json 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--json"])
+
+        assert args.json is True
+
+    def test_parses_csv_flag(self) -> None:
+        """--csv 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--csv"])
+
+        assert args.csv is True
 
 
 class TestValidateArgs:

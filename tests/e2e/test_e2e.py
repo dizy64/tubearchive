@@ -150,7 +150,8 @@ def e2e_output_dir(tmp_path: Path) -> Path:
 def e2e_db(tmp_path: Path) -> Path:
     """E2E 전용 DB (테스트 간 격리)."""
     db_path = tmp_path / "e2e_test.db"
-    init_database(db_path)
+    conn = init_database(db_path)
+    conn.close()
     return db_path
 
 

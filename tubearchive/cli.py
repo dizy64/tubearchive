@@ -1,6 +1,7 @@
 """CLI 인터페이스."""
 
 import argparse
+import csv
 import json
 import logging
 import os
@@ -13,9 +14,10 @@ import tempfile
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
+from typing import TextIO, TypedDict
 
 from tubearchive import __version__
 from tubearchive.core.detector import detect_metadata
@@ -45,6 +47,10 @@ STATUS_ICONS: dict[str, str] = {
     "merged": "📦 병합됨",
 }
 
+CATALOG_STATUS_SENTINEL = "__show__"
+CATALOG_UNKNOWN_STATUS = "untracked"
+CATALOG_UNKNOWN_DEVICE = "미상"
+
 
 def _format_duration(seconds: float) -> str:
     """초를 '1h 30m' 또는 '5m 30s' 형식으로 변환한다."""
@@ -54,6 +60,46 @@ def _format_duration(seconds: float) -> str:
     if total >= 60:
         return f"{total // 60}m {total % 60}s"
     return f"{total}s"
+
+
+def _truncate_path(path: str, max_len: int = 60) -> str:
+    """긴 경로는 끝부분을 남기고 줄인다."""
+    if len(path) <= max_len:
+        return path
+    tail_len = max_len - 3
+    return "..." + path[-tail_len:]
+
+
+def _parse_creation_date(creation_time: str) -> str:
+    """ISO datetime에서 날짜만 추출."""
+    if not creation_time:
+        return "-"
+    try:
+        return datetime.fromisoformat(creation_time).date().isoformat()
+    except ValueError:
+        return creation_time[:10]
+
+
+def _normalize_device_label(device: str | None) -> str:
+    """기기 라벨 정규화."""
+    if not device:
+        return CATALOG_UNKNOWN_DEVICE
+    stripped = device.strip()
+    return stripped if stripped else CATALOG_UNKNOWN_DEVICE
+
+
+def _normalize_status_filter(status: str | None) -> str | None:
+    """상태 필터 정규화."""
+    if status is None or status == CATALOG_STATUS_SENTINEL:
+        return None
+    return status.strip().lower()
+
+
+def _format_catalog_status(status: str) -> str:
+    """카탈로그 출력용 상태 포맷."""
+    if status == CATALOG_UNKNOWN_STATUS:
+        return "-"
+    return STATUS_ICONS.get(status, status)
 
 
 def safe_input(prompt: str) -> str:
@@ -270,6 +316,42 @@ class TranscodeResult:
     output_path: Path
     video_id: int
     clip_info: tuple[str, float, str | None, str | None]
+
+
+@dataclass(frozen=True)
+class VideoCatalogItem:
+    """영상 메타데이터 카탈로그 항목."""
+
+    video_id: int
+    creation_time: str
+    creation_date: str
+    device: str
+    duration_seconds: float | None
+    status: str
+    progress_percent: int | None
+    path: str
+
+
+class CatalogDeviceStat(TypedDict):
+    """카탈로그 기기별 통계."""
+
+    device: str
+    count: int
+
+
+class CatalogDateRange(TypedDict):
+    """카탈로그 날짜 범위."""
+
+    start: str
+    end: str
+
+
+class CatalogSummary(TypedDict):
+    """카탈로그 요약."""
+
+    total: int
+    devices: list[CatalogDeviceStat]
+    date_range: CatalogDateRange | None
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -517,8 +599,14 @@ def create_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--status",
-        action="store_true",
-        help="작업 현황 조회 (트랜스코딩, 병합, 업로드)",
+        nargs="?",
+        const=CATALOG_STATUS_SENTINEL,
+        default=None,
+        metavar="STATUS",
+        help=(
+            "작업 현황 조회 (값 지정 시 메타데이터 검색 상태 필터로 사용: "
+            "pending/processing/completed/failed/merged/untracked)"
+        ),
     )
 
     parser.add_argument(
@@ -527,6 +615,41 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="ID",
         default=None,
         help="특정 작업 상세 조회 (merge_job ID)",
+    )
+
+    parser.add_argument(
+        "--catalog",
+        action="store_true",
+        help="영상 메타데이터 전체 목록 조회 (기기별 그룹핑)",
+    )
+
+    parser.add_argument(
+        "--search",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATTERN",
+        help="영상 메타데이터 검색 (예: 2026-01)",
+    )
+
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help="메타데이터 검색 시 기기 필터 (예: GoPro)",
+    )
+
+    output_format_group = parser.add_mutually_exclusive_group()
+    output_format_group.add_argument(
+        "--json",
+        action="store_true",
+        help="메타데이터 출력 형식을 JSON으로 지정",
+    )
+    output_format_group.add_argument(
+        "--csv",
+        action="store_true",
+        help="메타데이터 출력 형식을 CSV로 지정",
     )
 
     return parser
@@ -1757,6 +1880,316 @@ def cmd_upload_only(args: argparse.Namespace) -> None:
     )
 
 
+def _fetch_catalog_items(
+    conn: sqlite3.Connection,
+    search_pattern: str | None,
+    device_filter: str | None,
+    status_filter: str | None,
+    group_by_device: bool,
+) -> list[VideoCatalogItem]:
+    """영상 메타데이터 카탈로그를 조회한다."""
+    where_clauses: list[str] = []
+    params: list[str] = []
+
+    if search_pattern:
+        where_clauses.append("v.creation_time LIKE ?")
+        params.append(f"%{search_pattern}%")
+
+    if device_filter:
+        where_clauses.append("v.device_model LIKE ? COLLATE NOCASE")
+        params.append(f"%{device_filter}%")
+
+    if status_filter:
+        if status_filter == CATALOG_UNKNOWN_STATUS:
+            where_clauses.append("lj.status IS NULL")
+        else:
+            where_clauses.append("lj.status = ?")
+            params.append(status_filter)
+
+    where_sql = ""
+    if where_clauses:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    if group_by_device:
+        order_sql = (
+            "ORDER BY CASE WHEN v.device_model IS NULL OR v.device_model = '' THEN 1 ELSE 0 END, "
+            "v.device_model, v.creation_time DESC, v.id DESC"
+        )
+    else:
+        order_sql = "ORDER BY v.creation_time DESC, v.id DESC"
+
+    query = f"""
+        WITH latest_jobs AS (
+            SELECT video_id, status, progress_percent
+            FROM (
+                SELECT video_id, status, progress_percent, created_at, id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY video_id
+                           ORDER BY created_at DESC, id DESC
+                       ) AS rn
+                FROM transcoding_jobs
+            )
+            WHERE rn = 1
+        )
+        SELECT
+            v.id,
+            v.original_path,
+            v.creation_time,
+            v.duration_seconds,
+            v.device_model,
+            lj.status AS transcode_status,
+            lj.progress_percent AS transcode_progress
+        FROM videos v
+        LEFT JOIN latest_jobs lj ON v.id = lj.video_id
+        {where_sql}
+        {order_sql}
+    """
+
+    cursor = conn.execute(query, params)
+    items: list[VideoCatalogItem] = []
+    for row in cursor.fetchall():
+        creation_time = row["creation_time"] or ""
+        status = row["transcode_status"] or CATALOG_UNKNOWN_STATUS
+        device = _normalize_device_label(row["device_model"])
+        items.append(
+            VideoCatalogItem(
+                video_id=row["id"],
+                creation_time=creation_time,
+                creation_date=_parse_creation_date(creation_time),
+                device=device,
+                duration_seconds=row["duration_seconds"],
+                status=status,
+                progress_percent=row["transcode_progress"],
+                path=row["original_path"],
+            )
+        )
+    return items
+
+
+def _build_catalog_summary(items: list[VideoCatalogItem]) -> CatalogSummary:
+    """카탈로그 요약 통계를 생성한다."""
+    device_counts: dict[str, int] = {}
+    date_values: list[date] = []
+
+    for item in items:
+        device_counts[item.device] = device_counts.get(item.device, 0) + 1
+        try:
+            date_values.append(date.fromisoformat(item.creation_date))
+        except ValueError:
+            continue
+
+    devices_sorted = sorted(device_counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+    device_stats: list[CatalogDeviceStat] = [
+        {"device": device, "count": count} for device, count in devices_sorted
+    ]
+
+    date_range: CatalogDateRange | None = None
+    if date_values:
+        date_range = {
+            "start": min(date_values).isoformat(),
+            "end": max(date_values).isoformat(),
+        }
+
+    return {"total": len(items), "devices": device_stats, "date_range": date_range}
+
+
+def _render_table(
+    headers: list[str],
+    rows: list[list[str]],
+    aligns: list[str] | None = None,
+) -> None:
+    """간단한 고정폭 테이블 렌더링."""
+    if not rows:
+        print("📋 결과 없음")
+        return
+
+    aligns = aligns or ["left"] * len(headers)
+    widths: list[int] = []
+    for idx, header in enumerate(headers):
+        max_len = len(header)
+        for row in rows:
+            max_len = max(max_len, len(row[idx]))
+        widths.append(max_len)
+
+    header_line = "  ".join(header.ljust(widths[idx]) for idx, header in enumerate(headers))
+    print(header_line)
+    print("-" * len(header_line))
+
+    for row in rows:
+        parts: list[str] = []
+        for idx, cell in enumerate(row):
+            if aligns[idx] == "right":
+                parts.append(cell.rjust(widths[idx]))
+            else:
+                parts.append(cell.ljust(widths[idx]))
+        print("  ".join(parts))
+
+
+def _print_catalog_table(items: list[VideoCatalogItem], group_by_device: bool) -> None:
+    """테이블 형식으로 카탈로그 출력."""
+    headers = ["ID", "Date", "Device", "Duration", "Status", "Path"]
+    aligns = ["right", "left", "left", "right", "left", "left"]
+
+    def to_row(item: VideoCatalogItem) -> list[str]:
+        duration = (
+            _format_duration(item.duration_seconds) if item.duration_seconds is not None else "-"
+        )
+        status = _format_catalog_status(item.status)
+        return [
+            str(item.video_id),
+            item.creation_date,
+            item.device,
+            duration,
+            status,
+            _truncate_path(item.path),
+        ]
+
+    if not items:
+        print("📋 결과 없음")
+        return
+
+    if group_by_device:
+        groups: dict[str, list[VideoCatalogItem]] = {}
+        for item in items:
+            groups.setdefault(item.device, []).append(item)
+
+        for device, group_items in groups.items():
+            print(f"\n📷 기기: {device} ({len(group_items)}개)")
+            rows = [to_row(item) for item in group_items]
+            _render_table(headers, rows, aligns)
+        return
+
+    rows = [to_row(item) for item in items]
+    _render_table(headers, rows, aligns)
+
+
+def _print_catalog_summary(summary: CatalogSummary, stream: TextIO = sys.stdout) -> None:
+    """요약 통계 출력."""
+    total = summary["total"]
+    devices = summary["devices"]
+    date_range = summary["date_range"]
+
+    print(f"\n📊 요약: 총 영상 {total}개", file=stream)
+
+    if devices:
+        parts = [f"{d['device']} {d['count']}개" for d in devices]
+        print(f"📷 기기 분포: {', '.join(parts)}", file=stream)
+
+    if date_range:
+        print(
+            f"📅 날짜 범위: {date_range['start']} ~ {date_range['end']}",
+            file=stream,
+        )
+
+
+def _output_catalog(
+    items: list[VideoCatalogItem],
+    summary: CatalogSummary,
+    output_format: str,
+    group_by_device: bool,
+) -> None:
+    """카탈로그 출력 포맷 처리."""
+    if output_format == "json":
+        payload: dict[str, object] = {
+            "summary": summary,
+            "items": [
+                {
+                    "id": item.video_id,
+                    "creation_time": item.creation_time,
+                    "creation_date": item.creation_date,
+                    "device": item.device,
+                    "duration_seconds": item.duration_seconds,
+                    "status": item.status,
+                    "progress_percent": item.progress_percent,
+                    "path": item.path,
+                }
+                for item in items
+            ],
+        }
+        if group_by_device:
+            payload["grouped_by_device"] = True
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    if output_format == "csv":
+        writer = csv.writer(sys.stdout)
+        writer.writerow(
+            [
+                "id",
+                "creation_date",
+                "creation_time",
+                "device",
+                "duration_seconds",
+                "status",
+                "progress_percent",
+                "path",
+            ]
+        )
+        for item in items:
+            writer.writerow(
+                [
+                    item.video_id,
+                    item.creation_date,
+                    item.creation_time,
+                    item.device,
+                    item.duration_seconds if item.duration_seconds is not None else "",
+                    item.status,
+                    item.progress_percent if item.progress_percent is not None else "",
+                    item.path,
+                ]
+            )
+        _print_catalog_summary(summary, stream=sys.stderr)
+        return
+
+    _print_catalog_table(items, group_by_device)
+    _print_catalog_summary(summary)
+
+
+def cmd_catalog(args: argparse.Namespace) -> None:
+    """--catalog / --search 옵션 처리."""
+    output_format = "table"
+    if args.json:
+        output_format = "json"
+    elif args.csv:
+        output_format = "csv"
+
+    search_pattern = args.search
+    if search_pattern is not None:
+        search_pattern = search_pattern.strip()
+        if not search_pattern:
+            search_pattern = None
+
+    device_filter = args.device.strip() if args.device else None
+    status_filter = _normalize_status_filter(args.status)
+
+    if status_filter:
+        allowed = {
+            "pending",
+            "processing",
+            "completed",
+            "failed",
+            "merged",
+            CATALOG_UNKNOWN_STATUS,
+        }
+        if status_filter not in allowed:
+            raise ValueError(
+                "잘못된 상태 필터입니다. "
+                "pending/processing/completed/failed/merged/untracked 중 하나를 사용하세요."
+            )
+
+    conn = init_database()
+    items = _fetch_catalog_items(
+        conn,
+        search_pattern=search_pattern,
+        device_filter=device_filter,
+        status_filter=status_filter,
+        group_by_device=bool(args.catalog),
+    )
+    summary = _build_catalog_summary(items)
+    _output_catalog(items, summary, output_format, group_by_device=bool(args.catalog))
+    conn.close()
+
+
 def cmd_status() -> None:
     """
     --status 옵션 처리.
@@ -2037,14 +2470,32 @@ def main() -> None:
             cmd_reset_upload(args.reset_upload)
             return
 
-        # --status 옵션 처리 (작업 현황 조회)
-        if args.status:
-            cmd_status()
-            return
-
         # --status-detail 옵션 처리 (작업 상세 조회)
         if args.status_detail is not None:
             cmd_status_detail(args.status_detail)
+            return
+
+        # --status 옵션 처리 (작업 현황 조회)
+        if args.status == CATALOG_STATUS_SENTINEL:
+            cmd_status()
+            return
+
+        # --catalog / --search 옵션 처리 (메타데이터 조회)
+        if (args.json or args.csv) and not (
+            args.catalog
+            or args.search is not None
+            or args.device is not None
+            or _normalize_status_filter(args.status) is not None
+        ):
+            raise ValueError("--json/--csv 옵션은 --catalog 또는 --search와 함께 사용하세요.")
+
+        if (
+            args.catalog
+            or args.search is not None
+            or args.device is not None
+            or _normalize_status_filter(args.status) is not None
+        ):
+            cmd_catalog(args)
             return
 
         # --upload-only 옵션 처리 (업로드만)

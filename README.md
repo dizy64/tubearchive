@@ -241,6 +241,25 @@ tubearchive --status
 tubearchive --status-detail 1
 ```
 
+### 메타데이터 카탈로그
+
+DB에 저장된 영상 메타데이터를 날짜/기기/상태별로 조회합니다.
+
+```bash
+# 전체 영상 목록 (기기별 그룹핑)
+tubearchive --catalog
+
+# 날짜 패턴 검색
+tubearchive --search "2026-01"
+
+# 기기 필터 + 상태 필터
+tubearchive --search --device "GoPro" --status completed
+
+# JSON / CSV 출력
+tubearchive --catalog --json
+tubearchive --search "2026-01" --csv
+```
+
 ### 리셋 기능
 
 이미 처리된 기록을 초기화하여 다시 작업할 수 있습니다.
@@ -438,7 +457,9 @@ usage: tubearchive [-h] [-V] [-o OUTPUT] [--output-dir DIR] [--no-resume]
                    [--upload-chunk MB]
                    [--playlist ID] [--setup-youtube] [--youtube-auth] [--list-playlists]
                    [--reset-build [PATH]] [--reset-upload [PATH]]
-                   [--status] [--status-detail ID]
+                   [--status [STATUS]] [--status-detail ID]
+                   [--catalog] [--search [PATTERN]] [--device NAME]
+                   [--json | --csv]
                    [--config PATH] [--init-config]
                    [targets ...]
 
@@ -477,8 +498,13 @@ options:
   --list-playlists      내 플레이리스트 목록 조회
   --reset-build [PATH]  빌드 기록 초기화 (트랜스코딩/병합 다시 수행)
   --reset-upload [PATH] 업로드 기록 초기화 (YouTube 다시 업로드)
-  --status              작업 현황 조회 (트랜스코딩, 병합, 업로드)
+  --status [STATUS]     작업 현황 조회 (값 지정 시 메타데이터 검색 상태 필터)
   --status-detail ID    특정 작업 상세 조회 (merge_job ID)
+  --catalog             영상 메타데이터 전체 목록 조회 (기기별 그룹핑)
+  --search [PATTERN]    영상 메타데이터 검색 (예: 2026-01)
+  --device NAME         메타데이터 검색 시 기기 필터 (예: GoPro)
+  --json                메타데이터 출력 형식을 JSON으로 지정
+  --csv                 메타데이터 출력 형식을 CSV로 지정
   --config PATH         설정 파일 경로 (기본: ~/.tubearchive/config.toml)
   --init-config         기본 설정 파일(config.toml) 생성
 ```
