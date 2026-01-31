@@ -24,10 +24,29 @@ from tubearchive.core.transcoder import Transcoder
 from tubearchive.database.repository import MergeJobRepository, TranscodingJobRepository
 from tubearchive.database.schema import init_database
 from tubearchive.models.video import VideoFile
-from tubearchive.utils.progress import MultiProgressBar, ProgressInfo
+from tubearchive.utils.progress import MultiProgressBar, ProgressInfo, format_size
 from tubearchive.utils.summary_generator import generate_single_file_description
 
 logger = logging.getLogger(__name__)
+
+# 상태 아이콘 매핑 (cmd_status, cmd_status_detail 공용)
+STATUS_ICONS: dict[str, str] = {
+    "pending": "⏳ 대기",
+    "processing": "🔄 진행",
+    "completed": "✅ 완료",
+    "failed": "❌ 실패",
+    "merged": "📦 병합됨",
+}
+
+
+def _format_duration(seconds: float) -> str:
+    """초를 '1h 30m' 또는 '5m 30s' 형식으로 변환한다."""
+    total = int(seconds)
+    if total >= 3600:
+        return f"{total // 3600}h {(total % 3600) // 60}m"
+    if total >= 60:
+        return f"{total // 60}m {total % 60}s"
+    return f"{total}s"
 
 
 def safe_input(prompt: str) -> str:
@@ -1445,22 +1464,8 @@ def cmd_status() -> None:
             date = job["date"] or "-"
             status = job["status"]
 
-            # 상태 아이콘
-            status_icon = {
-                "pending": "⏳ 대기",
-                "processing": "🔄 진행",
-                "completed": "✅ 완료",
-                "failed": "❌ 실패",
-            }.get(status, status)
-
-            # 길이 포맷
-            duration = job["total_duration_seconds"] or 0
-            if duration >= 3600:
-                duration_str = f"{int(duration // 3600)}h {int((duration % 3600) // 60)}m"
-            elif duration >= 60:
-                duration_str = f"{int(duration // 60)}m {int(duration % 60)}s"
-            else:
-                duration_str = f"{int(duration)}s"
+            status_icon = STATUS_ICONS.get(status, status)
+            duration_str = _format_duration(job["total_duration_seconds"] or 0)
 
             # YouTube 상태
             if job["youtube_id"]:
@@ -1524,34 +1529,11 @@ def cmd_status_detail(job_id: int) -> None:
     print(f"📁 출력: {job['output_path']}")
 
     # 상태
-    status = job["status"]
-    status_icon = {
-        "pending": "⏳ 대기",
-        "processing": "🔄 진행 중",
-        "completed": "✅ 완료",
-        "failed": "❌ 실패",
-    }.get(status, status)
-    print(f"📊 상태: {status_icon}")
+    print(f"📊 상태: {STATUS_ICONS.get(job['status'], job['status'])}")
 
     # 길이/크기
-    duration = job["total_duration_seconds"] or 0
-    hours = int(duration // 3600)
-    minutes = int((duration % 3600) // 60)
-    seconds = int(duration % 60)
-    if hours > 0:
-        duration_str = f"{hours}시간 {minutes}분 {seconds}초"
-    elif minutes > 0:
-        duration_str = f"{minutes}분 {seconds}초"
-    else:
-        duration_str = f"{seconds}초"
-    print(f"⏱️  길이: {duration_str}")
-
-    size_bytes = job["total_size_bytes"] or 0
-    if size_bytes >= 1024 * 1024 * 1024:
-        size_str = f"{size_bytes / (1024**3):.2f} GB"
-    else:
-        size_str = f"{size_bytes / (1024**2):.1f} MB"
-    print(f"💾 크기: {size_str}")
+    print(f"⏱️  길이: {_format_duration(job['total_duration_seconds'] or 0)}")
+    print(f"💾 크기: {format_size(job['total_size_bytes'] or 0)}")
 
     # YouTube
     if job["youtube_id"]:
@@ -1578,6 +1560,57 @@ def cmd_status_detail(job_id: int) -> None:
 
     print("=" * 60)
     conn.close()
+
+
+def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
+    """Dry run: 실행 계획만 출력한다."""
+    logger.info("Dry run mode - showing execution plan only")
+
+    video_files = scan_videos(validated_args.targets)
+    output_str = str(_resolve_output_path(validated_args))
+
+    print("\n=== Dry Run Execution Plan ===")
+    print(f"Input targets: {[str(t) for t in validated_args.targets]}")
+    print(f"Video files found: {len(video_files)}")
+    for vf in video_files:
+        print(f"  - {vf.path}")
+    print(f"Output: {output_str}")
+    print(f"Temp dir: {get_temp_dir()}")
+    print(f"Resume enabled: {not validated_args.no_resume}")
+    print(f"Keep temp files: {validated_args.keep_temp}")
+    print(f"Parallel workers: {validated_args.parallel}")
+    print("=" * 30)
+
+
+def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
+    """파이프라인 완료 후 YouTube 업로드를 수행한다."""
+    print("\n📤 YouTube 업로드 시작...")
+
+    merge_job_id = None
+    title = None
+    description = ""
+    try:
+        conn = init_database()
+        repo = MergeJobRepository(conn)
+        job = repo.get_latest()
+        if job:
+            merge_job_id = job.id
+            title = job.title
+            description = job.summary_markdown or ""
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to get merge job: {e}")
+
+    playlist_ids = resolve_playlist_ids(args.playlist)
+
+    upload_to_youtube(
+        file_path=output_path,
+        title=title,
+        description=description,
+        merge_job_id=merge_job_id,
+        playlist_ids=playlist_ids,
+        chunk_mb=args.upload_chunk,
+    )
 
 
 def main() -> None:
@@ -1631,67 +1664,15 @@ def main() -> None:
         validated_args = validate_args(args)
 
         if validated_args.dry_run:
-            # Dry run: 실행 계획만 출력
-            logger.info("Dry run mode - showing execution plan only")
-
-            video_files = scan_videos(validated_args.targets)
-            temp_dir = get_temp_dir()
-
-            # 출력 경로 계산
-            if validated_args.output:
-                output_str = str(validated_args.output)
-            else:
-                output_filename = get_output_filename(validated_args.targets)
-                output_dir = validated_args.output_dir or Path.cwd()
-                output_str = str(output_dir / output_filename)
-
-            print("\n=== Dry Run Execution Plan ===")
-            print(f"Input targets: {[str(t) for t in validated_args.targets]}")
-            print(f"Video files found: {len(video_files)}")
-            for vf in video_files:
-                print(f"  - {vf.path}")
-            print(f"Output: {output_str}")
-            print(f"Temp dir: {temp_dir}")
-            print(f"Resume enabled: {not validated_args.no_resume}")
-            print(f"Keep temp files: {validated_args.keep_temp}")
-            print(f"Parallel workers: {validated_args.parallel}")
-            print("=" * 30)
+            _cmd_dry_run(validated_args)
             return
 
         output_path = run_pipeline(validated_args)
         print("\n✅ 완료!")
         print(f"📹 출력 파일: {output_path}")
 
-        # --upload 플래그 처리
         if validated_args.upload:
-            print("\n📤 YouTube 업로드 시작...")
-            # DB에서 최신 MergeJob ID 조회
-            merge_job_id = None
-            title = None
-            description = ""
-            try:
-                conn = init_database()
-                repo = MergeJobRepository(conn)
-                job = repo.get_latest()
-                if job:
-                    merge_job_id = job.id
-                    title = job.title
-                    description = job.summary_markdown or ""
-                conn.close()
-            except Exception as e:
-                logger.warning(f"Failed to get merge job: {e}")
-
-            # 플레이리스트 처리
-            playlist_ids = resolve_playlist_ids(args.playlist)
-
-            upload_to_youtube(
-                file_path=output_path,
-                title=title,
-                description=description,
-                merge_job_id=merge_job_id,
-                playlist_ids=playlist_ids,
-                chunk_mb=args.upload_chunk,
-            )
+            _upload_after_pipeline(output_path, args)
 
     except FileNotFoundError as e:
         logger.error(str(e))
