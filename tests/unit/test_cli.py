@@ -212,6 +212,82 @@ class TestCreateParser:
 
         assert args.upload_privacy is None
 
+    def test_parses_exclude_single(self) -> None:
+        """--exclude 단일 패턴."""
+        parser = create_parser()
+        args = parser.parse_args(["--exclude", "GH*"])
+
+        assert args.exclude == ["GH*"]
+
+    def test_parses_exclude_multiple(self) -> None:
+        """--exclude 반복 지정."""
+        parser = create_parser()
+        args = parser.parse_args(["--exclude", "GH*", "--exclude", "*.mts"])
+
+        assert args.exclude == ["GH*", "*.mts"]
+
+    def test_exclude_default_is_none(self) -> None:
+        """--exclude 미지정 시 None."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.exclude is None
+
+    def test_parses_include_only_single(self) -> None:
+        """--include-only 단일 패턴."""
+        parser = create_parser()
+        args = parser.parse_args(["--include-only", "*.mp4"])
+
+        assert args.include_only == ["*.mp4"]
+
+    def test_parses_include_only_multiple(self) -> None:
+        """--include-only 반복 지정."""
+        parser = create_parser()
+        args = parser.parse_args(["--include-only", "*.mp4", "--include-only", "*.mov"])
+
+        assert args.include_only == ["*.mp4", "*.mov"]
+
+    def test_include_only_default_is_none(self) -> None:
+        """--include-only 미지정 시 None."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.include_only is None
+
+    def test_parses_sort_option(self) -> None:
+        """--sort 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(["--sort", "name"])
+
+        assert args.sort == "name"
+
+    def test_sort_default_is_none(self) -> None:
+        """--sort 미지정 시 None."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.sort is None
+
+    def test_sort_invalid_choice_raises(self) -> None:
+        """--sort에 잘못된 값 지정 시 에러."""
+        parser = create_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--sort", "invalid"])
+
+    def test_parses_reorder_flag(self) -> None:
+        """--reorder 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--reorder"])
+
+        assert args.reorder is True
+
+    def test_reorder_default_is_false(self) -> None:
+        """--reorder 미지정 시 False."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.reorder is False
+
     def test_parses_catalog_flag(self) -> None:
         """--catalog 플래그."""
         parser = create_parser()

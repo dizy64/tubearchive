@@ -64,6 +64,13 @@ from tubearchive.core.grouper import (
     reorder_with_groups,
 )
 from tubearchive.core.merger import Merger
+from tubearchive.core.ordering import (
+    SortKey,
+    filter_videos,
+    interactive_reorder,
+    print_video_list,
+    sort_videos,
+)
 from tubearchive.core.scanner import scan_videos
 from tubearchive.core.transcoder import Transcoder
 from tubearchive.database.repository import (
@@ -247,6 +254,10 @@ class ValidatedArgs:
     trim_silence: bool = False
     silence_threshold: str = "-30dB"
     silence_min_duration: float = 2.0
+    exclude_patterns: list[str] | None = None
+    include_only_patterns: list[str] | None = None
+    sort_key: str = "time"
+    reorder: bool = False
 
 
 @dataclass(frozen=True)
@@ -510,6 +521,38 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--exclude",
+        type=str,
+        action="append",
+        default=None,
+        metavar="PATTERN",
+        help="제외할 파일명 패턴 (글로브, 반복 가능, 예: 'GH*' '*.mts')",
+    )
+
+    parser.add_argument(
+        "--include-only",
+        type=str,
+        action="append",
+        default=None,
+        metavar="PATTERN",
+        help="포함할 파일명 패턴만 선택 (글로브, 반복 가능, 예: '*.mp4')",
+    )
+
+    parser.add_argument(
+        "--sort",
+        type=str,
+        default=None,
+        choices=["time", "name", "size", "device"],
+        help="정렬 기준 변경 (기본: time, 옵션: name/size/device)",
+    )
+
+    parser.add_argument(
+        "--reorder",
+        action="store_true",
+        help="인터랙티브 모드로 클립 순서 수동 편집",
+    )
+
+    parser.add_argument(
         "--config",
         type=str,
         default=None,
@@ -730,6 +773,17 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     if silence_min_duration <= 0:
         raise ValueError(f"Silence duration must be > 0, got: {silence_min_duration}")
 
+    exclude_patterns: list[str] | None = getattr(args, "exclude", None)
+    include_only_patterns: list[str] | None = getattr(args, "include_only", None)
+    sort_key_str: str = getattr(args, "sort", None) or "time"
+    reorder_flag: bool = getattr(args, "reorder", False)
+
+    valid_sort_keys = {k.value for k in SortKey}
+    if sort_key_str not in valid_sort_keys:
+        raise ValueError(
+            f"Invalid sort key: {sort_key_str} (valid: {', '.join(sorted(valid_sort_keys))})"
+        )
+
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -751,6 +805,10 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         trim_silence=trim_silence,
         silence_threshold=silence_threshold,
         silence_min_duration=silence_min_duration,
+        exclude_patterns=exclude_patterns,
+        include_only_patterns=include_only_patterns,
+        sort_key=sort_key_str,
+        reorder=reorder_flag,
     )
 
 
@@ -1147,6 +1205,28 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     logger.info(f"Found {len(video_files)} video files")
     for video_file in video_files:
         logger.info(f"  - {video_file.path.name}")
+
+    # 1.1 필터링 (--exclude / --include-only)
+    if validated_args.exclude_patterns or validated_args.include_only_patterns:
+        video_files = filter_videos(
+            video_files,
+            exclude_patterns=validated_args.exclude_patterns,
+            include_only_patterns=validated_args.include_only_patterns,
+        )
+        if not video_files:
+            logger.error("All files excluded by filter patterns")
+            raise ValueError("All files excluded by filter patterns")
+
+    # 1.2 정렬 (--sort)
+    if validated_args.sort_key != "time":
+        video_files = sort_videos(video_files, SortKey(validated_args.sort_key))
+
+    # 1.3 인터랙티브 재정렬 (--reorder)
+    if validated_args.reorder:
+        video_files = interactive_reorder(video_files)
+        if not video_files:
+            logger.error("No files remaining after reorder")
+            raise ValueError("No files remaining after reorder")
 
     # --detect-silence: 분석만 수행 후 종료
     if validated_args.detect_silence:
@@ -2050,13 +2130,37 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     logger.info("Dry run mode - showing execution plan only")
 
     video_files = scan_videos(validated_args.targets)
+    original_count = len(video_files)
+
+    if validated_args.exclude_patterns or validated_args.include_only_patterns:
+        video_files = filter_videos(
+            video_files,
+            exclude_patterns=validated_args.exclude_patterns,
+            include_only_patterns=validated_args.include_only_patterns,
+        )
+
+    if validated_args.sort_key != "time":
+        video_files = sort_videos(video_files, SortKey(validated_args.sort_key))
+
     output_str = str(_resolve_output_path(validated_args))
 
     print("\n=== Dry Run Execution Plan ===")
     print(f"Input targets: {[str(t) for t in validated_args.targets]}")
-    print(f"Video files found: {len(video_files)}")
-    for video_file in video_files:
-        print(f"  - {video_file.path}")
+
+    if original_count != len(video_files):
+        print(f"Video files found: {original_count} (filtered to {len(video_files)})")
+        if validated_args.exclude_patterns:
+            print(f"  Exclude patterns: {validated_args.exclude_patterns}")
+        if validated_args.include_only_patterns:
+            print(f"  Include-only patterns: {validated_args.include_only_patterns}")
+    else:
+        print(f"Video files found: {len(video_files)}")
+
+    if validated_args.sort_key != "time":
+        print(f"Sort key: {validated_args.sort_key}")
+
+    print_video_list(video_files, header="최종 클립 순서")
+
     print(f"Output: {output_str}")
     print(f"Temp dir: {get_temp_dir()}")
     print(f"Resume enabled: {not validated_args.no_resume}")
