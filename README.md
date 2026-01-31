@@ -12,17 +12,26 @@
 - **VideoToolbox 하드웨어 가속**: Mac M1/M2에서 고속 인코딩
 - **기기별 자동 감지**: Nikon N-Log, iPhone, GoPro, DJI 자동 인식
 - **Dip-to-Black 효과**: 0.5초 Fade In/Out 자동 적용
+- **오디오 라우드니스 정규화**: EBU R128 loudnorm 2-pass 자동 보정
+- **오디오 노이즈 제거**: FFmpeg afftdn 기반 바람소리/배경 소음 저감
+- **썸네일 자동 생성**: 병합 영상에서 주요 지점 JPEG 썸네일 추출
 - **YouTube 업로드**: OAuth 인증, 병합 후 자동 업로드, 챕터 타임스탬프 자동 삽입
+- **설정 파일**: `~/.tubearchive/config.toml`로 기본값 관리
+- **작업 현황 조회**: 트랜스코딩/병합/업로드 이력 확인
 
 ## 지원 기기 및 프로파일
 
-| 기기 | 인코딩 프로파일 | 컬러 스페이스 |
-|------|----------------|--------------|
-| Nikon (N-Log) | HEVC 50Mbps 10-bit | Rec.2020 HDR |
-| iPhone | HEVC 40Mbps 8-bit | Rec.709 SDR |
-| GoPro | HEVC 50Mbps 8-bit | Rec.709 SDR |
-| DJI | HEVC 50Mbps 8-bit | Rec.709 SDR |
-| 기타 | HEVC 50Mbps 10-bit | 자동 감지 |
+모든 입력은 **HEVC 50Mbps 10-bit (p010le), 29.97fps**로 통일 트랜스코딩됩니다.
+
+| 기기 | 감지 기준 | 출력 프로파일 |
+|------|----------|--------------|
+| Nikon (N-Log) | color_transfer: arib-std-b67 / smpte2084 | SDR BT.709 (HDR→SDR 변환) |
+| iPhone | 기본 SDR 소스 | SDR BT.709 |
+| GoPro | 기본 SDR 소스 | SDR BT.709 |
+| DJI | 기본 SDR 소스 | SDR BT.709 |
+| 기타 | 자동 감지 | SDR BT.709 (기본) |
+
+> **참고**: concat 병합 호환성을 위해 모든 출력은 SDR (BT.709)로 통일됩니다. HDR 소스는 자동 SDR 변환됩니다.
 
 ## 요구사항
 
@@ -105,7 +114,7 @@ source ~/.zshrc  # 또는 터미널 재시작
 설치 확인:
 ```bash
 uv tool list
-# 출력: tubearchive v0.1.0
+# 출력: tubearchive v0.2.24
 ```
 
 업데이트:
@@ -172,6 +181,15 @@ uv run tubearchive --keep-temp ~/Videos/
 # 오디오 노이즈 제거 (바람소리/배경 소음 저감)
 uv run tubearchive --denoise --denoise-level medium ~/Videos/
 
+# EBU R128 오디오 라우드니스 정규화
+uv run tubearchive --normalize-audio ~/Videos/
+
+# 썸네일 자동 생성 (기본: 10%, 33%, 50% 지점)
+uv run tubearchive --thumbnail ~/Videos/
+
+# 특정 시점에서 썸네일 추출
+uv run tubearchive --thumbnail --thumbnail-at 00:01:30 --thumbnail-at 00:03:00 ~/Videos/
+
 # 상세 로그 출력
 uv run tubearchive -v ~/Videos/
 
@@ -199,6 +217,29 @@ tubearchive ~/Videos/  # 4개 파일 동시 처리
 - VideoToolbox 하드웨어 인코더는 동시 세션 수에 제한이 있을 수 있음
 - 시스템 리소스(CPU, 메모리)에 따라 적절한 값 설정 권장
 - 기본값: 1 (순차 처리)
+
+### 설정 파일 (config.toml)
+
+기본값을 설정 파일로 관리할 수 있습니다. 우선순위: **CLI 옵션 > 환경변수 > config.toml > 기본값**
+
+```bash
+# 기본 설정 파일 생성
+tubearchive --init-config
+# → ~/.tubearchive/config.toml 생성
+
+# 커스텀 설정 파일 사용
+tubearchive --config /path/to/config.toml ~/Videos/
+```
+
+### 작업 현황 조회
+
+```bash
+# 전체 작업 현황 (트랜스코딩, 병합, 업로드)
+tubearchive --status
+
+# 특정 작업 상세 조회 (merge_job ID)
+tubearchive --status-detail 1
+```
 
 ### 리셋 기능
 
@@ -390,10 +431,15 @@ tubearchive ~/Videos/ --upload
 usage: tubearchive [-h] [-V] [-o OUTPUT] [--output-dir DIR] [--no-resume]
                    [--keep-temp] [--dry-run] [-v] [-j N]
                    [--denoise] [--denoise-level {light,medium,heavy}]
+                   [--normalize-audio]
+                   [--thumbnail] [--thumbnail-at TIMESTAMP] [--thumbnail-quality Q]
                    [--upload] [--upload-only FILE]
                    [--upload-title TITLE] [--upload-privacy {public,unlisted,private}]
+                   [--upload-chunk MB]
                    [--playlist ID] [--setup-youtube] [--youtube-auth] [--list-playlists]
                    [--reset-build [PATH]] [--reset-upload [PATH]]
+                   [--status] [--status-detail ID]
+                   [--config PATH] [--init-config]
                    [targets ...]
 
 다양한 기기의 4K 영상을 표준화하여 병합합니다.
@@ -413,16 +459,25 @@ options:
   -j, --parallel N      병렬 트랜스코딩 수 (환경변수: TUBEARCHIVE_PARALLEL, 기본: 1)
   --denoise             FFmpeg 오디오 노이즈 제거 활성화 (afftdn)
   --denoise-level       노이즈 제거 강도 (light/medium/heavy, 기본: medium)
+  --normalize-audio     EBU R128 오디오 라우드니스 정규화 활성화 (loudnorm 2-pass)
+  --thumbnail           병합 영상에서 썸네일 자동 생성 (기본: 10%, 33%, 50% 지점)
+  --thumbnail-at TIME   특정 시점에서 썸네일 추출 (예: '00:01:30', 반복 가능)
+  --thumbnail-quality Q 썸네일 JPEG 품질 (1-31, 낮을수록 고품질, 기본: 2)
   --upload              병합 완료 후 YouTube에 업로드
   --upload-only FILE    지정된 파일을 YouTube에 업로드 (병합 없이)
   --upload-title TITLE  YouTube 업로드 시 영상 제목
   --upload-privacy      YouTube 공개 설정 (기본: unlisted)
+  --upload-chunk MB     업로드 청크 크기 MB (1-256, 환경변수: TUBEARCHIVE_UPLOAD_CHUNK_MB, 기본: 32)
   --playlist ID         업로드 후 플레이리스트에 추가 (여러 번 사용 가능)
   --setup-youtube       YouTube 인증 상태 확인 및 설정 가이드 출력
   --youtube-auth        YouTube 브라우저 인증 실행
   --list-playlists      내 플레이리스트 목록 조회
   --reset-build [PATH]  빌드 기록 초기화 (트랜스코딩/병합 다시 수행)
   --reset-upload [PATH] 업로드 기록 초기화 (YouTube 다시 업로드)
+  --status              작업 현황 조회 (트랜스코딩, 병합, 업로드)
+  --status-detail ID    특정 작업 상세 조회 (merge_job ID)
+  --config PATH         설정 파일 경로 (기본: ~/.tubearchive/config.toml)
+  --init-config         기본 설정 파일(config.toml) 생성
 ```
 
 ### 환경 변수
@@ -434,9 +489,11 @@ options:
 | `TUBEARCHIVE_PARALLEL` | 병렬 트랜스코딩 수 | 1 (순차 처리) |
 | `TUBEARCHIVE_DENOISE` | 오디오 노이즈 제거 기본 활성화 (true/false) | false |
 | `TUBEARCHIVE_DENOISE_LEVEL` | 노이즈 제거 강도 (light/medium/heavy) | medium |
+| `TUBEARCHIVE_NORMALIZE_AUDIO` | EBU R128 loudnorm 정규화 (true/false) | false |
 | `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 클라이언트 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
 | `TUBEARCHIVE_YOUTUBE_TOKEN` | OAuth 토큰 저장 경로 | `~/.tubearchive/youtube_token.json` |
 | `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID (쉼표로 여러 개 지정) | - |
+| `TUBEARCHIVE_UPLOAD_CHUNK_MB` | 업로드 청크 크기 MB (1-256) | 32 |
 
 ```bash
 # 환경 변수 설정 (~/.zshrc 또는 ~/.bashrc에 추가)
@@ -481,8 +538,9 @@ tubearchive/
 │   └── resume.py         # Resume 상태 추적
 ├── ffmpeg/
 │   ├── executor.py       # FFmpeg 실행 및 진행률
-│   ├── effects.py        # 필터 (Portrait Layout, Fade)
-│   └── profiles.py       # 기기별 인코딩 프로파일
+│   ├── effects.py        # 필터 (Portrait Layout, Fade, Loudnorm)
+│   ├── profiles.py       # 기기별 인코딩 프로파일
+│   └── thumbnail.py      # 썸네일 추출
 ├── models/
 │   ├── video.py          # VideoFile, VideoMetadata
 │   └── job.py            # TranscodingJob, MergeJob
@@ -494,6 +552,7 @@ tubearchive/
 └── utils/
     ├── validators.py     # 입력 검증
     ├── progress.py       # 진행률 표시
+    ├── summary_generator.py  # 요약 파일 생성
     └── temp_manager.py   # 임시 파일 관리
 ```
 
@@ -506,7 +565,7 @@ tubearchive/
 uv run pytest tests/ -v
 
 # 특정 테스트
-uv run pytest tests/test_scanner.py -v
+uv run pytest tests/unit/test_scanner.py -v
 
 # 커버리지 포함
 uv run pytest tests/ --cov=tubearchive --cov-report=term-missing

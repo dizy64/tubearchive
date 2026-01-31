@@ -31,10 +31,22 @@ uv run ruff format tubearchive/ tests/
 uv run tubearchive ~/Videos/
 uv run tubearchive --dry-run ~/Videos/
 
+# 오디오 처리
+uv run tubearchive --normalize-audio ~/Videos/      # EBU R128 loudnorm 2-pass
+uv run tubearchive --denoise ~/Videos/              # 오디오 노이즈 제거
+
+# 썸네일
+uv run tubearchive --thumbnail ~/Videos/            # 기본 지점(10%, 33%, 50%) 썸네일
+uv run tubearchive --thumbnail --thumbnail-at 00:01:30 ~/Videos/  # 특정 시점
+
 # YouTube 업로드
 uv run tubearchive --setup-youtube                  # 인증 상태 확인
 uv run tubearchive --upload ~/Videos/               # 병합 후 업로드
 uv run tubearchive --upload-only video.mp4          # 파일만 업로드
+
+# 작업 현황
+uv run tubearchive --status                         # 작업 현황 조회
+uv run tubearchive --status-detail 1                # 특정 작업 상세 조회
 
 # 설정 파일
 uv run tubearchive --init-config                    # ~/.tubearchive/config.toml 생성
@@ -54,12 +66,15 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 # output_dir = "~/Videos/output"            # TUBEARCHIVE_OUTPUT_DIR
 # parallel = 1                              # TUBEARCHIVE_PARALLEL
 # db_path = "~/.tubearchive/tubearchive.db" # TUBEARCHIVE_DB_PATH
+# denoise = false                           # TUBEARCHIVE_DENOISE
+# denoise_level = "medium"                  # light/medium/heavy (TUBEARCHIVE_DENOISE_LEVEL)
+# normalize_audio = false                   # EBU R128 loudnorm (TUBEARCHIVE_NORMALIZE_AUDIO)
 
 [youtube]
 # client_secrets = "~/.tubearchive/client_secrets.json"
 # token = "~/.tubearchive/youtube_token.json"
 # playlist = ["PLxxxxxxxx"]
-# upload_chunk_mb = 32                      # 1-256
+# upload_chunk_mb = 32                      # 1-256 (TUBEARCHIVE_UPLOAD_CHUNK_MB)
 # upload_privacy = "unlisted"               # public/unlisted/private
 ```
 
@@ -78,12 +93,19 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
 - `detect_metadata()` → 프로파일 선택 → FFmpeg 실행
 - VideoToolbox 실패 시 `_transcode_with_fallback()` (libx265)
 - Resume: `ResumeManager`가 진행률 추적, 재시작 시 이어서 처리
+- Loudnorm: `_run_loudnorm_analysis()` → 1st pass 분석 → 2nd pass 적용 (normalize_audio=True일 때)
 
 **ffmpeg/effects.py**: 필터 생성기
 - `create_combined_filter()`: 세로/가로 영상 → 3840x2160 표준화
 - 세로: split → blur background → overlay foreground
 - HDR→SDR: `colorspace=all=bt709:iall=bt2020` (color_transfer가 HLG/PQ인 경우)
 - Dip-to-Black: fade in/out 0.5초
+- Loudnorm: `LoudnormAnalysis` → `create_loudnorm_analysis_filter()` (1st pass) → `parse_loudnorm_stats()` → `create_loudnorm_filter()` (2nd pass)
+- `create_audio_filter_chain()`: denoise → fade → loudnorm 오디오 필터 체인 통합
+
+**ffmpeg/thumbnail.py**: 썸네일 추출
+- 병합 영상에서 지정 시점(기본: 10%, 33%, 50%) JPEG 썸네일 생성
+- `--thumbnail-at`으로 커스텀 시점, `--thumbnail-quality`로 품질 조절
 
 **ffmpeg/profiles.py**: 메타데이터 기반 프로파일
 - `PROFILE_SDR`: BT.709 (기본, concat 호환성용)
@@ -91,6 +113,8 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
 - 모든 프로파일: `p010le`, `29.97fps`, `50Mbps`
 
 **config.py**: TOML 설정 파일 관리
+- `GeneralConfig`: output_dir, parallel, db_path, denoise, denoise_level, normalize_audio
+- `YouTubeConfig`: client_secrets, token, playlist, upload_chunk_mb, upload_privacy
 - `load_config()`: `~/.tubearchive/config.toml` 파싱 (에러 시 빈 config)
 - `apply_config_to_env()`: 미설정 환경변수에만 config 값 주입
 - `generate_default_config()`: 주석 포함 기본 템플릿 생성
@@ -111,6 +135,21 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
   - `TUBEARCHIVE_YOUTUBE_TOKEN`: 토큰 파일 경로
   - `TUBEARCHIVE_YOUTUBE_PLAYLIST`: 기본 플레이리스트 ID (쉼표로 여러 개 지정 가능)
   - `TUBEARCHIVE_UPLOAD_CHUNK_MB`: 업로드 청크 크기 MB (1-256, 기본: 32)
+
+### 환경 변수 요약
+
+| 환경 변수 | 설명 | 기본값 |
+|-----------|------|--------|
+| `TUBEARCHIVE_OUTPUT_DIR` | 출력 디렉토리 | 입력과 같은 위치 |
+| `TUBEARCHIVE_PARALLEL` | 병렬 트랜스코딩 수 | 1 |
+| `TUBEARCHIVE_DB_PATH` | DB 경로 | `~/.tubearchive/tubearchive.db` |
+| `TUBEARCHIVE_DENOISE` | 오디오 노이즈 제거 (true/false) | false |
+| `TUBEARCHIVE_DENOISE_LEVEL` | 노이즈 제거 강도 (light/medium/heavy) | medium |
+| `TUBEARCHIVE_NORMALIZE_AUDIO` | EBU R128 loudnorm (true/false) | false |
+| `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
+| `TUBEARCHIVE_YOUTUBE_TOKEN` | 토큰 파일 경로 | `~/.tubearchive/youtube_token.json` |
+| `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID | - |
+| `TUBEARCHIVE_UPLOAD_CHUNK_MB` | 업로드 청크 MB (1-256) | 32 |
 
 ### 테스트 구조
 ```
