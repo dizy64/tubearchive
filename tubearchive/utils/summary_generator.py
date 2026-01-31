@@ -7,10 +7,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from tubearchive.utils.progress import format_size
+
 
 def format_timestamp(seconds: float) -> str:
     """
     초를 YouTube 타임스탬프 형식으로 변환.
+
+    format_time()과 달리 반올림을 적용한다 (YouTube 챕터용).
 
     Args:
         seconds: 초 단위 시간
@@ -26,24 +30,6 @@ def format_timestamp(seconds: float) -> str:
     if hours > 0:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes}:{secs:02d}"
-
-
-def format_size(bytes_: int) -> str:
-    """
-    바이트를 읽기 쉬운 형식으로 변환.
-
-    Args:
-        bytes_: 바이트 단위 크기
-
-    Returns:
-        KB, MB, GB 등 형식 문자열
-    """
-    size = float(bytes_)
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if size < 1024:
-            return f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} PB"
 
 
 def extract_topic_from_path(path: Path) -> tuple[str | None, str]:

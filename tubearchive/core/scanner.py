@@ -5,19 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from tubearchive.models.video import VideoFile
-
-# 지원하는 영상 확장자
-VIDEO_EXTENSIONS = {
-    ".mp4",
-    ".mov",
-    ".mts",
-    ".m4v",
-    ".avi",
-    ".mkv",
-    ".wmv",
-    ".flv",
-    ".webm",
-}
+from tubearchive.utils.validators import VIDEO_EXTENSIONS
 
 
 def scan_videos(targets: list[Path]) -> list[VideoFile]:
