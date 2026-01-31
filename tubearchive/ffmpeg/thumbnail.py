@@ -53,10 +53,10 @@ def parse_timestamp(timestamp_str: str) -> float:
     parts = s.split(":")
     try:
         if len(parts) == 3:
-            hours, minutes, secs = float(parts[0]), float(parts[1]), float(parts[2])
+            hours, minutes, secs = int(parts[0]), int(parts[1]), float(parts[2])
             result = hours * 3600 + minutes * 60 + secs
         elif len(parts) == 2:
-            minutes, secs = float(parts[0]), float(parts[1])
+            minutes, secs = int(parts[0]), float(parts[1])
             result = minutes * 60 + secs
         elif len(parts) == 1:
             result = float(parts[0])
@@ -178,17 +178,22 @@ def extract_thumbnails(
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
+                text=True,
                 check=False,
+                timeout=30,
             )
             if proc.returncode == 0 and out_path.exists():
                 results.append(out_path)
                 logger.info("Thumbnail created: %s (at %.1fs)", out_path.name, ts)
             else:
                 logger.warning(
-                    "Failed to extract thumbnail at %.1fs: returncode=%d",
+                    "Failed to extract thumbnail at %.1fs: returncode=%d, stderr=%s",
                     ts,
                     proc.returncode,
+                    proc.stderr,
                 )
+        except subprocess.TimeoutExpired:
+            logger.warning("Thumbnail extraction timed out at %.1fs", ts)
         except OSError as e:
             logger.warning("Failed to run ffmpeg for thumbnail at %.1fs: %s", ts, e)
 

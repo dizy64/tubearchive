@@ -812,11 +812,13 @@ def _generate_thumbnails(
 
     timestamps: list[float] | None = None
     if validated_args.thumbnail_timestamps:
-        try:
-            timestamps = [parse_timestamp(ts) for ts in validated_args.thumbnail_timestamps]
-        except ValueError as e:
-            logger.warning("Invalid thumbnail timestamp: %s", e)
-            return []
+        parsed: list[float] = []
+        for ts in validated_args.thumbnail_timestamps:
+            try:
+                parsed.append(parse_timestamp(ts))
+            except ValueError as e:
+                logger.warning("Invalid thumbnail timestamp '%s': %s", ts, e)
+        timestamps = parsed if parsed else None
 
     try:
         return extract_thumbnails(

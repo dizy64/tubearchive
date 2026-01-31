@@ -1,5 +1,7 @@
 """썸네일 추출 모듈 테스트."""
 
+import logging
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -94,6 +96,21 @@ class TestParseTimestamp:
         """빈 문자열은 ValueError."""
         with pytest.raises(ValueError, match="Invalid timestamp"):
             parse_timestamp("")
+
+    def test_fractional_hours_raises(self) -> None:
+        """소수점 시간은 ValueError."""
+        with pytest.raises(ValueError, match="Invalid timestamp"):
+            parse_timestamp("1.5:30:00")
+
+    def test_fractional_minutes_raises(self) -> None:
+        """소수점 분은 ValueError."""
+        with pytest.raises(ValueError, match="Invalid timestamp"):
+            parse_timestamp("01:30.5:00")
+
+    def test_fractional_minutes_in_mm_ss_raises(self) -> None:
+        """MM:SS 형식에서 소수점 분은 ValueError."""
+        with pytest.raises(ValueError, match="Invalid timestamp"):
+            parse_timestamp("1.5:30")
 
     def test_negative_result_raises(self) -> None:
         """음수 결과는 ValueError."""
@@ -256,6 +273,48 @@ class TestExtractThumbnails:
         result = extract_thumbnails(video, timestamps=[10.0, 60.0])
 
         assert len(result) == 1
+
+    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    def test_ffmpeg_timeout_skips(
+        self,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """ffmpeg timeout 시 해당 프레임 건너뛰기."""
+        video = tmp_path / "video.mp4"
+        video.touch()
+
+        mock_run.side_effect = [
+            MagicMock(returncode=0),
+            subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=30),
+        ]
+        (tmp_path / "video_thumb_01.jpg").touch()
+
+        result = extract_thumbnails(video, timestamps=[10.0, 60.0])
+
+        assert len(result) == 1
+
+    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    def test_ffmpeg_failure_logs_stderr(
+        self,
+        mock_run: MagicMock,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """ffmpeg 실패 시 stderr가 로그에 포함."""
+        video = tmp_path / "video.mp4"
+        video.touch()
+
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stderr="codec not found",
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = extract_thumbnails(video, timestamps=[10.0])
+
+        assert result == []
+        assert "codec not found" in caplog.text
 
     def test_nonexistent_file_returns_empty(self, tmp_path: Path) -> None:
         """미존재 파일은 빈 리스트."""
