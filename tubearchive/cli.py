@@ -91,6 +91,7 @@ ENV_YOUTUBE_PLAYLIST = "TUBEARCHIVE_YOUTUBE_PLAYLIST"
 ENV_PARALLEL = "TUBEARCHIVE_PARALLEL"
 ENV_DENOISE = "TUBEARCHIVE_DENOISE"
 ENV_DENOISE_LEVEL = "TUBEARCHIVE_DENOISE_LEVEL"
+ENV_NORMALIZE_AUDIO = "TUBEARCHIVE_NORMALIZE_AUDIO"
 
 # YYYYMMDD 패턴 (파일명 시작 부분)
 DATE_PATTERN = re.compile(r"^(\d{4})(\d{2})(\d{2})\s*(.*)$")
@@ -200,6 +201,14 @@ def get_default_denoise_level() -> str | None:
     return None
 
 
+def get_default_normalize_audio() -> bool:
+    """환경 변수에서 기본 normalize_audio 여부 가져오기."""
+    env_val = os.environ.get(ENV_NORMALIZE_AUDIO)
+    if env_val is None:
+        return False
+    return _parse_env_bool(env_val)
+
+
 @dataclass
 class ValidatedArgs:
     """검증된 CLI 인자."""
@@ -212,6 +221,7 @@ class ValidatedArgs:
     dry_run: bool
     denoise: bool = False
     denoise_level: str = "medium"
+    normalize_audio: bool = False
     upload: bool = False
     parallel: int = 1
     thumbnail: bool = False
@@ -326,7 +336,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--upload-privacy",
         type=str,
-        default="unlisted",
+        default=None,
         choices=["public", "unlisted", "private"],
         help="YouTube 공개 설정 (기본: unlisted)",
     )
@@ -387,6 +397,26 @@ def create_parser() -> argparse.ArgumentParser:
         choices=["light", "medium", "heavy"],
         default=None,
         help="노이즈 제거 강도 (light/medium/heavy, 기본: medium)",
+    )
+
+    parser.add_argument(
+        "--normalize-audio",
+        action="store_true",
+        help="EBU R128 오디오 라우드니스 정규화 활성화 (loudnorm 2-pass)",
+    )
+
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="설정 파일 경로 (기본: ~/.tubearchive/config.toml)",
+    )
+
+    parser.add_argument(
+        "--init-config",
+        action="store_true",
+        help="기본 설정 파일(config.toml) 생성",
     )
 
     parser.add_argument(
@@ -507,6 +537,9 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     if env_denoise_level is not None or env_denoise:
         denoise_flag = True
 
+    # normalize_audio 설정 (CLI 인자 > 환경 변수 > 기본값)
+    normalize_audio = bool(getattr(args, "normalize_audio", False)) or get_default_normalize_audio()
+
     # 썸네일 옵션 검증
     thumbnail = getattr(args, "thumbnail", False)
     thumbnail_at: list[str] | None = getattr(args, "thumbnail_at", None)
@@ -528,6 +561,7 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         dry_run=args.dry_run,
         denoise=denoise_flag,
         denoise_level=resolved_denoise_level,
+        normalize_audio=normalize_audio,
         upload=upload,
         parallel=parallel,
         thumbnail=thumbnail,
@@ -1784,16 +1818,54 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
         file_path=output_path,
         title=title,
         description=description,
+        privacy=args.upload_privacy,
         merge_job_id=merge_job_id,
         playlist_ids=playlist_ids,
         chunk_mb=args.upload_chunk,
     )
 
 
+def cmd_init_config() -> None:
+    """
+    --init-config 옵션 처리.
+
+    기본 설정 파일(config.toml) 템플릿을 생성합니다.
+    """
+    from tubearchive.config import generate_default_config, get_default_config_path
+
+    config_path = get_default_config_path()
+
+    if config_path.exists():
+        response = safe_input(f"이미 존재합니다: {config_path}\n덮어쓰시겠습니까? (y/N): ")
+        if response.lower() not in ("y", "yes"):
+            print("취소됨")
+            return
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(generate_default_config())
+    print(f"설정 파일 생성됨: {config_path}")
+
+
 def main() -> None:
     """CLI 진입점."""
     parser = create_parser()
     args = parser.parse_args()
+
+    # --init-config 처리 (가장 먼저, 로깅/설정 로드 전)
+    if args.init_config:
+        cmd_init_config()
+        return
+
+    # 설정 파일 로드 및 환경변수 적용
+    from tubearchive.config import apply_config_to_env, load_config
+
+    config_path = Path(args.config) if args.config else None
+    config = load_config(config_path)
+    apply_config_to_env(config)
+
+    # upload_privacy: CLI > config > "unlisted"
+    if args.upload_privacy is None:
+        args.upload_privacy = config.youtube.upload_privacy or "unlisted"
 
     setup_logging(args.verbose)
 

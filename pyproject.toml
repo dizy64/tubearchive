@@ -44,8 +44,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105"]  # assert는 pytest 표준, 테스트 fixture의 token/secret 값
+"tests/**" = ["S101", "S105", "S106", "S108"]  # assert, fixture token/secret, /tmp 경로
 "tubearchive/youtube/auth.py" = ["S105"]  # 환경변수명에 TOKEN 포함 (false positive)
+"tubearchive/config.py" = ["S105"]  # 환경변수명에 TOKEN 포함 (false positive)
 
 [tool.mypy]
 python_version = "3.14"
