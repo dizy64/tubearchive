@@ -12,7 +12,12 @@ from tubearchive.core.detector import detect_metadata
 from tubearchive.database.repository import TranscodingJobRepository, VideoRepository
 from tubearchive.database.resume import ResumeManager
 from tubearchive.database.schema import init_database
-from tubearchive.ffmpeg.effects import create_combined_filter
+from tubearchive.ffmpeg.effects import (
+    LoudnormAnalysis,
+    create_combined_filter,
+    create_loudnorm_analysis_filter,
+    parse_loudnorm_stats,
+)
 from tubearchive.ffmpeg.executor import FFmpegError, FFmpegExecutor
 from tubearchive.ffmpeg.profiles import PROFILE_SDR, EncodingProfile, get_fallback_profile
 from tubearchive.models.job import JobStatus
@@ -137,6 +142,17 @@ class Transcoder:
 
     # ---------- 공개 API ----------
 
+    def _run_loudnorm_analysis(self, video_file: VideoFile) -> LoudnormAnalysis:
+        """loudnorm 1st pass: 오디오 라우드니스 분석."""
+        analysis_filter = create_loudnorm_analysis_filter()
+        cmd = self.executor.build_loudness_analysis_command(
+            input_path=video_file.path,
+            audio_filter=analysis_filter,
+        )
+        logger.info("Running loudnorm analysis pass")
+        stderr = self.executor.run_analysis(cmd)
+        return parse_loudnorm_stats(stderr)
+
     def transcode_video(
         self,
         video_file: VideoFile,
@@ -145,6 +161,7 @@ class Transcoder:
         fade_duration: float = 0.5,
         denoise: bool = False,
         denoise_level: str = "medium",
+        normalize_audio: bool = False,
         progress_info_callback: Callable[[ProgressInfo], None] | None = None,
     ) -> tuple[Path, int]:
         """
@@ -157,6 +174,7 @@ class Transcoder:
             fade_duration: 페이드 지속 시간
             denoise: 오디오 노이즈 제거 활성화 여부
             denoise_level: 노이즈 제거 강도 (light/medium/heavy)
+            normalize_audio: EBU R128 오디오 정규화 활성화 여부
             progress_info_callback: 상세 진행률 콜백 (UI 업데이트용)
 
         Returns:
@@ -192,7 +210,20 @@ class Transcoder:
         self.job_repo.update_status(job_id, JobStatus.PROCESSING)
         self.resume_mgr.set_temp_file(job_id, output_path)
 
-        # 5. 프로파일 및 필터 준비 (항상 SDR, HDR은 필터에서 변환)
+        # 5. loudnorm 분석 (활성화된 경우, 트랜스코딩 전에 실행)
+        loudnorm_analysis: LoudnormAnalysis | None = None
+        if normalize_audio:
+            try:
+                loudnorm_analysis = self._run_loudnorm_analysis(video_file)
+                logger.info(
+                    f"Loudnorm: I={loudnorm_analysis.input_i:.1f}dB "
+                    f"TP={loudnorm_analysis.input_tp:.1f}dB "
+                    f"LRA={loudnorm_analysis.input_lra:.1f}"
+                )
+            except (FFmpegError, ValueError) as e:
+                logger.warning(f"Loudnorm analysis failed, skipping normalization: {e}")
+
+        # 6. 프로파일 및 필터 준비 (항상 SDR, HDR은 필터에서 변환)
         profile = PROFILE_SDR
         logger.info(f"Using profile: {profile.name}")
 
@@ -207,6 +238,7 @@ class Transcoder:
             color_transfer=metadata.color_transfer,
             denoise=denoise,
             denoise_level=denoise_level,
+            loudnorm_analysis=loudnorm_analysis,
         )
 
         # 6. 실행: VideoToolbox → (실패 시) libx265 폴백

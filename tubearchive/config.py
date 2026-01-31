@@ -26,6 +26,7 @@ ENV_YOUTUBE_PLAYLIST = "TUBEARCHIVE_YOUTUBE_PLAYLIST"
 ENV_UPLOAD_CHUNK_MB = "TUBEARCHIVE_UPLOAD_CHUNK_MB"
 ENV_DENOISE = "TUBEARCHIVE_DENOISE"
 ENV_DENOISE_LEVEL = "TUBEARCHIVE_DENOISE_LEVEL"
+ENV_NORMALIZE_AUDIO = "TUBEARCHIVE_NORMALIZE_AUDIO"
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class GeneralConfig:
     db_path: str | None = None
     denoise: bool | None = None
     denoise_level: str | None = None
+    normalize_audio: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,7 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
     db_path: str | None = None
     denoise: bool | None = None
     denoise_level: str | None = None
+    normalize_audio: bool | None = None
 
     raw_output_dir = data.get("output_dir")
     if isinstance(raw_output_dir, str):
@@ -114,12 +117,19 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
     elif raw_denoise_level is not None:
         _warn_type("general.denoise_level", "str", raw_denoise_level)
 
+    raw_normalize_audio = data.get("normalize_audio")
+    if isinstance(raw_normalize_audio, bool):
+        normalize_audio = raw_normalize_audio
+    elif raw_normalize_audio is not None:
+        _warn_type("general.normalize_audio", "bool", raw_normalize_audio)
+
     return GeneralConfig(
         output_dir=output_dir,
         parallel=parallel,
         db_path=db_path,
         denoise=denoise,
         denoise_level=denoise_level,
+        normalize_audio=normalize_audio,
     )
 
 
@@ -255,11 +265,13 @@ def apply_config_to_env(config: AppConfig) -> None:
     if config.youtube.upload_chunk_mb is not None:
         mappings.append((ENV_UPLOAD_CHUNK_MB, str(config.youtube.upload_chunk_mb)))
 
-    # denoise (bool → "true"/"false")
+    # bool → "true"/"false"
     if config.general.denoise is not None:
         mappings.append((ENV_DENOISE, str(config.general.denoise).lower()))
     if config.general.denoise_level is not None:
         mappings.append((ENV_DENOISE_LEVEL, config.general.denoise_level))
+    if config.general.normalize_audio is not None:
+        mappings.append((ENV_NORMALIZE_AUDIO, str(config.general.normalize_audio).lower()))
 
     # playlist: list → CSV
     if config.youtube.playlist:
@@ -285,6 +297,7 @@ def generate_default_config() -> str:
 # db_path = "~/.tubearchive/tubearchive.db" # TUBEARCHIVE_DB_PATH
 # denoise = false                           # TUBEARCHIVE_DENOISE
 # denoise_level = "medium"                  # light/medium/heavy (TUBEARCHIVE_DENOISE_LEVEL)
+# normalize_audio = false                   # EBU R128 loudnorm (TUBEARCHIVE_NORMALIZE_AUDIO)
 
 [youtube]
 # client_secrets = "~/.tubearchive/client_secrets.json"

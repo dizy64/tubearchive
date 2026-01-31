@@ -1,8 +1,11 @@
 """FFmpeg 실행기 테스트."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from tubearchive.ffmpeg.executor import (
+    FFmpegError,
     FFmpegExecutor,
     parse_progress_line,
 )
@@ -148,3 +151,96 @@ class TestFFmpegExecutor:
         )
 
         assert percent == 0
+
+
+class TestBuildLoudnessAnalysisCommand:
+    """build_loudness_analysis_command 테스트."""
+
+    def test_command_structure(self) -> None:
+        """명령어 기본 구조: -i, -af, -vn, -f null os.devnull."""
+        import os
+        from pathlib import Path
+
+        executor = FFmpegExecutor()
+        cmd = executor.build_loudness_analysis_command(
+            input_path=Path("/test/input.mp4"),
+            audio_filter="loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json",
+        )
+        assert cmd[0] == "ffmpeg"
+        assert "-i" in cmd
+        assert "/test/input.mp4" in cmd
+        assert "-af" in cmd
+        assert "-vn" in cmd
+        assert "-f" in cmd
+        assert "null" in cmd
+        assert os.devnull in cmd
+
+    def test_audio_filter_placement(self) -> None:
+        """-af 뒤에 필터 문자열 위치."""
+        from pathlib import Path
+
+        executor = FFmpegExecutor()
+        audio_filter = "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json"
+        cmd = executor.build_loudness_analysis_command(
+            input_path=Path("/test/input.mp4"),
+            audio_filter=audio_filter,
+        )
+        af_index = cmd.index("-af")
+        assert cmd[af_index + 1] == audio_filter
+
+    def test_no_video_output(self) -> None:
+        """-vn으로 비디오 출력 없음."""
+        import os
+        from pathlib import Path
+
+        executor = FFmpegExecutor()
+        cmd = executor.build_loudness_analysis_command(
+            input_path=Path("/test/input.mp4"),
+            audio_filter="loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json",
+        )
+        assert "-vn" in cmd
+        null_index = cmd.index("-f")
+        assert cmd[null_index + 1] == "null"
+        assert cmd[null_index + 2] == os.devnull
+
+    def test_custom_ffmpeg_path(self) -> None:
+        """커스텀 ffmpeg 경로."""
+        from pathlib import Path
+
+        executor = FFmpegExecutor(ffmpeg_path="/usr/local/bin/ffmpeg")
+        cmd = executor.build_loudness_analysis_command(
+            input_path=Path("/test/input.mp4"),
+            audio_filter="loudnorm=I=-14:print_format=json",
+        )
+        assert cmd[0] == "/usr/local/bin/ffmpeg"
+
+
+class TestRunAnalysis:
+    """run_analysis 테스트."""
+
+    def test_returns_stderr_on_success(self) -> None:
+        """성공 시 stderr 전체 반환."""
+        executor = FFmpegExecutor()
+        expected_stderr = '{"input_i": "-20.0"}'
+
+        with patch("tubearchive.ffmpeg.executor.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stderr=expected_stderr,
+                stdout="",
+            )
+            result = executor.run_analysis(["ffmpeg", "-i", "test.mp4"])
+            assert result == expected_stderr
+
+    def test_raises_on_failure(self) -> None:
+        """실패 시 FFmpegError 발생."""
+        executor = FFmpegExecutor()
+
+        with patch("tubearchive.ffmpeg.executor.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=1,
+                stderr="Error: no audio stream",
+                stdout="",
+            )
+            with pytest.raises(FFmpegError, match="exit code 1"):
+                executor.run_analysis(["ffmpeg", "-i", "test.mp4"])

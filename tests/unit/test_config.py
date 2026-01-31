@@ -389,6 +389,7 @@ class TestGenerateDefaultConfig:
             "db_path",
             "denoise",
             "denoise_level",
+            "normalize_audio",
             "client_secrets",
             "token",
             "playlist",
@@ -540,6 +541,102 @@ denoise_level = "{level}"
 """)
             config = load_config(config_file)
             assert config.general.denoise_level == level
+
+
+class TestNormalizeAudioConfig:
+    """normalize_audio 설정 테스트."""
+
+    def test_loads_normalize_audio_true(self, tmp_path: Path) -> None:
+        """normalize_audio=true 파싱."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[general]
+normalize_audio = true
+""")
+        config = load_config(config_file)
+
+        assert config.general.normalize_audio is True
+
+    def test_loads_normalize_audio_false(self, tmp_path: Path) -> None:
+        """normalize_audio=false 파싱."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[general]
+normalize_audio = false
+""")
+        config = load_config(config_file)
+
+        assert config.general.normalize_audio is False
+
+    def test_normalize_audio_default_none(self, tmp_path: Path) -> None:
+        """미설정 시 None."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[general]
+parallel = 2
+""")
+        config = load_config(config_file)
+
+        assert config.general.normalize_audio is None
+
+    def test_normalize_audio_type_error(self, tmp_path: Path) -> None:
+        """normalize_audio="yes" → 타입 경고 + None."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[general]
+normalize_audio = "yes"
+""")
+        config = load_config(config_file)
+
+        assert config.general.normalize_audio is None
+
+    def test_normalize_audio_env_injection(self) -> None:
+        """apply_config_to_env로 환경변수 주입 확인."""
+        config = AppConfig(
+            general=GeneralConfig(normalize_audio=True),
+        )
+
+        saved = os.environ.pop("TUBEARCHIVE_NORMALIZE_AUDIO", None)
+        try:
+            apply_config_to_env(config)
+            assert os.environ.get("TUBEARCHIVE_NORMALIZE_AUDIO") == "true"
+        finally:
+            os.environ.pop("TUBEARCHIVE_NORMALIZE_AUDIO", None)
+            if saved is not None:
+                os.environ["TUBEARCHIVE_NORMALIZE_AUDIO"] = saved
+
+    def test_normalize_audio_env_preserves_existing(self) -> None:
+        """기존 환경변수 미덮어쓰기."""
+        config = AppConfig(
+            general=GeneralConfig(normalize_audio=True),
+        )
+
+        saved = os.environ.get("TUBEARCHIVE_NORMALIZE_AUDIO")
+        os.environ["TUBEARCHIVE_NORMALIZE_AUDIO"] = "false"
+
+        try:
+            apply_config_to_env(config)
+            assert os.environ.get("TUBEARCHIVE_NORMALIZE_AUDIO") == "false"
+        finally:
+            if saved is not None:
+                os.environ["TUBEARCHIVE_NORMALIZE_AUDIO"] = saved
+            else:
+                os.environ.pop("TUBEARCHIVE_NORMALIZE_AUDIO", None)
+
+    def test_normalize_audio_false_env_injection(self) -> None:
+        """normalize_audio=False → "false" 주입."""
+        config = AppConfig(
+            general=GeneralConfig(normalize_audio=False),
+        )
+
+        saved = os.environ.pop("TUBEARCHIVE_NORMALIZE_AUDIO", None)
+        try:
+            apply_config_to_env(config)
+            assert os.environ.get("TUBEARCHIVE_NORMALIZE_AUDIO") == "false"
+        finally:
+            os.environ.pop("TUBEARCHIVE_NORMALIZE_AUDIO", None)
+            if saved is not None:
+                os.environ["TUBEARCHIVE_NORMALIZE_AUDIO"] = saved
 
 
 class TestConfigValidation:
