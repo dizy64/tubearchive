@@ -6,8 +6,12 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tubearchive.utils.progress import format_size
+
+if TYPE_CHECKING:
+    from tubearchive.core.grouper import FileSequenceGroup
 
 
 def format_timestamp(seconds: float) -> str:
@@ -69,20 +73,25 @@ def extract_topic_from_path(path: Path) -> tuple[str | None, str]:
     return None, dir_name
 
 
-def generate_chapters(clips: list[tuple[str, float]]) -> list[tuple[str, str]]:
+def generate_chapters(
+    clips: list[tuple[str, float]],
+    groups: list[FileSequenceGroup] | None = None,
+) -> list[tuple[str, str]]:
     """
     YouTube 챕터 목록 생성.
 
     Args:
         clips: (파일명, 길이 초) 튜플 리스트
+        groups: 그룹 정보 (있으면 연속 파일을 하나의 챕터로 합침)
 
     Returns:
         (타임스탬프, 제목) 튜플 리스트
     """
     chapters: list[tuple[str, str]] = []
     current_time = 0.0
+    aggregated = _aggregate_clips_for_chapters(clips, groups)
 
-    for filename, duration in clips:
+    for filename, duration in aggregated:
         # 확장자 제거
         title = Path(filename).stem
         timestamp = format_timestamp(current_time)
@@ -90,6 +99,52 @@ def generate_chapters(clips: list[tuple[str, float]]) -> list[tuple[str, str]]:
         current_time += duration
 
     return chapters
+
+
+def _aggregate_clips_for_chapters(
+    clips: list[tuple[str, float]],
+    groups: list[FileSequenceGroup] | None,
+) -> list[tuple[str, float]]:
+    """그룹 정보를 바탕으로 챕터용 클립을 병합한다."""
+    if not groups:
+        return clips
+
+    grouped_files: dict[str, str] = {}
+    for group in groups:
+        if len(group.files) <= 1:
+            continue
+        for vf in group.files:
+            grouped_files[vf.path.name] = group.group_id
+
+    aggregated: list[tuple[str, float]] = []
+    current_group: str | None = None
+    current_title: str | None = None
+    current_duration = 0.0
+
+    for filename, duration in clips:
+        group_id = grouped_files.get(filename)
+        if group_id is None:
+            if current_group:
+                aggregated.append((current_title or filename, current_duration))
+                current_group = None
+                current_title = None
+                current_duration = 0.0
+            aggregated.append((filename, duration))
+            continue
+
+        if group_id != current_group:
+            if current_group:
+                aggregated.append((current_title or filename, current_duration))
+            current_group = group_id
+            current_title = filename
+            current_duration = duration
+        else:
+            current_duration += duration
+
+    if current_group:
+        aggregated.append((current_title or "", current_duration))
+
+    return aggregated
 
 
 @dataclass
@@ -239,6 +294,7 @@ def generate_summary_markdown(info: OutputInfo) -> str:
 
 def generate_clip_summary(
     video_clips: list[tuple[str, float, str | None, str | None]],
+    groups: list[FileSequenceGroup] | None = None,
 ) -> str:
     """
     클립 정보 요약 생성 (기종, 촬영시간, 타임스탬프).
@@ -270,7 +326,11 @@ def generate_clip_summary(
     lines.append("")
     lines.append("```")
     current_time = 0.0
-    for filename, duration, _, _ in video_clips:
+    aggregated = _aggregate_clips_for_chapters(
+        [(filename, duration) for filename, duration, _, _ in video_clips],
+        groups,
+    )
+    for filename, duration in aggregated:
         timestamp = format_timestamp(current_time)
         clip_name = Path(filename).stem
         lines.append(f"{timestamp} {clip_name}")
@@ -282,6 +342,7 @@ def generate_clip_summary(
 
 def generate_youtube_description(
     video_clips: list[tuple[str, float, str | None, str | None]],
+    groups: list[FileSequenceGroup] | None = None,
 ) -> str:
     """
     YouTube 설명용 타임스탬프 생성.
@@ -298,7 +359,11 @@ def generate_youtube_description(
 
     # 타임스탬프
     current_time = 0.0
-    for filename, duration, _, _ in video_clips:
+    aggregated = _aggregate_clips_for_chapters(
+        [(filename, duration) for filename, duration, _, _ in video_clips],
+        groups,
+    )
+    for filename, duration in aggregated:
         timestamp = format_timestamp(current_time)
         clip_name = Path(filename).stem
         lines.append(f"{timestamp} {clip_name}")

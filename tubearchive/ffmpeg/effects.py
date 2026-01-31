@@ -116,81 +116,99 @@ def create_portrait_layout_filter(
 
 def _calculate_fade_params(
     total_duration: float,
-    fade_duration: float = 0.5,
-) -> tuple[float, float]:
+    fade_in_duration: float = 0.5,
+    fade_out_duration: float = 0.5,
+) -> tuple[float, float, float]:
     """
     Fade 파라미터 계산 (짧은 영상 처리).
 
     Args:
         total_duration: 영상 전체 길이 (초)
-        fade_duration: 원하는 페이드 지속 시간 (기본: 0.5초)
+        fade_in_duration: Fade In 지속 시간 (기본: 0.5초)
+        fade_out_duration: Fade Out 지속 시간 (기본: 0.5초)
 
     Returns:
-        (effective_fade_duration, fade_out_start) 튜플
-        - 영상이 충분히 길면: (fade_duration, total_duration - fade_duration)
-        - 영상이 짧으면: fade를 비례 축소하거나 0으로 설정
+        (effective_fade_in, effective_fade_out, fade_out_start) 튜플
     """
-    # 최소 요구 길이: fade_in + fade_out (겹치지 않게)
-    min_duration_for_full_fade = fade_duration * 2
+    fade_in = max(fade_in_duration, 0.0)
+    fade_out = max(fade_out_duration, 0.0)
+    total_fade = fade_in + fade_out
 
-    if total_duration >= min_duration_for_full_fade:
-        # 충분히 긴 영상: 정상 fade 적용
-        return fade_duration, total_duration - fade_duration
-    elif total_duration > 0.1:  # 0.1초 이상이면 축소된 fade 적용
-        # 짧은 영상: fade를 비례 축소 (겹치지 않도록)
-        effective_fade = total_duration / 2
-        return effective_fade, total_duration - effective_fade
+    if total_duration <= 0.1 or total_fade <= 0:
+        return 0.0, 0.0, 0.0
+
+    if total_duration >= total_fade:
+        effective_in = fade_in
+        effective_out = fade_out
     else:
-        # 매우 짧은 영상 (0.1초 미만): fade 생략
-        return 0.0, 0.0
+        scale = total_duration / total_fade
+        effective_in = fade_in * scale
+        effective_out = fade_out * scale
+
+    fade_out_start = max(total_duration - effective_out, 0.0)
+    return effective_in, effective_out, fade_out_start
 
 
 def create_dip_to_black_video_filter(
     total_duration: float,
-    fade_duration: float = 0.5,
+    fade_in_duration: float = 0.5,
+    fade_out_duration: float = 0.5,
 ) -> str:
     """
     Dip-to-Black 비디오 필터 (Fade In/Out).
 
     Args:
         total_duration: 영상 전체 길이 (초)
-        fade_duration: 페이드 지속 시간 (기본: 0.5초)
+        fade_in_duration: Fade In 지속 시간 (기본: 0.5초)
+        fade_out_duration: Fade Out 지속 시간 (기본: 0.5초)
 
     Returns:
         FFmpeg -vf 필터 문자열
     """
-    effective_fade, fade_out_start = _calculate_fade_params(total_duration, fade_duration)
+    effective_in, effective_out, fade_out_start = _calculate_fade_params(
+        total_duration,
+        fade_in_duration,
+        fade_out_duration,
+    )
 
-    if effective_fade <= 0:
-        # fade 생략 (매우 짧은 영상)
-        return ""
+    filters: list[str] = []
+    if effective_in > 0:
+        filters.append(f"fade=t=in:st=0:d={effective_in}")
+    if effective_out > 0:
+        filters.append(f"fade=t=out:st={fade_out_start}:d={effective_out}")
 
-    # fade=in:0:d=0.5,fade=out:st=119.5:d=0.5
-    return f"fade=t=in:st=0:d={effective_fade},fade=t=out:st={fade_out_start}:d={effective_fade}"
+    return ",".join(filters)
 
 
 def create_dip_to_black_audio_filter(
     total_duration: float,
-    fade_duration: float = 0.5,
+    fade_in_duration: float = 0.5,
+    fade_out_duration: float = 0.5,
 ) -> str:
     """
     Dip-to-Black 오디오 필터 (Audio Fade In/Out).
 
     Args:
         total_duration: 영상 전체 길이 (초)
-        fade_duration: 페이드 지속 시간 (기본: 0.5초)
+        fade_in_duration: Fade In 지속 시간 (기본: 0.5초)
+        fade_out_duration: Fade Out 지속 시간 (기본: 0.5초)
 
     Returns:
         FFmpeg -af 필터 문자열
     """
-    effective_fade, fade_out_start = _calculate_fade_params(total_duration, fade_duration)
+    effective_in, effective_out, fade_out_start = _calculate_fade_params(
+        total_duration,
+        fade_in_duration,
+        fade_out_duration,
+    )
 
-    if effective_fade <= 0:
-        # fade 생략 (매우 짧은 영상)
-        return ""
+    filters: list[str] = []
+    if effective_in > 0:
+        filters.append(f"afade=t=in:st=0:d={effective_in}")
+    if effective_out > 0:
+        filters.append(f"afade=t=out:st={fade_out_start}:d={effective_out}")
 
-    # afade=t=in:st=0:d=0.5,afade=t=out:st=119.5:d=0.5
-    return f"afade=t=in:st=0:d={effective_fade},afade=t=out:st={fade_out_start}:d={effective_fade}"
+    return ",".join(filters)
 
 
 def create_denoise_audio_filter(level: str = "medium") -> str:
@@ -290,6 +308,8 @@ def parse_loudnorm_stats(ffmpeg_output: str) -> LoudnormAnalysis:
 def create_audio_filter_chain(
     total_duration: float,
     fade_duration: float = 0.5,
+    fade_in_duration: float | None = None,
+    fade_out_duration: float | None = None,
     denoise: bool = False,
     denoise_level: str = "medium",
     loudnorm_analysis: LoudnormAnalysis | None = None,
@@ -303,7 +323,13 @@ def create_audio_filter_chain(
     if denoise:
         filters.append(create_denoise_audio_filter(denoise_level))
 
-    fade_filter = create_dip_to_black_audio_filter(total_duration, fade_duration)
+    effective_fade_in = fade_duration if fade_in_duration is None else fade_in_duration
+    effective_fade_out = fade_duration if fade_out_duration is None else fade_out_duration
+    fade_filter = create_dip_to_black_audio_filter(
+        total_duration,
+        effective_fade_in,
+        effective_fade_out,
+    )
     if fade_filter:
         filters.append(fade_filter)
 
@@ -417,6 +443,8 @@ def create_combined_filter(
     target_width: int = 3840,
     target_height: int = 2160,
     fade_duration: float = 0.5,
+    fade_in_duration: float | None = None,
+    fade_out_duration: float | None = None,
     blur_radius: int = 20,
     color_transfer: str | None = None,
     stabilize_filter: str = "",
@@ -434,7 +462,9 @@ def create_combined_filter(
         is_portrait: 세로 영상 여부
         target_width: 타겟 너비 (기본: 3840)
         target_height: 타겟 높이 (기본: 2160)
-        fade_duration: 페이드 지속 시간 (기본: 0.5초)
+        fade_duration: 페이드 기본 지속 시간 (기본: 0.5초)
+        fade_in_duration: Fade In 지속 시간 (None이면 fade_duration 사용)
+        fade_out_duration: Fade Out 지속 시간 (None이면 fade_duration 사용)
         blur_radius: 배경 블러 반경 (기본: 20)
         color_transfer: 소스 영상의 color_transfer (HDR 변환 판단용)
         stabilize_filter: vidstabtransform 필터 문자열 (빈 문자열이면 미적용)
@@ -445,14 +475,21 @@ def create_combined_filter(
     Returns:
         (video_filter, audio_filter) 튜플
     """
-    effective_fade, fade_out_start = _calculate_fade_params(total_duration, fade_duration)
+    effective_fade_in = fade_duration if fade_in_duration is None else fade_in_duration
+    effective_fade_out = fade_duration if fade_out_duration is None else fade_out_duration
+    effective_fade_in, effective_fade_out, fade_out_start = _calculate_fade_params(
+        total_duration,
+        effective_fade_in,
+        effective_fade_out,
+    )
     hdr_filter = create_hdr_to_sdr_filter(color_transfer)
 
     fade_filters = ""
-    if effective_fade > 0:
-        fade_filters = (
-            f"fade=t=in:st=0:d={effective_fade},fade=t=out:st={fade_out_start}:d={effective_fade}"
-        )
+    if effective_fade_in > 0:
+        fade_filters = f"fade=t=in:st=0:d={effective_fade_in}"
+    if effective_fade_out > 0:
+        fade_out_filter = f"fade=t=out:st={fade_out_start}:d={effective_fade_out}"
+        fade_filters = ",".join(filter(None, [fade_filters, fade_out_filter]))
 
     if is_portrait:
         video_filter = _build_portrait_video_filter(
@@ -477,6 +514,8 @@ def create_combined_filter(
     audio_filter = create_audio_filter_chain(
         total_duration=total_duration,
         fade_duration=fade_duration,
+        fade_in_duration=fade_in_duration,
+        fade_out_duration=fade_out_duration,
         denoise=denoise,
         denoise_level=denoise_level,
         loudnorm_analysis=loudnorm_analysis,

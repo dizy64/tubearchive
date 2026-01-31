@@ -761,7 +761,7 @@ wheels = [
 
 [[package]]
 name = "tubearchive"
-version = "0.2.24"
+version = "0.2.25"
 source = { editable = "." }
 dependencies = [
     { name = "google-api-python-client" },

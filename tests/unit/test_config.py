@@ -41,6 +41,8 @@ class TestLoadConfigNormal:
 output_dir = "/tmp/output"
 parallel = 4
 db_path = "/tmp/test.db"
+group_sequences = true
+fade_duration = 0.75
 
 [youtube]
 client_secrets = "/tmp/secrets.json"
@@ -54,6 +56,8 @@ upload_privacy = "private"
         assert config.general.output_dir == "/tmp/output"
         assert config.general.parallel == 4
         assert config.general.db_path == "/tmp/test.db"
+        assert config.general.group_sequences is True
+        assert config.general.fade_duration == 0.75
         assert config.youtube.client_secrets == "/tmp/secrets.json"
         assert config.youtube.token == "/tmp/token.json"
         assert config.youtube.playlist == ["PL111", "PL222"]
@@ -177,6 +181,8 @@ foo = "bar"
             "TUBEARCHIVE_YOUTUBE_TOKEN",
             "TUBEARCHIVE_YOUTUBE_PLAYLIST",
             "TUBEARCHIVE_UPLOAD_CHUNK_MB",
+            "TUBEARCHIVE_GROUP_SEQUENCES",
+            "TUBEARCHIVE_FADE_DURATION",
         ):
             if key not in env_snapshot:
                 assert key not in os.environ, f"{key} should not be set"
@@ -276,6 +282,8 @@ class TestApplyConfigToEnv:
                 output_dir="/tmp/out",
                 parallel=4,
                 db_path="/tmp/db.sqlite",
+                group_sequences=False,
+                fade_duration=0.25,
             ),
             youtube=YouTubeConfig(
                 client_secrets="/tmp/secrets.json",
@@ -294,6 +302,8 @@ class TestApplyConfigToEnv:
             "TUBEARCHIVE_YOUTUBE_TOKEN",
             "TUBEARCHIVE_YOUTUBE_PLAYLIST",
             "TUBEARCHIVE_UPLOAD_CHUNK_MB",
+            "TUBEARCHIVE_GROUP_SEQUENCES",
+            "TUBEARCHIVE_FADE_DURATION",
         ]
         saved = {}
         for key in env_keys:
@@ -309,6 +319,8 @@ class TestApplyConfigToEnv:
             assert os.environ.get("TUBEARCHIVE_YOUTUBE_TOKEN") == "/tmp/token.json"
             assert os.environ.get("TUBEARCHIVE_YOUTUBE_PLAYLIST") == "PL111,PL222"
             assert os.environ.get("TUBEARCHIVE_UPLOAD_CHUNK_MB") == "64"
+            assert os.environ.get("TUBEARCHIVE_GROUP_SEQUENCES") == "false"
+            assert os.environ.get("TUBEARCHIVE_FADE_DURATION") == "0.25"
         finally:
             # 환경변수 복원
             for key in env_keys:
@@ -390,6 +402,8 @@ class TestGenerateDefaultConfig:
             "denoise",
             "denoise_level",
             "normalize_audio",
+            "group_sequences",
+            "fade_duration",
             "client_secrets",
             "token",
             "playlist",

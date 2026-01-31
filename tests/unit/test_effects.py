@@ -97,7 +97,8 @@ class TestDipToBlackVideoFilter:
         """Fade In/Out 포함 확인."""
         filter_str = create_dip_to_black_video_filter(
             total_duration=120.0,
-            fade_duration=0.5,
+            fade_in_duration=0.5,
+            fade_out_duration=0.5,
         )
 
         assert "fade=in" in filter_str or "fade=t=in" in filter_str
@@ -107,7 +108,8 @@ class TestDipToBlackVideoFilter:
         """Fade 지속 시간 적용."""
         filter_str = create_dip_to_black_video_filter(
             total_duration=120.0,
-            fade_duration=0.5,
+            fade_in_duration=0.5,
+            fade_out_duration=0.5,
         )
 
         # fade duration 파라미터
@@ -117,7 +119,8 @@ class TestDipToBlackVideoFilter:
         """Fade Out 시작 위치 (duration - fade)."""
         filter_str = create_dip_to_black_video_filter(
             total_duration=120.0,
-            fade_duration=0.5,
+            fade_in_duration=0.5,
+            fade_out_duration=0.5,
         )
 
         # fade out 시작: 120 - 0.5 = 119.5
@@ -127,7 +130,8 @@ class TestDipToBlackVideoFilter:
         """커스텀 fade 지속 시간."""
         filter_str = create_dip_to_black_video_filter(
             total_duration=60.0,
-            fade_duration=1.0,
+            fade_in_duration=1.0,
+            fade_out_duration=1.0,
         )
 
         assert "d=1.0" in filter_str
@@ -142,7 +146,8 @@ class TestDipToBlackAudioFilter:
         """Audio Fade In/Out 포함 확인."""
         filter_str = create_dip_to_black_audio_filter(
             total_duration=120.0,
-            fade_duration=0.5,
+            fade_in_duration=0.5,
+            fade_out_duration=0.5,
         )
 
         assert "afade=t=in" in filter_str
@@ -152,7 +157,8 @@ class TestDipToBlackAudioFilter:
         """Audio Fade 지속 시간 적용."""
         filter_str = create_dip_to_black_audio_filter(
             total_duration=120.0,
-            fade_duration=0.5,
+            fade_in_duration=0.5,
+            fade_out_duration=0.5,
         )
 
         assert "d=0.5" in filter_str
@@ -161,7 +167,8 @@ class TestDipToBlackAudioFilter:
         """Audio Fade Out 시작 위치."""
         filter_str = create_dip_to_black_audio_filter(
             total_duration=120.0,
-            fade_duration=0.5,
+            fade_in_duration=0.5,
+            fade_out_duration=0.5,
         )
 
         # afade out 시작: 120 - 0.5 = 119.5
@@ -293,41 +300,45 @@ class TestShortVideoDurationHandling:
 
     def test_calculate_fade_params_normal_duration(self) -> None:
         """일반 영상: 정상 fade 적용."""
-        effective_fade, fade_out_start = _calculate_fade_params(120.0, 0.5)
+        effective_in, effective_out, fade_out_start = _calculate_fade_params(120.0, 0.5, 0.5)
 
-        assert effective_fade == 0.5
+        assert effective_in == 0.5
+        assert effective_out == 0.5
         assert fade_out_start == 119.5
 
     def test_calculate_fade_params_short_video(self) -> None:
         """짧은 영상 (0.5초 미만): fade 축소."""
         # 0.3초 영상 → fade를 0.15초로 축소
-        effective_fade, fade_out_start = _calculate_fade_params(0.3, 0.5)
+        effective_in, effective_out, fade_out_start = _calculate_fade_params(0.3, 0.5, 0.5)
 
-        assert effective_fade == 0.15  # 0.3 / 2
+        assert effective_in == 0.15
+        assert effective_out == 0.15
         assert fade_out_start == 0.15  # 0.3 - 0.15
         assert fade_out_start >= 0  # 음수 방지
 
     def test_calculate_fade_params_very_short_video(self) -> None:
         """매우 짧은 영상 (0.1초 미만): fade 생략."""
-        effective_fade, fade_out_start = _calculate_fade_params(0.05, 0.5)
+        effective_in, effective_out, fade_out_start = _calculate_fade_params(0.05, 0.5, 0.5)
 
-        assert effective_fade == 0.0
+        assert effective_in == 0.0
+        assert effective_out == 0.0
         assert fade_out_start == 0.0
 
     def test_calculate_fade_params_gopro_sos_case(self) -> None:
         """GoPro SOS 파일 케이스: ~0.17초 영상."""
         # 실제 에러 케이스: duration=0.166833
-        effective_fade, fade_out_start = _calculate_fade_params(0.166833, 0.5)
+        effective_in, effective_out, fade_out_start = _calculate_fade_params(0.166833, 0.5, 0.5)
 
-        assert effective_fade > 0  # fade 적용됨
+        assert effective_in > 0  # fade 적용됨
+        assert effective_out > 0
         assert fade_out_start >= 0  # 음수 아님
         # 비례 축소: 0.166833 / 2 ≈ 0.083
-        assert abs(effective_fade - 0.0834165) < 0.0001
+        assert abs(effective_in - 0.0834165) < 0.0001
 
     def test_video_filter_short_duration_no_negative_st(self) -> None:
         """짧은 영상에서 음수 st 값 방지."""
         # 0.2초 영상
-        filter_str = create_dip_to_black_video_filter(0.2, 0.5)
+        filter_str = create_dip_to_black_video_filter(0.2, 0.5, 0.5)
 
         # st=-X 패턴이 없어야 함
         assert "st=-" not in filter_str
@@ -337,7 +348,7 @@ class TestShortVideoDurationHandling:
 
     def test_audio_filter_short_duration_no_negative_st(self) -> None:
         """짧은 오디오에서 음수 st 값 방지."""
-        filter_str = create_dip_to_black_audio_filter(0.2, 0.5)
+        filter_str = create_dip_to_black_audio_filter(0.2, 0.5, 0.5)
 
         assert "st=-" not in filter_str
 

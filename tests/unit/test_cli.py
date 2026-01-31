@@ -93,6 +93,25 @@ class TestCreateParser:
 
         assert args.denoise_level == "heavy"
 
+    def test_parses_group_flags(self) -> None:
+        """--group/--no-group 플래그."""
+        parser = create_parser()
+
+        args = parser.parse_args(["--group"])
+        assert args.group is True
+        assert args.no_group is False
+
+        args = parser.parse_args(["--no-group"])
+        assert args.no_group is True
+        assert args.group is False
+
+    def test_parses_fade_duration(self) -> None:
+        """--fade-duration 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(["--fade-duration", "0.75"])
+
+        assert args.fade_duration == 0.75
+
     def test_parses_thumbnail_flag(self) -> None:
         """--thumbnail 플래그."""
         parser = create_parser()
@@ -206,6 +225,26 @@ class TestValidateArgs:
         result = validate_args(args)
 
         assert result.targets == [video_file]
+
+    def test_defaults_for_group_and_fade(self, tmp_path: Path) -> None:
+        """group/fade 기본값 확인."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+        )
+
+        result = validate_args(args)
+
+        assert result.group_sequences is True
+        assert result.fade_duration == 0.5
 
     def test_validates_existing_directory(self, tmp_path: Path) -> None:
         """존재하는 디렉토리 검증."""

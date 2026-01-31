@@ -19,12 +19,18 @@ from threading import Lock
 
 from tubearchive import __version__
 from tubearchive.core.detector import detect_metadata
+from tubearchive.core.grouper import (
+    FileSequenceGroup,
+    compute_fade_map,
+    group_sequences,
+    reorder_with_groups,
+)
 from tubearchive.core.merger import Merger
 from tubearchive.core.scanner import scan_videos
 from tubearchive.core.transcoder import Transcoder
 from tubearchive.database.repository import MergeJobRepository, TranscodingJobRepository
 from tubearchive.database.schema import init_database
-from tubearchive.models.video import VideoFile
+from tubearchive.models.video import FadeConfig, VideoFile
 from tubearchive.utils.progress import MultiProgressBar, ProgressInfo, format_size
 from tubearchive.utils.summary_generator import generate_single_file_description
 
@@ -92,6 +98,8 @@ ENV_PARALLEL = "TUBEARCHIVE_PARALLEL"
 ENV_DENOISE = "TUBEARCHIVE_DENOISE"
 ENV_DENOISE_LEVEL = "TUBEARCHIVE_DENOISE_LEVEL"
 ENV_NORMALIZE_AUDIO = "TUBEARCHIVE_NORMALIZE_AUDIO"
+ENV_GROUP_SEQUENCES = "TUBEARCHIVE_GROUP_SEQUENCES"
+ENV_FADE_DURATION = "TUBEARCHIVE_FADE_DURATION"
 
 # YYYYMMDD 패턴 (파일명 시작 부분)
 DATE_PATTERN = re.compile(r"^(\d{4})(\d{2})(\d{2})\s*(.*)$")
@@ -209,6 +217,30 @@ def get_default_normalize_audio() -> bool:
     return _parse_env_bool(env_val)
 
 
+def get_default_group_sequences() -> bool:
+    """환경 변수에서 기본 그룹핑 여부 가져오기."""
+    env_val = os.environ.get(ENV_GROUP_SEQUENCES)
+    if env_val is None:
+        return True
+    return _parse_env_bool(env_val)
+
+
+def get_default_fade_duration() -> float:
+    """환경 변수에서 기본 페이드 시간 가져오기."""
+    env_val = os.environ.get(ENV_FADE_DURATION)
+    if not env_val:
+        return 0.5
+    try:
+        val = float(env_val)
+    except ValueError:
+        logger.warning(f"{ENV_FADE_DURATION}={env_val} is not a valid number")
+        return 0.5
+    if val < 0:
+        logger.warning(f"{ENV_FADE_DURATION}={env_val} must be >= 0, using 0.5")
+        return 0.5
+    return val
+
+
 @dataclass
 class ValidatedArgs:
     """검증된 CLI 인자."""
@@ -222,6 +254,8 @@ class ValidatedArgs:
     denoise: bool = False
     denoise_level: str = "medium"
     normalize_audio: bool = False
+    group_sequences: bool = True
+    fade_duration: float = 0.5
     upload: bool = False
     parallel: int = 1
     thumbnail: bool = False
@@ -405,6 +439,26 @@ def create_parser() -> argparse.ArgumentParser:
         help="EBU R128 오디오 라우드니스 정규화 활성화 (loudnorm 2-pass)",
     )
 
+    group_toggle = parser.add_mutually_exclusive_group()
+    group_toggle.add_argument(
+        "--group",
+        action="store_true",
+        help=f"연속 파일 시퀀스 그룹핑 활성화 (환경변수: {ENV_GROUP_SEQUENCES})",
+    )
+    group_toggle.add_argument(
+        "--no-group",
+        action="store_true",
+        help="연속 파일 시퀀스 그룹핑 비활성화",
+    )
+
+    parser.add_argument(
+        "--fade-duration",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=f"기본 페이드 시간(초) 설정 (환경변수: {ENV_FADE_DURATION}, 기본: 0.5)",
+    )
+
     parser.add_argument(
         "--config",
         type=str,
@@ -540,6 +594,24 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     # normalize_audio 설정 (CLI 인자 > 환경 변수 > 기본값)
     normalize_audio = bool(getattr(args, "normalize_audio", False)) or get_default_normalize_audio()
 
+    # 그룹핑 설정 (CLI 인자 > 환경 변수 > 기본값)
+    group_flag = bool(getattr(args, "group", False))
+    no_group_flag = bool(getattr(args, "no_group", False))
+    if group_flag:
+        group_sequences = True
+    elif no_group_flag:
+        group_sequences = False
+    else:
+        group_sequences = get_default_group_sequences()
+
+    # fade_duration 설정 (CLI 인자 > 환경 변수 > 기본값)
+    fade_duration_arg = getattr(args, "fade_duration", None)
+    fade_duration = (
+        fade_duration_arg if fade_duration_arg is not None else get_default_fade_duration()
+    )
+    if fade_duration < 0:
+        raise ValueError(f"Fade duration must be >= 0, got: {fade_duration}")
+
     # 썸네일 옵션 검증
     thumbnail = getattr(args, "thumbnail", False)
     thumbnail_at: list[str] | None = getattr(args, "thumbnail_at", None)
@@ -562,6 +634,8 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         denoise=denoise_flag,
         denoise_level=resolved_denoise_level,
         normalize_audio=normalize_audio,
+        group_sequences=group_sequences,
+        fade_duration=fade_duration,
         upload=upload,
         parallel=parallel,
         thumbnail=thumbnail,
@@ -697,14 +771,23 @@ def _transcode_single(
     denoise: bool,
     denoise_level: str,
     normalize_audio: bool = False,
+    fade_map: dict[Path, FadeConfig] | None = None,
+    fade_duration: float = 0.5,
 ) -> TranscodeResult:
     """단일 파일 트랜스코딩 (병렬 처리용, 자체 Transcoder 컨텍스트 사용)."""
+    fade_config = fade_map.get(vf.path) if fade_map else None
+    fade_in = fade_config.fade_in if fade_config else None
+    fade_out = fade_config.fade_out if fade_config else None
+
     with Transcoder(temp_dir=temp_dir) as transcoder:
         output_path, video_id = transcoder.transcode_video(
             vf,
             denoise=denoise,
             denoise_level=denoise_level,
             normalize_audio=normalize_audio,
+            fade_duration=fade_duration,
+            fade_in_duration=fade_in,
+            fade_out_duration=fade_out,
         )
         clip_info = _collect_clip_info(vf)
         return TranscodeResult(output_path=output_path, video_id=video_id, clip_info=clip_info)
@@ -717,6 +800,8 @@ def _transcode_parallel(
     denoise: bool,
     denoise_level: str,
     normalize_audio: bool = False,
+    fade_map: dict[Path, FadeConfig] | None = None,
+    fade_duration: float = 0.5,
 ) -> list[TranscodeResult]:
     """병렬 트랜스코딩 (ThreadPoolExecutor 사용)."""
     results: dict[int, TranscodeResult] = {}
@@ -739,7 +824,14 @@ def _transcode_parallel(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
-                _transcode_single, vf, temp_dir, denoise, denoise_level, normalize_audio
+                _transcode_single,
+                vf,
+                temp_dir,
+                denoise,
+                denoise_level,
+                normalize_audio,
+                fade_map,
+                fade_duration,
             ): i
             for i, vf in enumerate(video_files)
         }
@@ -763,6 +855,8 @@ def _transcode_sequential(
     denoise: bool,
     denoise_level: str,
     normalize_audio: bool = False,
+    fade_map: dict[Path, FadeConfig] | None = None,
+    fade_duration: float = 0.5,
 ) -> list[TranscodeResult]:
     """순차 트랜스코딩 (진행률 표시)."""
     results: list[TranscodeResult] = []
@@ -775,11 +869,18 @@ def _transcode_sequential(
             def on_progress_info(info: ProgressInfo) -> None:
                 progress.update_with_info(info)
 
+            fade_config = fade_map.get(vf.path) if fade_map else None
+            fade_in = fade_config.fade_in if fade_config else None
+            fade_out = fade_config.fade_out if fade_config else None
+
             output_path, video_id = transcoder.transcode_video(
                 vf,
                 denoise=denoise,
                 denoise_level=denoise_level,
                 normalize_audio=normalize_audio,
+                fade_duration=fade_duration,
+                fade_in_duration=fade_in,
+                fade_out_duration=fade_out,
                 progress_info_callback=on_progress_info,
             )
             clip_info = _collect_clip_info(vf)
@@ -868,6 +969,24 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     if len(video_files) == 1 and validated_args.upload:
         return handle_single_file_upload(video_files[0], validated_args)
 
+    # 1.5 그룹핑 및 재정렬
+    if validated_args.group_sequences:
+        groups = group_sequences(video_files)
+        video_files = reorder_with_groups(video_files, groups)
+        for group in groups:
+            if len(group.files) > 1:
+                logger.info(
+                    "연속 시퀀스 감지: %s (%d개 파일)",
+                    group.group_id,
+                    len(group.files),
+                )
+    else:
+        groups = [
+            FileSequenceGroup(files=(vf,), group_id=f"s_{i}") for i, vf in enumerate(video_files)
+        ]
+
+    fade_map = compute_fade_map(groups, default_fade=validated_args.fade_duration)
+
     # 2. 트랜스코딩
     temp_dir = get_temp_dir()
     logger.info(f"Using temp directory: {temp_dir}")
@@ -882,6 +1001,8 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
             validated_args.denoise,
             validated_args.denoise_level,
             validated_args.normalize_audio,
+            fade_map,
+            validated_args.fade_duration,
         )
     else:
         logger.info("Starting transcoding...")
@@ -891,6 +1012,8 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
             validated_args.denoise,
             validated_args.denoise_level,
             validated_args.normalize_audio,
+            fade_map,
+            validated_args.fade_duration,
         )
 
     # 3. 병합
@@ -905,7 +1028,13 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     # 4. DB 저장 및 Summary 생성
     video_ids = [r.video_id for r in results]
     video_clips = [r.clip_info for r in results]
-    summary = save_merge_job_to_db(final_path, video_clips, validated_args.targets, video_ids)
+    summary = save_merge_job_to_db(
+        final_path,
+        video_clips,
+        validated_args.targets,
+        video_ids,
+        groups=groups,
+    )
 
     # 4.5 썸네일 생성 (비필수)
     if validated_args.thumbnail:
@@ -976,6 +1105,7 @@ def save_merge_job_to_db(
     video_clips: list[tuple[str, float, str | None, str | None]],
     targets: list[Path],
     video_ids: list[int],
+    groups: list[FileSequenceGroup] | None = None,
 ) -> str | None:
     """
     병합 작업 정보를 DB에 저장 (타임라인 및 Summary 포함).
@@ -1032,10 +1162,10 @@ def save_merge_job_to_db(
         total_size = output_path.stat().st_size if output_path.exists() else 0
 
         # 콘솔 출력용 요약 (마크다운 형식)
-        console_summary = generate_clip_summary(video_clips)
+        console_summary = generate_clip_summary(video_clips, groups=groups)
 
         # YouTube 설명용 (타임스탬프 + 촬영기기)
-        youtube_description = generate_youtube_description(video_clips)
+        youtube_description = generate_youtube_description(video_clips, groups=groups)
 
         repo.create(
             output_path=output_path,
@@ -1794,6 +1924,8 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     print(f"Denoise enabled: {validated_args.denoise}")
     print(f"Denoise level: {validated_args.denoise_level}")
     print(f"Normalize audio: {validated_args.normalize_audio}")
+    print(f"Group sequences: {validated_args.group_sequences}")
+    print(f"Fade duration: {validated_args.fade_duration}")
     if validated_args.thumbnail:
         print(f"Thumbnail: enabled (quality={validated_args.thumbnail_quality})")
         if validated_args.thumbnail_timestamps:

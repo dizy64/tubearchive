@@ -159,6 +159,8 @@ class Transcoder:
         target_width: int = 3840,
         target_height: int = 2160,
         fade_duration: float = 0.5,
+        fade_in_duration: float | None = None,
+        fade_out_duration: float | None = None,
         denoise: bool = False,
         denoise_level: str = "medium",
         normalize_audio: bool = False,
@@ -171,7 +173,9 @@ class Transcoder:
             video_file: 입력 영상 파일
             target_width: 타겟 너비
             target_height: 타겟 높이
-            fade_duration: 페이드 지속 시간
+            fade_duration: 페이드 기본 지속 시간
+            fade_in_duration: Fade In 지속 시간 (None이면 fade_duration 사용)
+            fade_out_duration: Fade Out 지속 시간 (None이면 fade_duration 사용)
             denoise: 오디오 노이즈 제거 활성화 여부
             denoise_level: 노이즈 제거 강도 (light/medium/heavy)
             normalize_audio: EBU R128 오디오 정규화 활성화 여부
@@ -235,6 +239,8 @@ class Transcoder:
             target_width=target_width,
             target_height=target_height,
             fade_duration=fade_duration,
+            fade_in_duration=fade_in_duration,
+            fade_out_duration=fade_out_duration,
             color_transfer=metadata.color_transfer,
             denoise=denoise,
             denoise_level=denoise_level,

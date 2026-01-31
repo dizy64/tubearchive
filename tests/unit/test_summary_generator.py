@@ -1,7 +1,10 @@
 """Summary generator 테스트."""
 
+from datetime import datetime
 from pathlib import Path
 
+from tubearchive.core.grouper import FileSequenceGroup
+from tubearchive.models.video import VideoFile
 from tubearchive.utils.summary_generator import (
     OutputInfo,
     extract_topic_from_path,
@@ -106,6 +109,22 @@ class TestGenerateChapters:
 
         assert chapters[0][1] == "test"
         assert chapters[1][1] == "clip"
+
+    def test_merges_grouped_clips(self, tmp_path: Path) -> None:
+        """그룹된 파일은 하나의 챕터로 병합."""
+        base = datetime(2025, 1, 1, 10, 0, 0)
+        p1 = tmp_path / "GH010128.MP4"
+        p2 = tmp_path / "GH020128.MP4"
+        p1.write_bytes(b"0")
+        p2.write_bytes(b"0")
+        vf1 = VideoFile(path=p1, creation_time=base, size_bytes=1)
+        vf2 = VideoFile(path=p2, creation_time=base, size_bytes=1)
+        groups = [FileSequenceGroup(files=(vf1, vf2), group_id="gopro_0128")]
+
+        clips = [("GH010128.MP4", 60.0), ("GH020128.MP4", 60.0)]
+        chapters = generate_chapters(clips, groups=groups)
+
+        assert chapters == [("0:00", "GH010128")]
 
 
 class TestOutputInfo:

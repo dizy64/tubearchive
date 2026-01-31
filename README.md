@@ -460,6 +460,9 @@ options:
   --denoise             FFmpeg 오디오 노이즈 제거 활성화 (afftdn)
   --denoise-level       노이즈 제거 강도 (light/medium/heavy, 기본: medium)
   --normalize-audio     EBU R128 오디오 라우드니스 정규화 활성화 (loudnorm 2-pass)
+  --group               연속 파일 시퀀스 그룹핑 활성화 (환경변수: TUBEARCHIVE_GROUP_SEQUENCES)
+  --no-group            연속 파일 시퀀스 그룹핑 비활성화
+  --fade-duration SECONDS 기본 페이드 시간(초) (환경변수: TUBEARCHIVE_FADE_DURATION, 기본: 0.5)
   --thumbnail           병합 영상에서 썸네일 자동 생성 (기본: 10%, 33%, 50% 지점)
   --thumbnail-at TIME   특정 시점에서 썸네일 추출 (예: '00:01:30', 반복 가능)
   --thumbnail-quality Q 썸네일 JPEG 품질 (1-31, 낮을수록 고품질, 기본: 2)
@@ -490,6 +493,8 @@ options:
 | `TUBEARCHIVE_DENOISE` | 오디오 노이즈 제거 기본 활성화 (true/false) | false |
 | `TUBEARCHIVE_DENOISE_LEVEL` | 노이즈 제거 강도 (light/medium/heavy) | medium |
 | `TUBEARCHIVE_NORMALIZE_AUDIO` | EBU R128 loudnorm 정규화 (true/false) | false |
+| `TUBEARCHIVE_GROUP_SEQUENCES` | 연속 파일 시퀀스 그룹핑 여부 (true/false) | true |
+| `TUBEARCHIVE_FADE_DURATION` | 기본 페이드 시간(초) | 0.5 |
 | `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 클라이언트 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
 | `TUBEARCHIVE_YOUTUBE_TOKEN` | OAuth 토큰 저장 경로 | `~/.tubearchive/youtube_token.json` |
 | `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID (쉼표로 여러 개 지정) | - |

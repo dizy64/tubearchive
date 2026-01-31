@@ -22,6 +22,14 @@ class VideoFile:
 
 
 @dataclass(frozen=True)
+class FadeConfig:
+    """파일별 페이드 설정."""
+
+    fade_in: float = 0.5
+    fade_out: float = 0.5
+
+
+@dataclass(frozen=True)
 class VideoMetadata:
     """ffprobe로 감지한 영상 메타데이터."""
 

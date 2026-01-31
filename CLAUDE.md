@@ -69,6 +69,8 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 # denoise = false                           # TUBEARCHIVE_DENOISE
 # denoise_level = "medium"                  # light/medium/heavy (TUBEARCHIVE_DENOISE_LEVEL)
 # normalize_audio = false                   # EBU R128 loudnorm (TUBEARCHIVE_NORMALIZE_AUDIO)
+# group_sequences = true                    # 연속 파일 시퀀스 그룹핑 (TUBEARCHIVE_GROUP_SEQUENCES)
+# fade_duration = 0.5                       # 기본 페이드 시간 (초, TUBEARCHIVE_FADE_DURATION)
 
 [youtube]
 # client_secrets = "~/.tubearchive/client_secrets.json"
@@ -146,6 +148,8 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
 | `TUBEARCHIVE_DENOISE` | 오디오 노이즈 제거 (true/false) | false |
 | `TUBEARCHIVE_DENOISE_LEVEL` | 노이즈 제거 강도 (light/medium/heavy) | medium |
 | `TUBEARCHIVE_NORMALIZE_AUDIO` | EBU R128 loudnorm (true/false) | false |
+| `TUBEARCHIVE_GROUP_SEQUENCES` | 연속 파일 시퀀스 그룹핑 (true/false) | true |
+| `TUBEARCHIVE_FADE_DURATION` | 기본 페이드 시간(초) | 0.5 |
 | `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
 | `TUBEARCHIVE_YOUTUBE_TOKEN` | 토큰 파일 경로 | `~/.tubearchive/youtube_token.json` |
 | `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID | - |

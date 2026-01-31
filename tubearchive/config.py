@@ -27,6 +27,8 @@ ENV_UPLOAD_CHUNK_MB = "TUBEARCHIVE_UPLOAD_CHUNK_MB"
 ENV_DENOISE = "TUBEARCHIVE_DENOISE"
 ENV_DENOISE_LEVEL = "TUBEARCHIVE_DENOISE_LEVEL"
 ENV_NORMALIZE_AUDIO = "TUBEARCHIVE_NORMALIZE_AUDIO"
+ENV_GROUP_SEQUENCES = "TUBEARCHIVE_GROUP_SEQUENCES"
+ENV_FADE_DURATION = "TUBEARCHIVE_FADE_DURATION"
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,8 @@ class GeneralConfig:
     denoise: bool | None = None
     denoise_level: str | None = None
     normalize_audio: bool | None = None
+    group_sequences: bool | None = None
+    fade_duration: float | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +87,8 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
     denoise: bool | None = None
     denoise_level: str | None = None
     normalize_audio: bool | None = None
+    group_sequences: bool | None = None
+    fade_duration: float | None = None
 
     raw_output_dir = data.get("output_dir")
     if isinstance(raw_output_dir, str):
@@ -123,6 +129,21 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
     elif raw_normalize_audio is not None:
         _warn_type("general.normalize_audio", "bool", raw_normalize_audio)
 
+    raw_group_sequences = data.get("group_sequences")
+    if isinstance(raw_group_sequences, bool):
+        group_sequences = raw_group_sequences
+    elif raw_group_sequences is not None:
+        _warn_type("general.group_sequences", "bool", raw_group_sequences)
+
+    raw_fade_duration = data.get("fade_duration")
+    if isinstance(raw_fade_duration, (int, float)) and not isinstance(raw_fade_duration, bool):
+        if raw_fade_duration >= 0:
+            fade_duration = float(raw_fade_duration)
+        else:
+            logger.warning("config: general.fade_duration 값 오류: %r", raw_fade_duration)
+    elif raw_fade_duration is not None:
+        _warn_type("general.fade_duration", "float", raw_fade_duration)
+
     return GeneralConfig(
         output_dir=output_dir,
         parallel=parallel,
@@ -130,6 +151,8 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
         denoise=denoise,
         denoise_level=denoise_level,
         normalize_audio=normalize_audio,
+        group_sequences=group_sequences,
+        fade_duration=fade_duration,
     )
 
 
@@ -272,6 +295,10 @@ def apply_config_to_env(config: AppConfig) -> None:
         mappings.append((ENV_DENOISE_LEVEL, config.general.denoise_level))
     if config.general.normalize_audio is not None:
         mappings.append((ENV_NORMALIZE_AUDIO, str(config.general.normalize_audio).lower()))
+    if config.general.group_sequences is not None:
+        mappings.append((ENV_GROUP_SEQUENCES, str(config.general.group_sequences).lower()))
+    if config.general.fade_duration is not None:
+        mappings.append((ENV_FADE_DURATION, str(config.general.fade_duration)))
 
     # playlist: list → CSV
     if config.youtube.playlist:
@@ -298,6 +325,8 @@ def generate_default_config() -> str:
 # denoise = false                           # TUBEARCHIVE_DENOISE
 # denoise_level = "medium"                  # light/medium/heavy (TUBEARCHIVE_DENOISE_LEVEL)
 # normalize_audio = false                   # EBU R128 loudnorm (TUBEARCHIVE_NORMALIZE_AUDIO)
+# group_sequences = true                    # 연속 파일 시퀀스 그룹핑 (TUBEARCHIVE_GROUP_SEQUENCES)
+# fade_duration = 0.5                       # 기본 페이드 시간 (초, TUBEARCHIVE_FADE_DURATION)
 
 [youtube]
 # client_secrets = "~/.tubearchive/client_secrets.json"
