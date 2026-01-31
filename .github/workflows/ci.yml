@@ -26,7 +26,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Run unit tests
-        run: uv run pytest tests/ --ignore=tests/test_e2e.py -v --tb=short
+        run: uv run pytest tests/unit/ -v --tb=short
 
   e2e-test:
     name: E2E Tests
@@ -50,7 +50,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Run E2E tests
-        run: uv run pytest tests/test_e2e.py -v --tb=short
+        run: uv run pytest tests/e2e/ -v --tb=short
 
   ruff-lint:
     name: Ruff Lint

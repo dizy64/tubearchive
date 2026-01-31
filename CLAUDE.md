@@ -14,9 +14,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # 테스트
-uv run pytest tests/ -v                                    # 전체
-uv run pytest tests/test_scanner.py::test_specific -v      # 단일
-uv run pytest tests/test_youtube.py -v                     # YouTube 모듈
+uv run pytest tests/ -v                                         # 전체 (unit + e2e)
+uv run pytest tests/unit/ -v                                    # 단위 테스트만
+uv run pytest tests/e2e/ -v                                     # E2E 테스트만 (ffmpeg 필요)
+uv run pytest tests/unit/test_scanner.py::test_specific -v      # 단일
 
 # 품질 검사
 uv run mypy tubearchive/
@@ -76,7 +77,19 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
   - `TUBEARCHIVE_UPLOAD_CHUNK_MB`: 업로드 청크 크기 MB (1-256, 기본: 32)
 
 ### 테스트 구조
-- `conftest.py`: session-scoped 테스트 DB 격리 (운영 DB와 분리)
+```
+tests/
+├── conftest.py          # 공유 fixture (DB 격리, 임시 디렉토리)
+├── unit/                # 단위 테스트 (I/O/DB는 mock/stub)
+│   ├── test_scanner.py
+│   ├── test_effects.py
+│   └── ...
+└── e2e/                 # E2E 테스트 (실제 ffmpeg 사용, CI에서 macOS 러너)
+    └── test_e2e.py
+```
+- **단위 테스트** (`tests/unit/`): 외부 의존성 없이 실행 가능. CI에서 ubuntu-latest
+- **E2E 테스트** (`tests/e2e/`): ffmpeg + ffprobe 필요. CI에서 macos-latest (VideoToolbox)
+- 새 테스트 추가 시 위 기준에 맞는 디렉토리에 배치
 - 모든 테스트는 임시 DB/디렉토리 사용
 
 ## 개발 규칙
@@ -122,7 +135,7 @@ ffmpeg -i input.mov -filter_complex "..." -c:v hevc_videotoolbox -t 5 test.mp4
 ### DB 작업
 - 상태 변경은 트랜잭션 사용
 - `progress_percent`: 0-100 범위 체크 제약
-- `status`: ENUM 제약 ('pending', 'processing', 'completed', 'failed')
+- `status`: ENUM 제약 ('pending', 'processing', 'completed', 'failed', 'merged')
 
 ### 플랫폼 고려사항
 - 파일 생성 시간: macOS `stat.st_birthtime` (st_ctime 아님)
