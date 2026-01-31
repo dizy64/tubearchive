@@ -9,9 +9,6 @@ from pathlib import Path
 from tubearchive.ffmpeg.profiles import EncodingProfile
 from tubearchive.utils.progress import ProgressInfo
 
-# 콜백 타입: 기존 (int) 또는 새로운 (ProgressInfo)
-ProgressCallback = Callable[[int], None] | Callable[[ProgressInfo], None]
-
 logger = logging.getLogger(__name__)
 
 
@@ -242,8 +239,8 @@ class FFmpegExecutor:
 
         logger.info("FFmpeg completed successfully")
 
+    @staticmethod
     def calculate_progress_percent(
-        self,
         current_time: float,
         total_duration: float,
     ) -> int:
