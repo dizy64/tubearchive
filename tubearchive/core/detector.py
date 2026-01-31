@@ -1,4 +1,19 @@
-"""영상 메타데이터 감지기."""
+"""영상 메타데이터 감지기.
+
+ffprobe를 서브프로세스로 실행하여 영상 파일의 기술 메타데이터를 추출한다.
+
+추출 항목:
+    - **해상도**: width x height (예: 3840x2160)
+    - **코덱**: codec_name (hevc, h264 등)
+    - **프레임레이트**: r_frame_rate → float 변환 (분수 ``30000/1001`` 지원)
+    - **픽셀 포맷**: pix_fmt (yuv420p, yuv420p10le 등)
+    - **색 공간**: color_transfer, color_primaries, color_space
+    - **길이**: duration (초)
+    - **비트레이트**: bit_rate (bps)
+
+반환:
+    :class:`~tubearchive.models.video.VideoMetadata` 데이터클래스
+"""
 
 import json
 import subprocess
@@ -10,17 +25,20 @@ from tubearchive.models.video import VideoMetadata
 
 
 def detect_metadata(video_path: Path) -> VideoMetadata:
-    """
-    ffprobe로 영상 메타데이터 감지.
+    """ffprobe로 영상 메타데이터를 감지한다.
+
+    비디오 스트림에서 해상도·코덱·픽셀 포맷·색 공간·프레임 레이트를,
+    ``format`` 태그에서 기기명·재생 시간을 추출하여
+    :class:`~tubearchive.models.video.VideoMetadata` 로 반환한다.
 
     Args:
-        video_path: 영상 파일 경로
+        video_path: 분석할 영상 파일 경로.
 
     Returns:
-        VideoMetadata 객체
+        추출된 메타데이터 (해상도, 코덱, 색 공간, 기기명 등).
 
     Raises:
-        RuntimeError: ffprobe 실행 실패
+        RuntimeError: ffprobe 실행 실패 또는 비디오 스트림 없음.
     """
     probe_data = _run_ffprobe(video_path)
 
@@ -85,17 +103,19 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
 
 
 def _run_ffprobe(video_path: Path) -> dict[str, Any]:
-    """
-    ffprobe 실행 및 JSON 파싱.
+    """ffprobe를 실행하여 스트림·포맷 정보를 JSON으로 반환한다.
+
+    ``-show_streams -show_format`` 옵션으로 모든 스트림과
+    컨테이너 메타데이터를 한 번에 추출한다.
 
     Args:
-        video_path: 영상 파일 경로
+        video_path: 분석할 영상 파일 경로.
 
     Returns:
-        ffprobe JSON 출력
+        ffprobe JSON 출력 (``streams``, ``format`` 키 포함).
 
     Raises:
-        RuntimeError: ffprobe 실행 실패
+        RuntimeError: ffprobe 실행 실패 또는 JSON 파싱 오류.
     """
     cmd = [
         "ffprobe",
@@ -124,14 +144,16 @@ def _run_ffprobe(video_path: Path) -> dict[str, Any]:
 
 
 def _parse_frame_rate(frame_rate_str: str) -> float:
-    """
-    프레임 레이트 문자열 파싱.
+    """FFmpeg ``r_frame_rate`` 분수 문자열을 float FPS로 변환한다.
+
+    ``"30000/1001"`` → ``29.97``, ``"60/1"`` → ``60.0`` 등
+    분수 형식을 :class:`fractions.Fraction` 으로 파싱한다.
 
     Args:
-        frame_rate_str: "60/1", "30000/1001" 등
+        frame_rate_str: 분수 또는 정수 형식 프레임 레이트 문자열.
 
     Returns:
-        FPS (float)
+        초당 프레임 수. 파싱 실패 시 ``0.0``.
     """
     try:
         fraction = Fraction(frame_rate_str)

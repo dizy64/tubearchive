@@ -1,4 +1,8 @@
-"""입력 검증 유틸리티."""
+"""입력 검증 유틸리티.
+
+비디오 파일 경로·확장자 검증, FFmpeg/ffprobe 설치 여부 확인,
+디스크 용량 체크 등 파이프라인 실행 전 사전 조건을 검증한다.
+"""
 
 import logging
 import shutil
@@ -24,7 +28,7 @@ VIDEO_EXTENSIONS = frozenset(
 
 
 class ValidationError(Exception):
-    """검증 실패 예외."""
+    """입력 검증 실패 시 발생하는 예외."""
 
     pass
 

@@ -86,10 +86,30 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 
 ### 파이프라인 흐름 (cli.py:run_pipeline)
 ```
-scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summary() → [upload_to_youtube()]
+scan_videos() → group_sequences() → reorder_with_groups()
+  → TranscodeOptions 생성
+  → Transcoder.transcode_video() (순차 또는 병렬)
+  → Merger.merge()
+  → save_merge_job_to_db() + save_summary()
+  → [upload_to_youtube()]
 ```
 
 ### 핵심 컴포넌트
+
+**cli.py**: CLI 인터페이스 및 파이프라인 오케스트레이터
+- `run_pipeline()`: 메인 파이프라인 (스캔→그룹핑→트랜스코딩→병합→저장)
+- `ValidatedArgs`: 검증된 CLI 인자 데이터클래스
+- `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, normalize_audio, fade_map 등)
+- `TranscodeResult`: 단일 트랜스코딩 결과 (frozen dataclass)
+- `ClipInfo`: NamedTuple (name, duration, device, shot_time) — 클립 메타데이터
+- `database_session()`: DB 연결 자동 정리 context manager
+- `truncate_path()`: 긴 경로 말줄임 유틸리티
+
+**core/grouper.py**: 연속 파일 시퀀스 감지 및 그룹핑
+- GoPro/DJI 카메라의 분할 파일을 자동 감지하여 하나의 촬영 단위로 묶음
+- `group_sequences()`: 파일 목록 → `FileSequenceGroup` 리스트
+- `compute_fade_map()`: 그룹 경계 기반 페이드 설정 맵 생성
+- 내부 모델: `_GoProEntry` (챕터 순서), `_DjiEntry` (타임스탬프+시퀀스)
 
 **core/transcoder.py**: 트랜스코딩 엔진
 - `detect_metadata()` → 프로파일 선택 → FFmpeg 실행
@@ -99,10 +119,11 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
 
 **ffmpeg/effects.py**: 필터 생성기
 - `create_combined_filter()`: 세로/가로 영상 → 3840x2160 표준화
-- 세로: split → blur background → overlay foreground
+- 세로: split → blur background (`PORTRAIT_BLUR_RADIUS=20`) → overlay foreground
 - HDR→SDR: `colorspace=all=bt709:iall=bt2020` (color_transfer가 HLG/PQ인 경우)
 - Dip-to-Black: fade in/out 0.5초
-- Loudnorm: `LoudnormAnalysis` → `create_loudnorm_analysis_filter()` (1st pass) → `parse_loudnorm_stats()` → `create_loudnorm_filter()` (2nd pass)
+- Loudnorm: EBU R128 타겟 상수 (`LOUDNORM_TARGET_I=-14.0`, `TP=-1.5`, `LRA=11.0`)
+  - `create_loudnorm_analysis_filter()` (1st pass) → `parse_loudnorm_stats()` → `create_loudnorm_filter()` (2nd pass)
 - `create_audio_filter_chain()`: denoise → fade → loudnorm 오디오 필터 체인 통합
 
 **ffmpeg/thumbnail.py**: 썸네일 추출
@@ -115,17 +136,29 @@ scan_videos() → Transcoder.transcode_video() → Merger.merge() → save_summa
 - 모든 프로파일: `p010le`, `29.97fps`, `50Mbps`
 
 **config.py**: TOML 설정 파일 관리
-- `GeneralConfig`: output_dir, parallel, db_path, denoise, denoise_level, normalize_audio
+- `GeneralConfig`: output_dir, parallel, db_path, denoise, denoise_level, normalize_audio, group_sequences, fade_duration
 - `YouTubeConfig`: client_secrets, token, playlist, upload_chunk_mb, upload_privacy
 - `load_config()`: `~/.tubearchive/config.toml` 파싱 (에러 시 빈 config)
 - `apply_config_to_env()`: 미설정 환경변수에만 config 값 주입
 - `generate_default_config()`: 주석 포함 기본 템플릿 생성
+- TOML 파싱 헬퍼: `_parse_str()`, `_parse_bool()`, `_parse_int()` (타입 안전 파싱)
+- 환경변수 헬퍼: `_get_env_bool()` (공통 bool 환경변수 파싱)
+- ENV 상수: `ENV_OUTPUT_DIR`, `ENV_PARALLEL`, `ENV_DENOISE` 등 (중앙 관리)
 
-**database/**: SQLite Resume 시스템
+**commands/catalog.py**: 메타데이터 카탈로그/검색 CLI
+- `cmd_catalog()`: DB 영상 메타데이터 조회 (기기별 그룹핑, JSON/CSV 출력)
+- `cmd_search()`: 날짜/기기/상태 필터 검색
+- `STATUS_ICONS`: 작업 상태 아이콘 매핑
+- `format_duration()`: 초→분:초 변환
+
+**database/**: SQLite Resume 시스템 + Repository 패턴
 - `videos`: 원본 영상 메타데이터
 - `transcoding_jobs`: 작업 상태 (pending→processing→completed/failed)
 - `merge_jobs`: 병합 이력, YouTube 챕터 정보, `youtube_id` 저장
 - DB 위치: `~/.tubearchive/tubearchive.db` (또는 `TUBEARCHIVE_DB_PATH`)
+- Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`
+- **DB 접근 규칙**: cli.py에서 직접 SQL을 실행하지 않고 반드시 Repository 메서드를 사용
+- DB 연결은 `database_session()` context manager로 자동 정리
 
 **youtube/**: YouTube 업로드 모듈
 - `auth.py`: OAuth 2.0 인증 (토큰 저장/갱신, 브라우저 인증 플로우)
@@ -212,6 +245,9 @@ ffmpeg -i input.mov -filter_complex "..." -c:v hevc_videotoolbox -t 5 test.mp4
 ```
 
 ### DB 작업
+- **모든 DB 접근은 Repository 패턴** (`VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`)
+- CLI에서 raw SQL 직접 실행 금지 — 새 쿼리가 필요하면 Repository에 메서드 추가
+- DB 연결은 `database_session()` context manager 사용 (자동 close 보장)
 - 상태 변경은 트랜잭션 사용
 - `progress_percent`: 0-100 범위 체크 제약
 - `status`: ENUM 제약 ('pending', 'processing', 'completed', 'failed', 'merged')

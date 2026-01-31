@@ -1,4 +1,15 @@
-"""FFmpeg 영상 효과 필터."""
+"""FFmpeg 필터 체인 생성기.
+
+영상·오디오 효과에 필요한 FFmpeg ``-filter_complex`` 문자열을 구성한다.
+
+지원 효과:
+    - **세로 영상 레이아웃**: 블러 배경 위에 원본 오버레이 (3840x2160)
+    - **HDR → SDR**: BT.2020 → BT.709 색공간 변환
+    - **Dip-to-Black**: 클립 시작/끝 페이드 인·아웃
+    - **오디오 노이즈 제거**: afftdn 기반 (light/medium/heavy)
+    - **라우드니스 정규화**: EBU R128 loudnorm 2-pass
+    - **영상 안정화**: vidstab detect + transform
+"""
 
 from __future__ import annotations
 
@@ -7,8 +18,13 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-# HDR 색공간 식별자
-HDR_COLOR_TRANSFERS = {"arib-std-b67", "smpte2084"}
+# HDR 색공간 식별자 (FFmpeg color_transfer 값)
+HDR_TRANSFER_HLG = "arib-std-b67"
+HDR_TRANSFER_PQ = "smpte2084"
+HDR_COLOR_TRANSFERS = {HDR_TRANSFER_HLG, HDR_TRANSFER_PQ}
+
+# HDR → SDR 변환 필터 (BT.2020 → BT.709)
+HDR_TO_SDR_FILTER = "colorspace=all=bt709:iall=bt2020:dither=fsb,format=yuv420p10le"
 
 # 오디오 노이즈 제거 강도 (afftdn 기준)
 DENOISE_AFFTDN_LEVELS = {
@@ -17,9 +33,29 @@ DENOISE_AFFTDN_LEVELS = {
     "heavy": 18,
 }
 
+# EBU R128 라우드니스 정규화 기본 타겟값
+LOUDNORM_TARGET_I = -14.0
+"""통합 라우드니스 (Integrated Loudness) 목표 (LUFS)."""
+LOUDNORM_TARGET_TP = -1.5
+"""트루피크 (True Peak) 상한 (dBTP)."""
+LOUDNORM_TARGET_LRA = 11.0
+"""라우드니스 범위 (Loudness Range) 목표 (LU)."""
+
+# 세로 영상 배경 블러 반경
+PORTRAIT_BLUR_RADIUS = 20
+
 
 class StabilizeStrength(Enum):
-    """영상 안정화 강도."""
+    """vidstab 영상 안정화 강도.
+
+    ``shakiness`` (흔들림 감지 민감도)와 ``smoothing`` (보정 윈도우 크기)
+    파라미터를 함께 결정한다. 강도가 높을수록 안정적이지만 크롭 영역이 넓어진다.
+
+    Values:
+        LIGHT: shakiness=4, smoothing=10 — 가벼운 손떨림 보정
+        MEDIUM: shakiness=6, smoothing=15 — 일반적인 핸드헬드 촬영 보정
+        HEAVY: shakiness=8, smoothing=30 — 심한 흔들림·이동 촬영 보정
+    """
 
     LIGHT = "light"
     MEDIUM = "medium"
@@ -27,7 +63,14 @@ class StabilizeStrength(Enum):
 
 
 class StabilizeCrop(Enum):
-    """영상 안정화 테두리 처리."""
+    """vidstab 안정화 후 프레임 테두리 처리 방식.
+
+    안정화로 인해 빈 영역이 발생할 때 해당 부분을 어떻게 처리할지 결정한다.
+
+    Values:
+        CROP: 빈 영역을 잘라내어 유효 영역만 유지 (``keep``)
+        EXPAND: 빈 영역을 검은색으로 채움 (``black``)
+    """
 
     CROP = "crop"
     EXPAND = "expand"
@@ -68,7 +111,7 @@ def create_hdr_to_sdr_filter(color_transfer: str | None) -> str:
     # dither=fsb: Floyd-Steinberg 디더링 (색상 밴딩/노이즈 감소)
     # Note: format 옵션은 colorspace 필터에서 지원하지 않음 (별도 format 필터 사용)
     # Note: fast=1 제거 - 색상 정확도 우선 (iPhone 포트레이트 노이즈 방지)
-    return "colorspace=all=bt709:iall=bt2020:dither=fsb,format=yuv420p10le"
+    return HDR_TO_SDR_FILTER
 
 
 def create_portrait_layout_filter(
@@ -76,7 +119,7 @@ def create_portrait_layout_filter(
     source_height: int,
     target_width: int = 3840,
     target_height: int = 2160,
-    blur_radius: int = 20,
+    blur_radius: int = PORTRAIT_BLUR_RADIUS,
 ) -> str:
     """
     세로 영상을 가로 레이아웃으로 변환하는 필터.
@@ -240,9 +283,9 @@ class LoudnormAnalysis:
 
 
 def create_loudnorm_analysis_filter(
-    target_i: float = -14.0,
-    target_tp: float = -1.5,
-    target_lra: float = 11.0,
+    target_i: float = LOUDNORM_TARGET_I,
+    target_tp: float = LOUDNORM_TARGET_TP,
+    target_lra: float = LOUDNORM_TARGET_LRA,
 ) -> str:
     """1st pass: loudnorm 분석용 필터 문자열 생성."""
     return f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}:print_format=json"
@@ -250,9 +293,9 @@ def create_loudnorm_analysis_filter(
 
 def create_loudnorm_filter(
     analysis: LoudnormAnalysis,
-    target_i: float = -14.0,
-    target_tp: float = -1.5,
-    target_lra: float = 11.0,
+    target_i: float = LOUDNORM_TARGET_I,
+    target_tp: float = LOUDNORM_TARGET_TP,
+    target_lra: float = LOUDNORM_TARGET_LRA,
 ) -> str:
     """2nd pass: loudnorm 적용 필터 문자열 생성 (measured 값 포함)."""
     return (
@@ -445,15 +488,22 @@ def create_combined_filter(
     fade_duration: float = 0.5,
     fade_in_duration: float | None = None,
     fade_out_duration: float | None = None,
-    blur_radius: int = 20,
+    blur_radius: int = PORTRAIT_BLUR_RADIUS,
     color_transfer: str | None = None,
     stabilize_filter: str = "",
     denoise: bool = False,
     denoise_level: str = "medium",
     loudnorm_analysis: LoudnormAnalysis | None = None,
 ) -> tuple[str, str]:
-    """
-    모든 효과를 결합한 필터 생성.
+    """영상·오디오 필터를 결합하여 최종 FFmpeg ``-filter_complex`` 문자열을 생성한다.
+
+    **비디오 필터 체인 흐름**::
+
+        입력 → [HDR→SDR] → [세로: split→blur+overlay / 가로: scale] → [fade] → [stabilize] → 출력
+
+    **오디오 필터 체인 흐름** (``create_audio_filter_chain`` 참조)::
+
+        입력 → [denoise(afftdn)] → [fade in/out] → [loudnorm 2nd pass] → 출력
 
     Args:
         source_width: 원본 영상 너비

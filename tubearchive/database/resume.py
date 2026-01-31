@@ -1,4 +1,9 @@
-"""Resume 상태 관리."""
+"""트랜스코딩 Resume 상태 관리.
+
+중단된 트랜스코딩 작업을 이어서 처리할 수 있도록
+진행률·임시 파일 경로를 DB에 저장하고, 재시작 시
+이전 진행 위치를 계산하여 반환한다.
+"""
 
 import sqlite3
 from pathlib import Path
@@ -8,7 +13,12 @@ from tubearchive.models.job import JobStatus, TranscodingJob
 
 
 class ResumeManager:
-    """Resume 기능 관리자."""
+    """트랜스코딩 Resume 기능 관리자.
+
+    ``Transcoder`` 내부에서 사용되며, DB의 ``transcoding_jobs`` 테이블을
+    통해 작업 진행률을 추적한다. 중단 후 재실행 시 ``PROCESSING`` 상태의
+    작업을 감지하여 이전 위치부터 이어서 처리한다.
+    """
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         """초기화."""

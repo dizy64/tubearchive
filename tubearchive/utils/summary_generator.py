@@ -1,4 +1,16 @@
-"""출력 영상 요약 및 YouTube 정보 생성기."""
+"""출력 영상 요약 및 YouTube 정보 생성기.
+
+병합된 영상의 메타데이터를 수집하여 다양한 포맷의 요약 정보를 생성한다.
+
+제공 기능:
+    - **챕터 생성**: 클립별 시작 시점 → YouTube 챕터 타임스탬프 (``HH:MM:SS``)
+    - **YouTube 설명문**: 촬영 일시·클립 목록·챕터를 포함한 업로드용 텍스트
+    - **Markdown 요약**: 파일 크기·길이·기기별 구성을 포함한 로컬 기록용 문서
+    - **단일 파일 설명**: 병합 없이 단독 업로드할 때의 간단 설명문
+
+연속 시퀀스(:class:`~tubearchive.core.grouper.FileSequenceGroup`)를
+인식하여, 그룹 내 클립을 하나의 챕터로 묶는다.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +23,7 @@ from typing import TYPE_CHECKING
 from tubearchive.utils.progress import format_size
 
 if TYPE_CHECKING:
+    from tubearchive.cli import ClipInfo
     from tubearchive.core.grouper import FileSequenceGroup
 
 
@@ -149,7 +162,7 @@ def _aggregate_clips_for_chapters(
 
 @dataclass
 class OutputInfo:
-    """출력 영상 메타데이터."""
+    """병합 출력 영상의 메타데이터 (제목, 길이, 크기, 클립 정보 등)."""
 
     output_path: Path
     title: str
@@ -293,14 +306,14 @@ def generate_summary_markdown(info: OutputInfo) -> str:
 
 
 def generate_clip_summary(
-    video_clips: list[tuple[str, float, str | None, str | None]],
+    video_clips: list[ClipInfo],
     groups: list[FileSequenceGroup] | None = None,
 ) -> str:
-    """
-    클립 정보 요약 생성 (기종, 촬영시간, 타임스탬프).
+    """클립 정보 요약 생성 (기종, 촬영시간, 타임스탬프).
 
     Args:
-        video_clips: (파일명, duration, device_model, shot_time) 튜플 리스트
+        video_clips: 클립 메타데이터 리스트
+        groups: 시퀀스 그룹 목록 (챕터 집계용)
 
     Returns:
         마크다운 형식 문자열
@@ -313,11 +326,11 @@ def generate_clip_summary(
     lines.append("| # | 파일명 | 기종 | 촬영시간 | 길이 |")
     lines.append("|---|--------|------|----------|------|")
 
-    for i, (filename, duration, device, shot_time) in enumerate(video_clips, 1):
-        device_str = device or "-"
-        shot_time_str = shot_time or "-"
-        duration_str = format_timestamp(duration)
-        lines.append(f"| {i} | {filename} | {device_str} | {shot_time_str} | {duration_str} |")
+    for i, clip in enumerate(video_clips, 1):
+        device_str = clip.device or "-"
+        shot_time_str = clip.shot_time or "-"
+        duration_str = format_timestamp(clip.duration)
+        lines.append(f"| {i} | {clip.name} | {device_str} | {shot_time_str} | {duration_str} |")
 
     lines.append("")
 
@@ -327,7 +340,7 @@ def generate_clip_summary(
     lines.append("```")
     current_time = 0.0
     aggregated = _aggregate_clips_for_chapters(
-        [(filename, duration) for filename, duration, _, _ in video_clips],
+        [(clip.name, clip.duration) for clip in video_clips],
         groups,
     )
     for filename, duration in aggregated:
@@ -341,16 +354,16 @@ def generate_clip_summary(
 
 
 def generate_youtube_description(
-    video_clips: list[tuple[str, float, str | None, str | None]],
+    video_clips: list[ClipInfo],
     groups: list[FileSequenceGroup] | None = None,
 ) -> str:
-    """
-    YouTube 설명용 타임스탬프 생성.
+    """YouTube 설명용 타임스탬프 생성.
 
-    YouTube 설명에 바로 복사할 수 있는 깔끔한 형식입니다.
+    YouTube 설명에 바로 복사할 수 있는 형식으로, 챕터와 촬영 기기 정보를 포함한다.
 
     Args:
-        video_clips: (파일명, duration, device_model, shot_time) 튜플 리스트
+        video_clips: 클립 메타데이터 리스트
+        groups: 시퀀스 그룹 목록 (챕터 집계용)
 
     Returns:
         타임스탬프 문자열
@@ -360,7 +373,7 @@ def generate_youtube_description(
     # 타임스탬프
     current_time = 0.0
     aggregated = _aggregate_clips_for_chapters(
-        [(filename, duration) for filename, duration, _, _ in video_clips],
+        [(clip.name, clip.duration) for clip in video_clips],
         groups,
     )
     for filename, duration in aggregated:
@@ -370,7 +383,7 @@ def generate_youtube_description(
         current_time += duration
 
     # 촬영 기기 정보 (중복 제거, None 제외)
-    devices = list(dict.fromkeys(device for _, _, device, _ in video_clips if device))
+    devices = list(dict.fromkeys(clip.device for clip in video_clips if clip.device))
     if devices:
         lines.append("")
         devices_str = ", ".join(devices)
@@ -379,31 +392,27 @@ def generate_youtube_description(
     return "\n".join(lines)
 
 
-def generate_single_file_description(clip_info: dict[str, str | float | None]) -> str:
-    """
-    단일 파일용 YouTube 설명 생성.
+def generate_single_file_description(
+    device: str | None = None,
+    shot_time: str | None = None,
+) -> str:
+    """단일 파일용 YouTube 설명을 생성한다.
+
+    촬영 기기와 촬영 시각 정보를 포함한 간결한 설명문을 반환한다.
+    ``"Unknown"`` 기기명이나 빈 촬영 시각은 무시된다.
 
     Args:
-        clip_info: 클립 메타데이터 딕셔너리
-            - name: 파일명
-            - duration: 길이 (초)
-            - start: 시작 시간
-            - end: 종료 시간
-            - device: 촬영 기기
-            - shot_time: 촬영 시간
+        device: 촬영 기기명 (예: ``"Nikon Z6III"``). ``"Unknown"`` 이면 무시.
+        shot_time: 촬영 시각 문자열 (``"HH:MM:SS"``). 빈 문자열이면 무시.
 
     Returns:
-        YouTube 설명 문자열 (메타데이터 없으면 빈 문자열)
+        YouTube 설명 문자열. 메타데이터가 없으면 빈 문자열.
     """
     lines: list[str] = []
 
-    # 기기 정보 (Unknown 제외)
-    device = clip_info.get("device")
     if device and device != "Unknown":
         lines.append(f"Filmed with {device}")
 
-    # 촬영 시간 (빈 문자열 제외)
-    shot_time = clip_info.get("shot_time")
     if shot_time:
         lines.append(f"Shot at {shot_time}")
 

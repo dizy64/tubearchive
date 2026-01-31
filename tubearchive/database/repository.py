@@ -1,4 +1,12 @@
-"""데이터베이스 CRUD 작업."""
+"""데이터베이스 CRUD 리포지토리.
+
+SQLite DB 위의 영상·트랜스코딩·병합 작업 정보를 조회·생성·수정·삭제한다.
+
+리포지토리 클래스:
+    - :class:`VideoRepository`: 원본 영상 메타데이터
+    - :class:`TranscodingJobRepository`: 트랜스코딩 작업 상태·진행률
+    - :class:`MergeJobRepository`: 병합 작업 이력·YouTube 업로드 정보
+"""
 
 import json
 import sqlite3
@@ -10,7 +18,10 @@ from tubearchive.models.video import VideoFile, VideoMetadata
 
 
 class VideoRepository:
-    """영상 정보 저장소."""
+    """``videos`` 테이블 CRUD 저장소.
+
+    원본 영상 파일의 경로·생성 시간·메타데이터를 저장하고 조회한다.
+    """
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         """초기화."""
@@ -83,9 +94,36 @@ class VideoRepository:
         cursor = self.conn.execute("SELECT * FROM videos ORDER BY creation_time")
         return cursor.fetchall()
 
+    def count_all(self) -> int:
+        """등록된 전체 영상 수를 반환한다."""
+        cursor = self.conn.execute("SELECT COUNT(*) as cnt FROM videos")
+        return int(cursor.fetchone()["cnt"])
+
+    def delete_by_ids(self, video_ids: list[int]) -> int:
+        """여러 영상을 ID 목록으로 일괄 삭제한다.
+
+        Args:
+            video_ids: 삭제할 영상 ID 목록
+
+        Returns:
+            삭제된 행 수
+        """
+        if not video_ids:
+            return 0
+        placeholders = ",".join("?" * len(video_ids))
+        cursor = self.conn.execute(
+            f"DELETE FROM videos WHERE id IN ({placeholders})",
+            video_ids,
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
 
 class TranscodingJobRepository:
-    """트랜스코딩 작업 저장소."""
+    """``transcoding_jobs`` 테이블 CRUD 저장소.
+
+    작업 생성·상태 변경·진행률 갱신·Resume 가능 작업 조회를 제공한다.
+    """
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         """초기화."""
@@ -169,7 +207,12 @@ class TranscodingJobRepository:
         self.conn.commit()
 
     def update_progress(self, job_id: int, progress: int) -> None:
-        """진행률 업데이트."""
+        """트랜스코딩 작업 진행률을 업데이트한다.
+
+        Args:
+            job_id: 트랜스코딩 작업 ID
+            progress: 진행률 퍼센트 (0-100, DB ``progress_percent`` 컬럼)
+        """
         self.conn.execute(
             "UPDATE transcoding_jobs SET progress_percent = ? WHERE id = ?",
             (progress, job_id),
@@ -211,6 +254,50 @@ class TranscodingJobRepository:
         )
         self.conn.commit()
 
+    def delete_by_video_ids(self, video_ids: list[int]) -> int:
+        """여러 영상의 트랜스코딩 작업을 video_id 목록으로 일괄 삭제한다.
+
+        Args:
+            video_ids: 삭제 대상 영상 ID 목록
+
+        Returns:
+            삭제된 행 수
+        """
+        if not video_ids:
+            return 0
+        placeholders = ",".join("?" * len(video_ids))
+        cursor = self.conn.execute(
+            f"DELETE FROM transcoding_jobs WHERE video_id IN ({placeholders})",
+            video_ids,
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def get_active_with_paths(self, limit: int = 10) -> list[sqlite3.Row]:
+        """진행 중(pending/processing) 트랜스코딩 작업과 원본 영상 경로를 함께 조회한다.
+
+        ``cmd_status`` 등 현황 표시에 사용된다. ``videos`` 테이블과 JOIN하여
+        원본 파일 경로(``original_path``)를 포함한다.
+
+        Args:
+            limit: 최대 조회 건수 (기본 10)
+
+        Returns:
+            ``(id, status, progress_percent, original_path)`` 컬럼을 가진 Row 목록
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT tj.id, tj.status, tj.progress_percent, v.original_path
+            FROM transcoding_jobs tj
+            JOIN videos v ON tj.video_id = v.id
+            WHERE tj.status IN ('pending', 'processing')
+            ORDER BY tj.created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return cursor.fetchall()
+
     def mark_merged_by_video_ids(self, video_ids: list[int]) -> int:
         """
         여러 영상의 completed 트랜스코딩 작업을 merged로 일괄 업데이트.
@@ -249,7 +336,10 @@ class TranscodingJobRepository:
 
 
 class MergeJobRepository:
-    """병합 작업 저장소."""
+    """``merge_jobs`` 테이블 CRUD 저장소.
+
+    병합 이력·YouTube 업로드 상태·요약 마크다운을 저장하고 조회한다.
+    """
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         """초기화."""
@@ -358,6 +448,53 @@ class MergeJobRepository:
             "SELECT * FROM merge_jobs WHERE youtube_id IS NOT NULL ORDER BY created_at DESC"
         )
         return [self._row_to_job(row) for row in cursor.fetchall()]
+
+    def get_by_output_path(self, output_path: Path) -> MergeJob | None:
+        """출력 파일 경로로 병합 작업을 조회한다.
+
+        같은 경로에 여러 레코드가 있으면 가장 최근 것을 반환한다.
+
+        Args:
+            output_path: 출력 파일 경로
+
+        Returns:
+            ``MergeJob`` 또는 해당 경로의 레코드가 없으면 ``None``
+        """
+        cursor = self.conn.execute(
+            "SELECT * FROM merge_jobs WHERE output_path = ? ORDER BY created_at DESC LIMIT 1",
+            (str(output_path),),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_job(row)
+
+    def get_recent(self, limit: int = 10) -> list[MergeJob]:
+        """최근 병합 작업을 지정 개수만큼 조회한다.
+
+        Args:
+            limit: 최대 조회 건수 (기본 10)
+
+        Returns:
+            최신순 ``MergeJob`` 목록
+        """
+        cursor = self.conn.execute(
+            "SELECT * FROM merge_jobs ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [self._row_to_job(row) for row in cursor.fetchall()]
+
+    def count_all(self) -> int:
+        """전체 병합 작업 수를 반환한다."""
+        cursor = self.conn.execute("SELECT COUNT(*) as cnt FROM merge_jobs")
+        return int(cursor.fetchone()["cnt"])
+
+    def count_uploaded(self) -> int:
+        """YouTube 업로드 완료된 병합 작업 수를 반환한다."""
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) as cnt FROM merge_jobs WHERE youtube_id IS NOT NULL"
+        )
+        return int(cursor.fetchone()["cnt"])
 
     def delete(self, job_id: int) -> None:
         """병합 작업 삭제."""

@@ -1,4 +1,16 @@
-"""연속 파일 시퀀스 감지 및 그룹핑."""
+"""연속 파일 시퀀스 감지 및 그룹핑.
+
+GoPro·DJI 등의 카메라가 파일 크기 제한(4GB FAT32 등)으로 인해
+하나의 촬영을 여러 파일로 분할 저장하는 경우, 이를 자동으로 감지하여
+원래의 연속 촬영 단위로 그룹핑한다.
+
+지원 패턴:
+    - **GoPro**: ``GH{chapter}{id}`` / ``GOPR{id}`` + ``GP{chapter}{id}``
+    - **DJI**: ``DJI_{timestamp}_{seq}_D`` (타임스탬프·파일 크기 기반)
+
+그룹 내 클립 경계에서는 페이드 없이 이어붙이고,
+그룹 간 경계에서는 Dip-to-Black 페이드를 적용한다.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +33,15 @@ _DJI_MAX_GAP_SECONDS = 3 * 60 * 60
 
 @dataclass(frozen=True)
 class SequenceKey:
-    """파일명 기반 시퀀스 키."""
+    """파일명에서 추출한 시퀀스 식별 키.
+
+    같은 ``group_id`` 를 가진 파일들은 하나의 촬영 세션에서 분할된 것이며,
+    ``order`` 로 원래 촬영 순서를 복원한다.
+
+    Attributes:
+        group_id: 촬영 세션 식별자 (예: ``"gopro_0042"``, ``"dji_20240101120000"``)
+        order: 그룹 내 순서 (0-based, 챕터 또는 시퀀스 번호)
+    """
 
     group_id: str
     order: int
@@ -29,15 +49,44 @@ class SequenceKey:
 
 @dataclass(frozen=True)
 class FileSequenceGroup:
-    """연속 시퀀스 그룹."""
+    """연속 시퀀스 그룹 (같은 촬영 세션의 분할 파일 묶음).
+
+    페이드 계산 시 그룹 내 파일 경계에서는 페이드를 생략하고,
+    그룹 간 경계에서만 Dip-to-Black을 적용한다.
+
+    Attributes:
+        files: 촬영 순서대로 정렬된 분할 파일 튜플
+        group_id: 그룹 식별자 (``SequenceKey.group_id`` 와 동일)
+    """
 
     files: tuple[VideoFile, ...]
     group_id: str
 
 
 @dataclass(frozen=True)
+class _GoProEntry:
+    """GoPro 파일 분석용 내부 모델.
+
+    Attributes:
+        chapter_order: GoPro 챕터 번호 (``GH01`` → 1, ``GOPR`` 첫 파일 → 0)
+        original_index: 입력 리스트에서의 원래 인덱스 (순서 복원용)
+        video_file: 원본 VideoFile 참조
+    """
+
+    chapter_order: int
+    original_index: int
+    video_file: VideoFile
+
+
+@dataclass(frozen=True)
 class _DjiEntry:
-    """DJI 파일 처리용 내부 모델."""
+    """DJI 파일 분석용 내부 모델.
+
+    Attributes:
+        video_file: 원본 VideoFile 참조
+        sequence: DJI 파일명의 시퀀스 번호 (``_0001_`` → 1)
+        timestamp: 파일명에서 파싱한 촬영 시각 (파싱 실패 시 None)
+    """
 
     video_file: VideoFile
     sequence: int
@@ -46,7 +95,18 @@ class _DjiEntry:
 
 @dataclass
 class _GroupRange:
-    """재정렬 시 그룹 범위 정보."""
+    """재정렬 시 그룹의 원본 위치 범위 및 보류 파일.
+
+    ``reorder_with_groups()`` 에서 그룹 파일이 원본 리스트에서
+    차지하는 범위(start~end)를 추적하고, 그 사이에 끼어든
+    비-그룹 파일을 ``pending`` 에 모아 그룹 뒤에 배치한다.
+
+    Attributes:
+        group: 대상 시퀀스 그룹
+        start: 그룹 첫 파일의 원본 인덱스
+        end: 그룹 마지막 파일의 원본 인덱스
+        pending: 그룹 범위 내에 끼어든 비-그룹 파일 목록
+    """
 
     group: FileSequenceGroup
     start: int
@@ -118,14 +178,19 @@ def group_sequences(files: list[VideoFile]) -> list[FileSequenceGroup]:
 
     index_map = {vf.path: idx for idx, vf in enumerate(files)}
 
-    gopro_groups: dict[str, list[tuple[int, int, VideoFile]]] = {}
+    gopro_groups: dict[str, list[_GoProEntry]] = {}
     dji_entries: list[_DjiEntry] = []
     standalone_files: list[VideoFile] = []
 
     for vf in files:
         key = detect_sequence_key(vf.path.name)
         if key and key.group_id.startswith("gopro_"):
-            gopro_groups.setdefault(key.group_id, []).append((key.order, index_map[vf.path], vf))
+            gopro_entry = _GoProEntry(
+                chapter_order=key.order,
+                original_index=index_map[vf.path],
+                video_file=vf,
+            )
+            gopro_groups.setdefault(key.group_id, []).append(gopro_entry)
         elif key and key.group_id == "dji":
             dji_entries.append(
                 _DjiEntry(
@@ -140,9 +205,9 @@ def group_sequences(files: list[VideoFile]) -> list[FileSequenceGroup]:
     groups: list[FileSequenceGroup] = []
 
     # GoPro 그룹
-    for group_id, entries in gopro_groups.items():
-        entries.sort(key=lambda item: (item[0], item[1]))
-        files_sorted = tuple(vf for _, _, vf in entries)
+    for group_id, gopro_entries in gopro_groups.items():
+        gopro_entries.sort(key=lambda e: (e.chapter_order, e.original_index))
+        files_sorted = tuple(e.video_file for e in gopro_entries)
         groups.append(FileSequenceGroup(files=files_sorted, group_id=group_id))
 
     # DJI 그룹 (연속 순번 + 분할 경계 + 타임스탬프 연속성)
@@ -163,6 +228,10 @@ def group_sequences(files: list[VideoFile]) -> list[FileSequenceGroup]:
                 continue
 
             prev = current[-1]
+            # DJI 연속 그룹핑 조건 3가지:
+            # 1) 시퀀스 번호가 연속 (ex. 0001 → 0002)
+            # 2) 이전 파일 크기가 FAT32/exFAT 분할 경계(4GB/16GB) 근처
+            # 3) 타임스탬프 간격이 _DJI_MAX_GAP_SECONDS(3시간) 이내
             should_group = (
                 entry.sequence == prev.sequence + 1
                 and _is_split_boundary(prev.video_file.size_bytes)

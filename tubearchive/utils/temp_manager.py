@@ -1,4 +1,9 @@
-"""임시 파일 관리."""
+"""임시 파일 및 디렉토리 관리.
+
+context manager(``with`` 문)로 사용하면 종료 시
+임시 디렉토리를 자동으로 정리한다. ``keep=True`` 설정 시
+디버깅 목적으로 보존할 수 있다.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class TempManager:
-    """임시 파일 관리자."""
+    """트랜스코딩 임시 파일 관리자 (context manager 지원)."""
 
     def __init__(
         self,

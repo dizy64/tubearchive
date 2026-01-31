@@ -1,7 +1,21 @@
-"""CLI 인터페이스."""
+"""TubeArchive CLI 진입점.
+
+다양한 기기(Nikon, GoPro, DJI, iPhone)의 4K 영상을 HEVC 10-bit로
+표준화·병합하는 파이프라인을 제공한다.
+
+파이프라인 흐름::
+
+    scan_videos → Transcoder.transcode_video → Merger.merge
+    → save_merge_job_to_db → [upload_to_youtube]
+
+주요 서브커맨드:
+    - 기본(인자 없음): 영상 스캔 → 트랜스코딩 → 병합
+    - ``--upload`` / ``--upload-only``: YouTube 업로드
+    - ``--status`` / ``--catalog``: 작업 현황·메타데이터 조회
+    - ``--setup-youtube`` / ``--youtube-auth``: 인증 관리
+"""
 
 import argparse
-import csv
 import json
 import logging
 import os
@@ -11,15 +25,37 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from threading import Lock
-from typing import TextIO, TypedDict
+from typing import NamedTuple
 
 from tubearchive import __version__
+from tubearchive.commands.catalog import (
+    CATALOG_STATUS_SENTINEL,
+    STATUS_ICONS,
+    cmd_catalog,
+    format_duration,
+    normalize_status_filter,
+)
+from tubearchive.config import (
+    ENV_FADE_DURATION,
+    ENV_GROUP_SEQUENCES,
+    ENV_OUTPUT_DIR,
+    ENV_PARALLEL,
+    ENV_YOUTUBE_PLAYLIST,
+    get_default_denoise,
+    get_default_denoise_level,
+    get_default_fade_duration,
+    get_default_group_sequences,
+    get_default_normalize_audio,
+    get_default_output_dir,
+    get_default_parallel,
+)
 from tubearchive.core.detector import detect_metadata
 from tubearchive.core.grouper import (
     FileSequenceGroup,
@@ -30,76 +66,22 @@ from tubearchive.core.grouper import (
 from tubearchive.core.merger import Merger
 from tubearchive.core.scanner import scan_videos
 from tubearchive.core.transcoder import Transcoder
-from tubearchive.database.repository import MergeJobRepository, TranscodingJobRepository
+from tubearchive.database.repository import (
+    MergeJobRepository,
+    TranscodingJobRepository,
+    VideoRepository,
+)
 from tubearchive.database.schema import init_database
 from tubearchive.models.video import FadeConfig, VideoFile
+from tubearchive.utils import truncate_path
 from tubearchive.utils.progress import MultiProgressBar, ProgressInfo, format_size
 from tubearchive.utils.summary_generator import generate_single_file_description
 
 logger = logging.getLogger(__name__)
 
-# 상태 아이콘 매핑 (cmd_status, cmd_status_detail 공용)
-STATUS_ICONS: dict[str, str] = {
-    "pending": "⏳ 대기",
-    "processing": "🔄 진행",
-    "completed": "✅ 완료",
-    "failed": "❌ 실패",
-    "merged": "📦 병합됨",
-}
 
-CATALOG_STATUS_SENTINEL = "__show__"
-CATALOG_UNKNOWN_STATUS = "untracked"
-CATALOG_UNKNOWN_DEVICE = "미상"
-
-
-def _format_duration(seconds: float) -> str:
-    """초를 '1h 30m' 또는 '5m 30s' 형식으로 변환한다."""
-    total = int(seconds)
-    if total >= 3600:
-        return f"{total // 3600}h {(total % 3600) // 60}m"
-    if total >= 60:
-        return f"{total // 60}m {total % 60}s"
-    return f"{total}s"
-
-
-def _truncate_path(path: str, max_len: int = 60) -> str:
-    """긴 경로는 끝부분을 남기고 줄인다."""
-    if len(path) <= max_len:
-        return path
-    tail_len = max_len - 3
-    return "..." + path[-tail_len:]
-
-
-def _parse_creation_date(creation_time: str) -> str:
-    """ISO datetime에서 날짜만 추출."""
-    if not creation_time:
-        return "-"
-    try:
-        return datetime.fromisoformat(creation_time).date().isoformat()
-    except ValueError:
-        return creation_time[:10]
-
-
-def _normalize_device_label(device: str | None) -> str:
-    """기기 라벨 정규화."""
-    if not device:
-        return CATALOG_UNKNOWN_DEVICE
-    stripped = device.strip()
-    return stripped if stripped else CATALOG_UNKNOWN_DEVICE
-
-
-def _normalize_status_filter(status: str | None) -> str | None:
-    """상태 필터 정규화."""
-    if status is None or status == CATALOG_STATUS_SENTINEL:
-        return None
-    return status.strip().lower()
-
-
-def _format_catalog_status(status: str) -> str:
-    """카탈로그 출력용 상태 포맷."""
-    if status == CATALOG_UNKNOWN_STATUS:
-        return "-"
-    return STATUS_ICONS.get(status, status)
+# NOTE: STATUS_ICONS, CATALOG_STATUS_SENTINEL, format_duration, normalize_status_filter 등
+#       카탈로그/상태 관련 상수와 유틸리티는 tubearchive.commands.catalog에서 import합니다.
 
 
 def safe_input(prompt: str) -> str:
@@ -137,15 +119,46 @@ def safe_input(prompt: str) -> str:
         return ""
 
 
-# 환경 변수
-ENV_OUTPUT_DIR = "TUBEARCHIVE_OUTPUT_DIR"
-ENV_YOUTUBE_PLAYLIST = "TUBEARCHIVE_YOUTUBE_PLAYLIST"
-ENV_PARALLEL = "TUBEARCHIVE_PARALLEL"
-ENV_DENOISE = "TUBEARCHIVE_DENOISE"
-ENV_DENOISE_LEVEL = "TUBEARCHIVE_DENOISE_LEVEL"
-ENV_NORMALIZE_AUDIO = "TUBEARCHIVE_NORMALIZE_AUDIO"
-ENV_GROUP_SEQUENCES = "TUBEARCHIVE_GROUP_SEQUENCES"
-ENV_FADE_DURATION = "TUBEARCHIVE_FADE_DURATION"
+# NOTE: 환경변수 상수(ENV_*)와 기본값 헬퍼(get_default_*)는
+#       tubearchive.config 모듈에서 import합니다.
+
+
+@contextmanager
+def database_session() -> Generator[sqlite3.Connection]:
+    """DB 연결을 자동으로 닫아주는 context manager.
+
+    ``init_database()`` 로 연결을 열고, 블록이 끝나면 (예외 발생 포함)
+    자동으로 ``conn.close()`` 를 호출한다.
+
+    Yields:
+        sqlite3.Connection: 초기화된 DB 연결
+    """
+    conn = init_database()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+class ClipInfo(NamedTuple):
+    """영상 클립 메타데이터 (Summary·타임라인용).
+
+    ``_collect_clip_info`` 의 반환값으로, 기존 ``tuple[str, float, str|None, str|None]``
+    을 대체하여 필드 의미를 명확히 한다. NamedTuple이므로 기존 tuple 언패킹과
+    역호환된다.
+
+    Attributes:
+        name: 파일명 (예: ``GH010042.MP4``)
+        duration: 재생시간 (초)
+        device: 촬영 기기명 (예: ``Nikon Z6III``, ``GoPro HERO12``)
+        shot_time: 촬영 시각 문자열 (``HH:MM:SS``, None이면 알 수 없음)
+    """
+
+    name: str
+    duration: float
+    device: str | None
+    shot_time: str | None
+
 
 # YYYYMMDD 패턴 (파일명 시작 부분)
 DATE_PATTERN = re.compile(r"^(\d{4})(\d{2})(\d{2})\s*(.*)$")
@@ -177,17 +190,6 @@ def format_youtube_title(title: str) -> str:
     return title
 
 
-def get_default_output_dir() -> Path | None:
-    """환경 변수에서 기본 출력 디렉토리 가져오기."""
-    env_dir = os.environ.get(ENV_OUTPUT_DIR)
-    if env_dir:
-        path = Path(env_dir)
-        if path.is_dir():
-            return path
-        logger.warning(f"{ENV_OUTPUT_DIR}={env_dir} is not a valid directory")
-    return None
-
-
 def get_temp_dir() -> Path:
     """시스템 임시 디렉토리 내 tubearchive 폴더 반환."""
     temp_base = Path(tempfile.gettempdir()) / "tubearchive"
@@ -216,80 +218,13 @@ def check_output_disk_space(output_dir: Path, required_bytes: int) -> bool:
     return True
 
 
-def get_default_parallel() -> int:
-    """환경 변수에서 기본 병렬 처리 수 가져오기."""
-    env_parallel = os.environ.get(ENV_PARALLEL)
-    if env_parallel:
-        try:
-            val = int(env_parallel)
-            if val >= 1:
-                return val
-            logger.warning(f"{ENV_PARALLEL}={env_parallel} must be >= 1, using 1")
-        except ValueError:
-            logger.warning(f"{ENV_PARALLEL}={env_parallel} is not a valid number")
-    return 1  # 기본값: 순차 처리
-
-
-def _parse_env_bool(value: str) -> bool:
-    """환경 변수 bool 파싱."""
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def get_default_denoise() -> bool:
-    """환경 변수에서 기본 denoise 여부 가져오기."""
-    env_denoise = os.environ.get(ENV_DENOISE)
-    if env_denoise is None:
-        return False
-    return _parse_env_bool(env_denoise)
-
-
-def get_default_denoise_level() -> str | None:
-    """환경 변수에서 기본 denoise level 가져오기."""
-    env_level = os.environ.get(ENV_DENOISE_LEVEL)
-    if not env_level:
-        return None
-    normalized = env_level.strip().lower()
-    if normalized in {"light", "medium", "heavy"}:
-        return normalized
-    logger.warning(f"{ENV_DENOISE_LEVEL}={env_level} is not a valid level")
-    return None
-
-
-def get_default_normalize_audio() -> bool:
-    """환경 변수에서 기본 normalize_audio 여부 가져오기."""
-    env_val = os.environ.get(ENV_NORMALIZE_AUDIO)
-    if env_val is None:
-        return False
-    return _parse_env_bool(env_val)
-
-
-def get_default_group_sequences() -> bool:
-    """환경 변수에서 기본 그룹핑 여부 가져오기."""
-    env_val = os.environ.get(ENV_GROUP_SEQUENCES)
-    if env_val is None:
-        return True
-    return _parse_env_bool(env_val)
-
-
-def get_default_fade_duration() -> float:
-    """환경 변수에서 기본 페이드 시간 가져오기."""
-    env_val = os.environ.get(ENV_FADE_DURATION)
-    if not env_val:
-        return 0.5
-    try:
-        val = float(env_val)
-    except ValueError:
-        logger.warning(f"{ENV_FADE_DURATION}={env_val} is not a valid number")
-        return 0.5
-    if val < 0:
-        logger.warning(f"{ENV_FADE_DURATION}={env_val} must be >= 0, using 0.5")
-        return 0.5
-    return val
-
-
 @dataclass
 class ValidatedArgs:
-    """검증된 CLI 인자."""
+    """검증된 CLI 인자.
+
+    ``argparse.Namespace`` 를 타입 안전하게 변환한 데이터클래스.
+    :func:`validate_args` 에서 생성된다.
+    """
 
     targets: list[Path]
     output: Path | None
@@ -310,48 +245,40 @@ class ValidatedArgs:
 
 
 @dataclass(frozen=True)
-class TranscodeResult:
-    """단일 트랜스코딩 결과."""
+class TranscodeOptions:
+    """트랜스코딩 공통 옵션.
 
-    output_path: Path
-    video_id: int
-    clip_info: tuple[str, float, str | None, str | None]
+    ``_transcode_single``, ``_transcode_parallel``, ``_transcode_sequential``
+    에서 공유하는 오디오·페이드 설정을 묶는다.
+
+    Attributes:
+        denoise: 오디오 노이즈 제거 여부 (afftdn)
+        denoise_level: 노이즈 제거 강도 (``light`` | ``medium`` | ``heavy``)
+        normalize_audio: EBU R128 loudnorm 2-pass 적용 여부
+        fade_map: 파일별 페이드 설정 맵 (그룹 경계 기반)
+        fade_duration: 기본 페이드 시간 (초)
+    """
+
+    denoise: bool = False
+    denoise_level: str = "medium"
+    normalize_audio: bool = False
+    fade_map: dict[Path, FadeConfig] | None = None
+    fade_duration: float = 0.5
 
 
 @dataclass(frozen=True)
-class VideoCatalogItem:
-    """영상 메타데이터 카탈로그 항목."""
+class TranscodeResult:
+    """단일 트랜스코딩 결과.
 
+    Attributes:
+        output_path: 트랜스코딩된 임시 파일 경로
+        video_id: DB ``videos`` 테이블 ID
+        clip_info: 클립 메타데이터 (파일명, 길이, 기기명, 촬영시각)
+    """
+
+    output_path: Path
     video_id: int
-    creation_time: str
-    creation_date: str
-    device: str
-    duration_seconds: float | None
-    status: str
-    progress_percent: int | None
-    path: str
-
-
-class CatalogDeviceStat(TypedDict):
-    """카탈로그 기기별 통계."""
-
-    device: str
-    count: int
-
-
-class CatalogDateRange(TypedDict):
-    """카탈로그 날짜 범위."""
-
-    start: str
-    end: str
-
-
-class CatalogSummary(TypedDict):
-    """카탈로그 요약."""
-
-    total: int
-    devices: list[CatalogDeviceStat]
-    date_range: CatalogDateRange | None
+    clip_info: ClipInfo
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -656,17 +583,21 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def validate_args(args: argparse.Namespace) -> ValidatedArgs:
-    """
-    CLI 인자 검증.
+    """CLI 인자를 검증하고 :class:`ValidatedArgs` 로 변환한다.
+
+    각 설정의 우선순위: **CLI 옵션 > 환경변수 > config.toml > 기본값**.
+    ``get_default_*()`` 헬퍼가 환경변수·config.toml을 이미 반영하므로,
+    여기서는 CLI 인자가 명시되었는지만 확인한다.
 
     Args:
-        args: 파싱된 인자
+        args: ``argparse`` 파싱 결과
 
     Returns:
-        검증된 인자
+        타입-안전하게 검증된 인자 데이터클래스
 
     Raises:
-        FileNotFoundError: 파일/디렉토리가 존재하지 않는 경우
+        FileNotFoundError: 대상 파일/디렉토리가 없을 때
+        ValueError: fade_duration < 0 또는 thumbnail_quality 범위 초과
     """
     # targets 검증
     targets: list[Path] = []
@@ -835,34 +766,41 @@ def handle_single_file_upload(
     creation_time_str = video_file.creation_time.strftime("%H:%M:%S")
 
     # 4. 클립 정보 생성
-    clip_info: dict[str, str | float | None] = {
-        "name": video_file.path.name,
-        "duration": metadata.duration_seconds,
-        "start": 0.0,
-        "end": metadata.duration_seconds,
-        "device": metadata.device_model or "Unknown",
-        "shot_time": creation_time_str,
-    }
+    clip = ClipInfo(
+        name=video_file.path.name,
+        duration=metadata.duration_seconds,
+        device=metadata.device_model or "Unknown",
+        shot_time=creation_time_str,
+    )
 
     # 5. YouTube 설명 생성 (단일 파일용)
-    youtube_description = generate_single_file_description(clip_info)
-
-    # 6. DB 저장
-    conn = init_database()
-    repo = MergeJobRepository(conn)
-    today = date.today().isoformat()
-
-    repo.create(
-        output_path=video_file.path,
-        video_ids=[],  # 트랜스코딩 안 함
-        title=title,
-        date=today,
-        total_duration_seconds=metadata.duration_seconds,
-        total_size_bytes=video_file.path.stat().st_size,
-        clips_info_json=json.dumps([clip_info]),
-        summary_markdown=youtube_description,
+    youtube_description = generate_single_file_description(
+        device=clip.device, shot_time=clip.shot_time
     )
-    conn.close()
+
+    # 6. DB 저장 (타임라인 dict: start/end 포함)
+    clip_dict: dict[str, str | float | None] = {
+        "name": clip.name,
+        "duration": clip.duration,
+        "start": 0.0,
+        "end": clip.duration,
+        "device": clip.device,
+        "shot_time": clip.shot_time,
+    }
+    with database_session() as conn:
+        repo = MergeJobRepository(conn)
+        today = date.today().isoformat()
+
+        repo.create(
+            output_path=video_file.path,
+            video_ids=[],  # 트랜스코딩 안 함
+            title=title,
+            date=today,
+            total_duration_seconds=metadata.duration_seconds,
+            total_size_bytes=video_file.path.stat().st_size,
+            clips_info_json=json.dumps([clip_dict]),
+            summary_markdown=youtube_description,
+        )
 
     # 7. 콘솔 출력
     logger.info(f"Saved to DB: {title}")
@@ -877,42 +815,65 @@ def handle_single_file_upload(
     return video_file.path
 
 
-def _collect_clip_info(vf: VideoFile) -> tuple[str, float, str | None, str | None]:
-    """영상 파일에서 Summary용 클립 메타데이터를 수집한다."""
+def _collect_clip_info(video_file: VideoFile) -> ClipInfo:
+    """영상 파일에서 Summary·타임라인용 클립 메타데이터를 수집한다.
+
+    ffprobe로 해상도·코덱·길이 등을 추출하고, 파일 생성 시간에서
+    촬영 시각 문자열을 만든다. ffprobe 실패 시 duration=0.0 폴백.
+
+    Args:
+        video_file: 대상 영상 파일
+
+    Returns:
+        ClipInfo(name, duration, device, shot_time)
+    """
     try:
-        metadata = detect_metadata(vf.path)
-        creation_time_str = vf.creation_time.strftime("%H:%M:%S")
-        return (vf.path.name, metadata.duration_seconds, metadata.device_model, creation_time_str)
+        metadata = detect_metadata(video_file.path)
+        creation_time_str = video_file.creation_time.strftime("%H:%M:%S")
+        return ClipInfo(
+            name=video_file.path.name,
+            duration=metadata.duration_seconds,
+            device=metadata.device_model,
+            shot_time=creation_time_str,
+        )
     except Exception as e:
-        logger.warning(f"Failed to get metadata for {vf.path}: {e}")
-        return (vf.path.name, 0.0, None, None)
+        logger.warning(f"Failed to get metadata for {video_file.path}: {e}")
+        return ClipInfo(name=video_file.path.name, duration=0.0, device=None, shot_time=None)
 
 
 def _transcode_single(
-    vf: VideoFile,
+    video_file: VideoFile,
     temp_dir: Path,
-    denoise: bool,
-    denoise_level: str,
-    normalize_audio: bool = False,
-    fade_map: dict[Path, FadeConfig] | None = None,
-    fade_duration: float = 0.5,
+    opts: TranscodeOptions,
 ) -> TranscodeResult:
-    """단일 파일 트랜스코딩 (병렬 처리용, 자체 Transcoder 컨텍스트 사용)."""
-    fade_config = fade_map.get(vf.path) if fade_map else None
+    """단일 파일을 독립 Transcoder 컨텍스트에서 트랜스코딩한다.
+
+    ``_transcode_parallel`` 에서 ThreadPoolExecutor에 제출되는 단위 작업이다.
+    각 호출마다 Transcoder를 새로 생성하여 스레드 안전성을 보장한다.
+
+    Args:
+        video_file: 트랜스코딩할 원본 영상
+        temp_dir: 트랜스코딩 출력 임시 디렉토리
+        opts: 공통 트랜스코딩 옵션 (denoise, loudnorm, fade 등)
+
+    Returns:
+        ``TranscodeResult`` (출력 경로, video DB ID, 클립 메타데이터)
+    """
+    fade_config = opts.fade_map.get(video_file.path) if opts.fade_map else None
     fade_in = fade_config.fade_in if fade_config else None
     fade_out = fade_config.fade_out if fade_config else None
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
         output_path, video_id = transcoder.transcode_video(
-            vf,
-            denoise=denoise,
-            denoise_level=denoise_level,
-            normalize_audio=normalize_audio,
-            fade_duration=fade_duration,
+            video_file,
+            denoise=opts.denoise,
+            denoise_level=opts.denoise_level,
+            normalize_audio=opts.normalize_audio,
+            fade_duration=opts.fade_duration,
             fade_in_duration=fade_in,
             fade_out_duration=fade_out,
         )
-        clip_info = _collect_clip_info(vf)
+        clip_info = _collect_clip_info(video_file)
         return TranscodeResult(output_path=output_path, video_id=video_id, clip_info=clip_info)
 
 
@@ -920,19 +881,32 @@ def _transcode_parallel(
     video_files: list[VideoFile],
     temp_dir: Path,
     max_workers: int,
-    denoise: bool,
-    denoise_level: str,
-    normalize_audio: bool = False,
-    fade_map: dict[Path, FadeConfig] | None = None,
-    fade_duration: float = 0.5,
+    opts: TranscodeOptions,
 ) -> list[TranscodeResult]:
-    """병렬 트랜스코딩 (ThreadPoolExecutor 사용)."""
+    """``ThreadPoolExecutor`` 를 사용한 병렬 트랜스코딩.
+
+    각 파일을 독립된 :class:`Transcoder` 컨텍스트에서 처리하며,
+    완료 순서에 관계없이 **원본 인덱스 순** 으로 결과를 정렬하여 반환한다.
+
+    Args:
+        video_files: 트랜스코딩 대상 파일 목록
+        temp_dir: 임시 출력 디렉토리
+        max_workers: 최대 동시 워커 수
+        opts: 트랜스코딩 공통 옵션 (denoise, loudnorm, fade 등)
+
+    Returns:
+        원본 순서가 유지된 트랜스코딩 결과 리스트
+
+    Raises:
+        RuntimeError: 하나 이상의 워커가 실패한 경우
+    """
     results: dict[int, TranscodeResult] = {}
     completed_count = 0
     total_count = len(video_files)
     print_lock = Lock()
 
     def on_complete(idx: int, filename: str, status: str) -> None:
+        """병렬 워커 완료 콜백 -- 진행 카운터 갱신 및 콘솔 출력."""
         nonlocal completed_count
         with print_lock:
             completed_count += 1
@@ -948,15 +922,11 @@ def _transcode_parallel(
         futures = {
             executor.submit(
                 _transcode_single,
-                vf,
+                video_file,
                 temp_dir,
-                denoise,
-                denoise_level,
-                normalize_audio,
-                fade_map,
-                fade_duration,
+                opts,
             ): i
-            for i, vf in enumerate(video_files)
+            for i, video_file in enumerate(video_files)
         }
         for future in as_completed(futures):
             idx = futures[future]
@@ -975,38 +945,47 @@ def _transcode_parallel(
 def _transcode_sequential(
     video_files: list[VideoFile],
     temp_dir: Path,
-    denoise: bool,
-    denoise_level: str,
-    normalize_audio: bool = False,
-    fade_map: dict[Path, FadeConfig] | None = None,
-    fade_duration: float = 0.5,
+    opts: TranscodeOptions,
 ) -> list[TranscodeResult]:
-    """순차 트랜스코딩 (진행률 표시)."""
+    """영상 파일을 순차적으로 트랜스코딩한다.
+
+    :class:`MultiProgressBar` 로 파일별 진행률(fps, ETA)을 실시간 표시한다.
+    ``parallel=1`` 이거나 파일이 1개일 때 사용된다.
+
+    Args:
+        video_files: 트랜스코딩할 영상 목록
+        temp_dir: 트랜스코딩 결과 저장 임시 디렉토리
+        opts: 트랜스코딩 공통 옵션 (오디오·페이드 설정)
+
+    Returns:
+        트랜스코딩 결과 리스트 (출력 경로, video_id, 클립 정보)
+    """
     results: list[TranscodeResult] = []
     progress = MultiProgressBar(total_files=len(video_files))
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
-        for vf in video_files:
-            progress.start_file(vf.path.name)
+        for video_file in video_files:
+            progress.start_file(video_file.path.name)
 
             def on_progress_info(info: ProgressInfo) -> None:
+                """FFmpeg 상세 진행률을 MultiProgressBar에 전달."""
                 progress.update_with_info(info)
 
-            fade_config = fade_map.get(vf.path) if fade_map else None
+            fade_config = opts.fade_map.get(video_file.path) if opts.fade_map else None
             fade_in = fade_config.fade_in if fade_config else None
             fade_out = fade_config.fade_out if fade_config else None
 
             output_path, video_id = transcoder.transcode_video(
-                vf,
-                denoise=denoise,
-                denoise_level=denoise_level,
-                normalize_audio=normalize_audio,
-                fade_duration=fade_duration,
+                video_file,
+                denoise=opts.denoise,
+                denoise_level=opts.denoise_level,
+                normalize_audio=opts.normalize_audio,
+                fade_duration=opts.fade_duration,
                 fade_in_duration=fade_in,
                 fade_out_duration=fade_out,
                 progress_info_callback=on_progress_info,
             )
-            clip_info = _collect_clip_info(vf)
+            clip_info = _collect_clip_info(video_file)
             results.append(
                 TranscodeResult(
                     output_path=output_path,
@@ -1020,7 +999,16 @@ def _transcode_sequential(
 
 
 def _resolve_output_path(validated_args: ValidatedArgs) -> Path:
-    """출력 파일 경로를 결정한다."""
+    """출력 파일 경로를 결정한다.
+
+    우선순위: ``--output`` 직접 지정 > ``--output-dir`` + 자동 파일명.
+
+    Args:
+        validated_args: 검증된 CLI 인자
+
+    Returns:
+        최종 출력 파일 경로
+    """
     if validated_args.output:
         return validated_args.output
     output_filename = get_output_filename(validated_args.targets)
@@ -1054,7 +1042,11 @@ def _cleanup_temp(
 
 
 def _print_summary(summary_markdown: str | None) -> None:
-    """Summary 마크다운을 콘솔에 출력한다."""
+    """병합 요약 마크다운을 구분선과 함께 콘솔에 출력한다.
+
+    Args:
+        summary_markdown: 출력할 마크다운 문자열. ``None`` 이면 무시.
+    """
     if not summary_markdown:
         return
     print("\n" + "=" * 60)
@@ -1085,8 +1077,8 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         raise ValueError("No video files found")
 
     logger.info(f"Found {len(video_files)} video files")
-    for vf in video_files:
-        logger.info(f"  - {vf.path.name}")
+    for video_file in video_files:
+        logger.info(f"  - {video_file.path.name}")
 
     # 단일 파일 + --upload 시 빠른 경로
     if len(video_files) == 1 and validated_args.upload:
@@ -1105,7 +1097,8 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
                 )
     else:
         groups = [
-            FileSequenceGroup(files=(vf,), group_id=f"s_{i}") for i, vf in enumerate(video_files)
+            FileSequenceGroup(files=(video_file,), group_id=f"s_{i}")
+            for i, video_file in enumerate(video_files)
         ]
 
     fade_map = compute_fade_map(groups, default_fade=validated_args.fade_duration)
@@ -1114,30 +1107,21 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     temp_dir = get_temp_dir()
     logger.info(f"Using temp directory: {temp_dir}")
 
+    transcode_opts = TranscodeOptions(
+        denoise=validated_args.denoise,
+        denoise_level=validated_args.denoise_level,
+        normalize_audio=validated_args.normalize_audio,
+        fade_map=fade_map,
+        fade_duration=validated_args.fade_duration,
+    )
+
     parallel = validated_args.parallel
     if parallel > 1:
         logger.info(f"Starting parallel transcoding (workers: {parallel})...")
-        results = _transcode_parallel(
-            video_files,
-            temp_dir,
-            parallel,
-            validated_args.denoise,
-            validated_args.denoise_level,
-            validated_args.normalize_audio,
-            fade_map,
-            validated_args.fade_duration,
-        )
+        results = _transcode_parallel(video_files, temp_dir, parallel, transcode_opts)
     else:
         logger.info("Starting transcoding...")
-        results = _transcode_sequential(
-            video_files,
-            temp_dir,
-            validated_args.denoise,
-            validated_args.denoise_level,
-            validated_args.normalize_audio,
-            fade_map,
-            validated_args.fade_duration,
-        )
+        results = _transcode_sequential(video_files, temp_dir, transcode_opts)
 
     # 3. 병합
     logger.info("Merging videos...")
@@ -1214,10 +1198,9 @@ def _mark_transcoding_jobs_merged(video_ids: list[int]) -> None:
     if not video_ids:
         return
     try:
-        conn = init_database()
-        job_repo = TranscodingJobRepository(conn)
-        count = job_repo.mark_merged_by_video_ids(video_ids)
-        conn.close()
+        with database_session() as conn:
+            job_repo = TranscodingJobRepository(conn)
+            count = job_repo.mark_merged_by_video_ids(video_ids)
         logger.debug(f"Marked {count} transcoding jobs as merged")
     except Exception:
         logger.warning("Failed to mark transcoding jobs as merged", exc_info=True)
@@ -1225,22 +1208,22 @@ def _mark_transcoding_jobs_merged(video_ids: list[int]) -> None:
 
 def save_merge_job_to_db(
     output_path: Path,
-    video_clips: list[tuple[str, float, str | None, str | None]],
+    video_clips: list[ClipInfo],
     targets: list[Path],
     video_ids: list[int],
     groups: list[FileSequenceGroup] | None = None,
 ) -> str | None:
-    """
-    병합 작업 정보를 DB에 저장 (타임라인 및 Summary 포함).
+    """병합 작업 정보를 DB에 저장 (타임라인 및 Summary 포함).
 
     Args:
         output_path: 출력 파일 경로
-        video_clips: (파일명, 재생시간, 기종, 촬영시간) 튜플 리스트
+        video_clips: 클립 메타데이터 리스트
         targets: 입력 타겟 목록 (제목 추출용)
         video_ids: 병합된 영상들의 DB ID 목록
+        groups: 시퀀스 그룹 목록 (Summary 생성용)
 
     Returns:
-        생성된 Summary 마크다운 (실패 시 None)
+        콘솔 출력용 Summary 마크다운 (실패 시 None)
     """
     from tubearchive.utils.summary_generator import (
         generate_clip_summary,
@@ -1248,61 +1231,58 @@ def save_merge_job_to_db(
     )
 
     try:
-        conn = init_database()
-        repo = MergeJobRepository(conn)
+        with database_session() as conn:
+            repo = MergeJobRepository(conn)
 
-        # 타임라인 정보 생성 (각 클립의 메타데이터 포함)
-        timeline: list[dict[str, str | float | None]] = []
-        current_time = 0.0
-        for name, duration, device, shot_time in video_clips:
-            timeline.append(
-                {
-                    "name": name,
-                    "duration": duration,
-                    "start": current_time,
-                    "end": current_time + duration,
-                    "device": device,
-                    "shot_time": shot_time,
-                }
+            # 타임라인 정보 생성 (각 클립의 메타데이터 포함)
+            timeline: list[dict[str, str | float | None]] = []
+            current_time = 0.0
+            for clip in video_clips:
+                timeline.append(
+                    {
+                        "name": clip.name,
+                        "duration": clip.duration,
+                        "start": current_time,
+                        "end": current_time + clip.duration,
+                        "device": clip.device,
+                        "shot_time": clip.shot_time,
+                    }
+                )
+                current_time += clip.duration
+
+            clips_json = json.dumps(timeline, ensure_ascii=False)
+
+            # 제목: 디렉토리명
+            title = None
+            if targets:
+                first_target = targets[0]
+                title = first_target.name if first_target.is_dir() else first_target.parent.name
+                if not title or title == ".":
+                    title = output_path.stem
+
+            today = date.today().isoformat()
+
+            total_duration = sum(c.duration for c in video_clips)
+            total_size = output_path.stat().st_size if output_path.exists() else 0
+
+            # 콘솔 출력용 요약 (마크다운 형식)
+            console_summary = generate_clip_summary(video_clips, groups=groups)
+            # YouTube 설명용 (타임스탬프 + 촬영기기)
+            youtube_description = generate_youtube_description(video_clips, groups=groups)
+
+            repo.create(
+                output_path=output_path,
+                video_ids=video_ids,
+                title=title,
+                date=today,
+                total_duration_seconds=total_duration,
+                total_size_bytes=total_size,
+                clips_info_json=clips_json,
+                summary_markdown=youtube_description,
             )
-            current_time += duration
 
-        clips_json = json.dumps(timeline, ensure_ascii=False)
-
-        # 제목: 디렉토리명
-        title = None
-        if targets:
-            first_target = targets[0]
-            title = first_target.name if first_target.is_dir() else first_target.parent.name
-            if not title or title == ".":
-                title = output_path.stem
-
-        # 날짜: 오늘
-        today = date.today().isoformat()
-
-        # 총 재생시간 및 파일 크기
-        total_duration = sum(d for _, d, _, _ in video_clips)
-        total_size = output_path.stat().st_size if output_path.exists() else 0
-
-        # 콘솔 출력용 요약 (마크다운 형식)
-        console_summary = generate_clip_summary(video_clips, groups=groups)
-
-        # YouTube 설명용 (타임스탬프 + 촬영기기)
-        youtube_description = generate_youtube_description(video_clips, groups=groups)
-
-        repo.create(
-            output_path=output_path,
-            video_ids=video_ids,
-            title=title,
-            date=today,
-            total_duration_seconds=total_duration,
-            total_size_bytes=total_size,
-            clips_info_json=clips_json,
-            summary_markdown=youtube_description,  # YouTube 설명용으로 저장
-        )
-        conn.close()
         logger.debug("Merge job saved to database with summary")
-        return console_summary  # 콘솔에는 상세 요약 출력
+        return console_summary
 
     except Exception as e:
         logger.warning(f"Failed to save merge job to DB: {e}")
@@ -1400,6 +1380,7 @@ def upload_to_youtube(
         last_percent = -1
 
         def on_progress(percent: int) -> None:
+            """업로드 진행률 콜백 -- 프로그레스 바 갱신."""
             nonlocal last_percent
             if percent == last_percent:
                 return  # 중복 업데이트 방지
@@ -1441,10 +1422,9 @@ def upload_to_youtube(
         # DB에 YouTube ID 저장
         if merge_job_id is not None:
             try:
-                conn = init_database()
-                repo = MergeJobRepository(conn)
-                repo.update_youtube_id(merge_job_id, result.video_id)
-                conn.close()
+                with database_session() as conn:
+                    repo = MergeJobRepository(conn)
+                    repo.update_youtube_id(merge_job_id, result.video_id)
                 logger.debug(f"YouTube ID {result.video_id} saved to merge job {merge_job_id}")
             except Exception as e:
                 logger.warning(f"Failed to save YouTube ID to DB: {e}")
@@ -1584,8 +1564,10 @@ def cmd_list_playlists() -> None:
 
 
 def _delete_build_records(conn: sqlite3.Connection, video_ids: list[int]) -> None:
-    """
-    빌드 관련 레코드 삭제 (transcoding_jobs, videos).
+    """빌드 관련 레코드 삭제 (transcoding_jobs → videos 순서).
+
+    트랜스코딩 작업을 먼저 삭제한 뒤 원본 영상 레코드를 삭제한다.
+    외래키 참조 순서를 지키기 위해 transcoding_jobs를 먼저 정리한다.
 
     Args:
         conn: DB 연결
@@ -1593,22 +1575,8 @@ def _delete_build_records(conn: sqlite3.Connection, video_ids: list[int]) -> Non
     """
     if not video_ids:
         return
-
-    placeholders = ",".join("?" * len(video_ids))
-
-    # transcoding_jobs 삭제
-    conn.execute(
-        "DELETE FROM transcoding_jobs WHERE video_id IN (" + placeholders + ")",
-        video_ids,
-    )
-
-    # videos 삭제
-    conn.execute(
-        "DELETE FROM videos WHERE id IN (" + placeholders + ")",
-        video_ids,
-    )
-
-    conn.commit()
+    TranscodingJobRepository(conn).delete_by_video_ids(video_ids)
+    VideoRepository(conn).delete_by_ids(video_ids)
 
 
 def _interactive_select(items: Sequence[object], prompt: str) -> int | None:
@@ -1643,138 +1611,112 @@ def _interactive_select(items: Sequence[object], prompt: str) -> int | None:
 
 
 def cmd_reset_build(path_arg: str) -> None:
-    """
-    --reset-build 옵션 처리.
+    """``--reset-build`` 옵션 처리.
 
-    병합 기록과 관련 트랜스코딩 기록을 삭제하여 다시 빌드할 수 있도록 합니다.
+    병합 기록과 관련 트랜스코딩 기록을 삭제하여 다시 빌드할 수 있도록 한다.
 
     Args:
-        path_arg: 파일 경로 (빈 문자열이면 목록에서 선택)
+        path_arg: 파일 경로 (빈 문자열이면 대화형 목록에서 선택)
     """
-    conn = init_database()
-    repo = MergeJobRepository(conn)
+    with database_session() as conn:
+        repo = MergeJobRepository(conn)
 
-    if path_arg:
-        # 경로가 지정된 경우 해당 경로의 레코드 삭제
-        target_path = Path(path_arg).resolve()
+        if path_arg:
+            target_path = Path(path_arg).resolve()
 
-        # 먼저 merge_job에서 video_ids 조회
-        cursor = conn.execute(
-            "SELECT video_ids FROM merge_jobs WHERE output_path = ?",
-            (str(target_path),),
-        )
-        row = cursor.fetchone()
-        if row:
-            video_ids = json.loads(row[0])
-            _delete_build_records(conn, video_ids)
+            # merge_job에서 video_ids 조회 → 관련 레코드 삭제
+            merge_job = repo.get_by_output_path(target_path)
+            if merge_job:
+                _delete_build_records(conn, merge_job.video_ids)
 
-        deleted = repo.delete_by_output_path(target_path)
-        if deleted > 0:
-            print(f"✅ 빌드 기록 삭제됨: {target_path}")
-            print("   이제 다시 빌드할 수 있습니다.")
+            deleted = repo.delete_by_output_path(target_path)
+            if deleted > 0:
+                print(f"✅ 빌드 기록 삭제됨: {target_path}")
+                print("   이제 다시 빌드할 수 있습니다.")
+            else:
+                print(f"⚠️ 해당 경로의 기록이 없습니다: {target_path}")
         else:
-            print(f"⚠️ 해당 경로의 기록이 없습니다: {target_path}")
-    else:
-        # 목록에서 선택
-        jobs = repo.get_all()
-        if not jobs:
-            print("📋 빌드 기록이 없습니다.")
-            conn.close()
-            return
+            jobs = repo.get_all()
+            if not jobs:
+                print("📋 빌드 기록이 없습니다.")
+                return
 
-        print("\n📋 빌드 기록 목록")
-        print("=" * 80)
-        print(f"{'번호':<4} {'제목':<30} {'날짜':<12} {'YouTube':<10} 경로")
-        print("-" * 80)
-        for i, job in enumerate(jobs, 1):
-            title = (job.title or "-")[:28]
-            date = job.date or "-"
-            yt_status = "✅ 업로드됨" if job.youtube_id else "-"
-            path = str(job.output_path)
-            if len(path) > 40:
-                path = "..." + path[-37:]
-            print(f"{i:<4} {title:<30} {date:<12} {yt_status:<10} {path}")
-        print("=" * 80)
+            print("\n📋 빌드 기록 목록")
+            print("=" * 80)
+            print(f"{'번호':<4} {'제목':<30} {'날짜':<12} {'YouTube':<10} 경로")
+            print("-" * 80)
+            for i, job in enumerate(jobs, 1):
+                title = (job.title or "-")[:28]
+                job_date = job.date or "-"
+                yt_status = "✅ 업로드됨" if job.youtube_id else "-"
+                path = truncate_path(str(job.output_path), max_len=40)
+                print(f"{i:<4} {title:<30} {job_date:<12} {yt_status:<10} {path}")
+            print("=" * 80)
 
-        idx = _interactive_select(jobs, "\n삭제할 번호 입력 (0: 취소): ")
-        if idx is None:
-            conn.close()
-            return
+            idx = _interactive_select(jobs, "\n삭제할 번호 입력 (0: 취소): ")
+            if idx is None:
+                return
 
-        job = jobs[idx]
-        _delete_build_records(conn, job.video_ids)
-        if job.id is not None:
-            repo.delete(job.id)
-        print(f"\n✅ 빌드 기록 삭제됨: {job.title or job.output_path}")
-        print("   이제 다시 빌드할 수 있습니다.")
-
-    conn.close()
+            job = jobs[idx]
+            _delete_build_records(conn, job.video_ids)
+            if job.id is not None:
+                repo.delete(job.id)
+            print(f"\n✅ 빌드 기록 삭제됨: {job.title or job.output_path}")
+            print("   이제 다시 빌드할 수 있습니다.")
 
 
 def cmd_reset_upload(path_arg: str) -> None:
-    """
-    --reset-upload 옵션 처리.
+    """``--reset-upload`` 옵션 처리.
 
-    YouTube 업로드 기록을 초기화하여 다시 업로드할 수 있도록 합니다.
+    YouTube 업로드 기록을 초기화하여 다시 업로드할 수 있도록 한다.
 
     Args:
-        path_arg: 파일 경로 (빈 문자열이면 목록에서 선택)
+        path_arg: 파일 경로 (빈 문자열이면 대화형 목록에서 선택)
     """
-    conn = init_database()
-    repo = MergeJobRepository(conn)
+    with database_session() as conn:
+        repo = MergeJobRepository(conn)
 
-    if path_arg:
-        # 경로가 지정된 경우 해당 경로의 레코드 초기화
-        target_path = Path(path_arg).resolve()
-        cursor = conn.execute(
-            "SELECT id, youtube_id FROM merge_jobs WHERE output_path = ?",
-            (str(target_path),),
-        )
-        row = cursor.fetchone()
-        if row and row["youtube_id"]:
-            repo.clear_youtube_id(row["id"])
-            print(f"✅ 업로드 기록 초기화됨: {target_path}")
-            print(f"   이전 YouTube ID: {row['youtube_id']}")
-            print("   이제 다시 업로드할 수 있습니다.")
-        elif row:
-            print(f"⚠️ 이미 업로드 기록이 없습니다: {target_path}")
+        if path_arg:
+            target_path = Path(path_arg).resolve()
+            merge_job = repo.get_by_output_path(target_path)
+            if merge_job and merge_job.youtube_id:
+                if merge_job.id is not None:
+                    repo.clear_youtube_id(merge_job.id)
+                print(f"✅ 업로드 기록 초기화됨: {target_path}")
+                print(f"   이전 YouTube ID: {merge_job.youtube_id}")
+                print("   이제 다시 업로드할 수 있습니다.")
+            elif merge_job:
+                print(f"⚠️ 이미 업로드 기록이 없습니다: {target_path}")
+            else:
+                print(f"⚠️ 해당 경로의 기록이 없습니다: {target_path}")
         else:
-            print(f"⚠️ 해당 경로의 기록이 없습니다: {target_path}")
-    else:
-        # 업로드된 목록에서 선택
-        jobs = repo.get_uploaded()
-        if not jobs:
-            print("📋 업로드된 영상이 없습니다.")
-            conn.close()
-            return
+            jobs = repo.get_uploaded()
+            if not jobs:
+                print("📋 업로드된 영상이 없습니다.")
+                return
 
-        print("\n📋 업로드된 영상 목록")
-        print("=" * 90)
-        print(f"{'번호':<4} {'제목':<30} {'날짜':<12} {'YouTube ID':<15} 경로")
-        print("-" * 90)
-        for i, job in enumerate(jobs, 1):
-            title = (job.title or "-")[:28]
-            date = job.date or "-"
-            yt_id = job.youtube_id or "-"
-            path = str(job.output_path)
-            if len(path) > 30:
-                path = "..." + path[-27:]
-            print(f"{i:<4} {title:<30} {date:<12} {yt_id:<15} {path}")
-        print("=" * 90)
+            print("\n📋 업로드된 영상 목록")
+            print("=" * 90)
+            print(f"{'번호':<4} {'제목':<30} {'날짜':<12} {'YouTube ID':<15} 경로")
+            print("-" * 90)
+            for i, job in enumerate(jobs, 1):
+                title = (job.title or "-")[:28]
+                job_date = job.date or "-"
+                yt_id = job.youtube_id or "-"
+                path = truncate_path(str(job.output_path), max_len=30)
+                print(f"{i:<4} {title:<30} {job_date:<12} {yt_id:<15} {path}")
+            print("=" * 90)
 
-        idx = _interactive_select(jobs, "\n초기화할 번호 입력 (0: 취소): ")
-        if idx is None:
-            conn.close()
-            return
+            idx = _interactive_select(jobs, "\n초기화할 번호 입력 (0: 취소): ")
+            if idx is None:
+                return
 
-        job = jobs[idx]
-        if job.id is not None:
-            repo.clear_youtube_id(job.id)
-        print(f"\n✅ 업로드 기록 초기화됨: {job.title or job.output_path}")
-        print(f"   이전 YouTube ID: {job.youtube_id}")
-        print("   이제 다시 업로드할 수 있습니다.")
-
-    conn.close()
+            job = jobs[idx]
+            if job.id is not None:
+                repo.clear_youtube_id(job.id)
+            print(f"\n✅ 업로드 기록 초기화됨: {job.title or job.output_path}")
+            print(f"   이전 YouTube ID: {job.youtube_id}")
+            print("   이제 다시 업로드할 수 있습니다.")
 
 
 def resolve_playlist_ids(playlist_args: list[str] | None) -> list[str]:
@@ -1845,23 +1787,13 @@ def cmd_upload_only(args: argparse.Namespace) -> None:
     description = ""
 
     try:
-        conn = init_database()
-
-        # 최신 MergeJob에서 일치하는 경로 찾기
-        cursor = conn.execute(
-            """SELECT id, summary_markdown FROM merge_jobs
-            WHERE output_path = ? ORDER BY created_at DESC LIMIT 1""",
-            (str(file_path),),
-        )
-        row = cursor.fetchone()
-        if row:
-            merge_job_id = row["id"]
-            # description이 비어있으면 summary_markdown 사용
-            if row["summary_markdown"]:
-                description = row["summary_markdown"]
-                logger.info("Using summary from database as description")
-
-        conn.close()
+        with database_session() as conn:
+            merge_job = MergeJobRepository(conn).get_by_output_path(file_path)
+            if merge_job:
+                merge_job_id = merge_job.id
+                if merge_job.summary_markdown:
+                    description = merge_job.summary_markdown
+                    logger.info("Using summary from database as description")
     except Exception as e:
         logger.warning(f"Failed to load merge job from DB: {e}")
 
@@ -1880,465 +1812,118 @@ def cmd_upload_only(args: argparse.Namespace) -> None:
     )
 
 
-def _fetch_catalog_items(
-    conn: sqlite3.Connection,
-    search_pattern: str | None,
-    device_filter: str | None,
-    status_filter: str | None,
-    group_by_device: bool,
-) -> list[VideoCatalogItem]:
-    """영상 메타데이터 카탈로그를 조회한다."""
-    where_clauses: list[str] = []
-    params: list[str] = []
-
-    if search_pattern:
-        where_clauses.append("v.creation_time LIKE ?")
-        params.append(f"%{search_pattern}%")
-
-    if device_filter:
-        where_clauses.append("v.device_model LIKE ? COLLATE NOCASE")
-        params.append(f"%{device_filter}%")
-
-    if status_filter:
-        if status_filter == CATALOG_UNKNOWN_STATUS:
-            where_clauses.append("lj.status IS NULL")
-        else:
-            where_clauses.append("lj.status = ?")
-            params.append(status_filter)
-
-    where_sql = ""
-    if where_clauses:
-        where_sql = "WHERE " + " AND ".join(where_clauses)
-
-    if group_by_device:
-        order_sql = (
-            "ORDER BY CASE WHEN v.device_model IS NULL OR v.device_model = '' THEN 1 ELSE 0 END, "
-            "v.device_model, v.creation_time DESC, v.id DESC"
-        )
-    else:
-        order_sql = "ORDER BY v.creation_time DESC, v.id DESC"
-
-    query = f"""
-        WITH latest_jobs AS (
-            SELECT video_id, status, progress_percent
-            FROM (
-                SELECT video_id, status, progress_percent, created_at, id,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY video_id
-                           ORDER BY created_at DESC, id DESC
-                       ) AS rn
-                FROM transcoding_jobs
-            )
-            WHERE rn = 1
-        )
-        SELECT
-            v.id,
-            v.original_path,
-            v.creation_time,
-            v.duration_seconds,
-            v.device_model,
-            lj.status AS transcode_status,
-            lj.progress_percent AS transcode_progress
-        FROM videos v
-        LEFT JOIN latest_jobs lj ON v.id = lj.video_id
-        {where_sql}
-        {order_sql}
-    """
-
-    cursor = conn.execute(query, params)
-    items: list[VideoCatalogItem] = []
-    for row in cursor.fetchall():
-        creation_time = row["creation_time"] or ""
-        status = row["transcode_status"] or CATALOG_UNKNOWN_STATUS
-        device = _normalize_device_label(row["device_model"])
-        items.append(
-            VideoCatalogItem(
-                video_id=row["id"],
-                creation_time=creation_time,
-                creation_date=_parse_creation_date(creation_time),
-                device=device,
-                duration_seconds=row["duration_seconds"],
-                status=status,
-                progress_percent=row["transcode_progress"],
-                path=row["original_path"],
-            )
-        )
-    return items
-
-
-def _build_catalog_summary(items: list[VideoCatalogItem]) -> CatalogSummary:
-    """카탈로그 요약 통계를 생성한다."""
-    device_counts: dict[str, int] = {}
-    date_values: list[date] = []
-
-    for item in items:
-        device_counts[item.device] = device_counts.get(item.device, 0) + 1
-        try:
-            date_values.append(date.fromisoformat(item.creation_date))
-        except ValueError:
-            continue
-
-    devices_sorted = sorted(device_counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))
-    device_stats: list[CatalogDeviceStat] = [
-        {"device": device, "count": count} for device, count in devices_sorted
-    ]
-
-    date_range: CatalogDateRange | None = None
-    if date_values:
-        date_range = {
-            "start": min(date_values).isoformat(),
-            "end": max(date_values).isoformat(),
-        }
-
-    return {"total": len(items), "devices": device_stats, "date_range": date_range}
-
-
-def _render_table(
-    headers: list[str],
-    rows: list[list[str]],
-    aligns: list[str] | None = None,
-) -> None:
-    """간단한 고정폭 테이블 렌더링."""
-    if not rows:
-        print("📋 결과 없음")
-        return
-
-    aligns = aligns or ["left"] * len(headers)
-    widths: list[int] = []
-    for idx, header in enumerate(headers):
-        max_len = len(header)
-        for row in rows:
-            max_len = max(max_len, len(row[idx]))
-        widths.append(max_len)
-
-    header_line = "  ".join(header.ljust(widths[idx]) for idx, header in enumerate(headers))
-    print(header_line)
-    print("-" * len(header_line))
-
-    for row in rows:
-        parts: list[str] = []
-        for idx, cell in enumerate(row):
-            if aligns[idx] == "right":
-                parts.append(cell.rjust(widths[idx]))
-            else:
-                parts.append(cell.ljust(widths[idx]))
-        print("  ".join(parts))
-
-
-def _print_catalog_table(items: list[VideoCatalogItem], group_by_device: bool) -> None:
-    """테이블 형식으로 카탈로그 출력."""
-    headers = ["ID", "Date", "Device", "Duration", "Status", "Path"]
-    aligns = ["right", "left", "left", "right", "left", "left"]
-
-    def to_row(item: VideoCatalogItem) -> list[str]:
-        duration = (
-            _format_duration(item.duration_seconds) if item.duration_seconds is not None else "-"
-        )
-        status = _format_catalog_status(item.status)
-        return [
-            str(item.video_id),
-            item.creation_date,
-            item.device,
-            duration,
-            status,
-            _truncate_path(item.path),
-        ]
-
-    if not items:
-        print("📋 결과 없음")
-        return
-
-    if group_by_device:
-        groups: dict[str, list[VideoCatalogItem]] = {}
-        for item in items:
-            groups.setdefault(item.device, []).append(item)
-
-        for device, group_items in groups.items():
-            print(f"\n📷 기기: {device} ({len(group_items)}개)")
-            rows = [to_row(item) for item in group_items]
-            _render_table(headers, rows, aligns)
-        return
-
-    rows = [to_row(item) for item in items]
-    _render_table(headers, rows, aligns)
-
-
-def _print_catalog_summary(summary: CatalogSummary, stream: TextIO = sys.stdout) -> None:
-    """요약 통계 출력."""
-    total = summary["total"]
-    devices = summary["devices"]
-    date_range = summary["date_range"]
-
-    print(f"\n📊 요약: 총 영상 {total}개", file=stream)
-
-    if devices:
-        parts = [f"{d['device']} {d['count']}개" for d in devices]
-        print(f"📷 기기 분포: {', '.join(parts)}", file=stream)
-
-    if date_range:
-        print(
-            f"📅 날짜 범위: {date_range['start']} ~ {date_range['end']}",
-            file=stream,
-        )
-
-
-def _output_catalog(
-    items: list[VideoCatalogItem],
-    summary: CatalogSummary,
-    output_format: str,
-    group_by_device: bool,
-) -> None:
-    """카탈로그 출력 포맷 처리."""
-    if output_format == "json":
-        payload: dict[str, object] = {
-            "summary": summary,
-            "items": [
-                {
-                    "id": item.video_id,
-                    "creation_time": item.creation_time,
-                    "creation_date": item.creation_date,
-                    "device": item.device,
-                    "duration_seconds": item.duration_seconds,
-                    "status": item.status,
-                    "progress_percent": item.progress_percent,
-                    "path": item.path,
-                }
-                for item in items
-            ],
-        }
-        if group_by_device:
-            payload["grouped_by_device"] = True
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return
-
-    if output_format == "csv":
-        writer = csv.writer(sys.stdout)
-        writer.writerow(
-            [
-                "id",
-                "creation_date",
-                "creation_time",
-                "device",
-                "duration_seconds",
-                "status",
-                "progress_percent",
-                "path",
-            ]
-        )
-        for item in items:
-            writer.writerow(
-                [
-                    item.video_id,
-                    item.creation_date,
-                    item.creation_time,
-                    item.device,
-                    item.duration_seconds if item.duration_seconds is not None else "",
-                    item.status,
-                    item.progress_percent if item.progress_percent is not None else "",
-                    item.path,
-                ]
-            )
-        _print_catalog_summary(summary, stream=sys.stderr)
-        return
-
-    _print_catalog_table(items, group_by_device)
-    _print_catalog_summary(summary)
-
-
-def cmd_catalog(args: argparse.Namespace) -> None:
-    """--catalog / --search 옵션 처리."""
-    output_format = "table"
-    if args.json:
-        output_format = "json"
-    elif args.csv:
-        output_format = "csv"
-
-    search_pattern = args.search
-    if search_pattern is not None:
-        search_pattern = search_pattern.strip()
-        if not search_pattern:
-            search_pattern = None
-
-    device_filter = args.device.strip() if args.device else None
-    status_filter = _normalize_status_filter(args.status)
-
-    if status_filter:
-        allowed = {
-            "pending",
-            "processing",
-            "completed",
-            "failed",
-            "merged",
-            CATALOG_UNKNOWN_STATUS,
-        }
-        if status_filter not in allowed:
-            raise ValueError(
-                "잘못된 상태 필터입니다. "
-                "pending/processing/completed/failed/merged/untracked 중 하나를 사용하세요."
-            )
-
-    conn = init_database()
-    items = _fetch_catalog_items(
-        conn,
-        search_pattern=search_pattern,
-        device_filter=device_filter,
-        status_filter=status_filter,
-        group_by_device=bool(args.catalog),
-    )
-    summary = _build_catalog_summary(items)
-    _output_catalog(items, summary, output_format, group_by_device=bool(args.catalog))
-    conn.close()
-
-
 def cmd_status() -> None:
-    """
-    --status 옵션 처리.
+    """``--status`` 옵션 처리: 전체 작업 현황 출력."""
+    with database_session() as conn:
+        video_repo = VideoRepository(conn)
+        transcoding_repo = TranscodingJobRepository(conn)
+        merge_repo = MergeJobRepository(conn)
 
-    작업 현황을 조회하여 출력합니다.
-    """
-    conn = init_database()
+        print("\n📊 TubeArchive 작업 현황\n")
 
-    print("\n📊 TubeArchive 작업 현황\n")
+        # 1. 진행 중인 트랜스코딩 작업
+        processing_jobs = transcoding_repo.get_active_with_paths(limit=10)
 
-    # 1. 진행 중인 트랜스코딩 작업
-    cursor = conn.execute("""
-        SELECT tj.id, tj.status, tj.progress_percent, v.original_path
-        FROM transcoding_jobs tj
-        JOIN videos v ON tj.video_id = v.id
-        WHERE tj.status IN ('pending', 'processing')
-        ORDER BY tj.created_at DESC
-        LIMIT 10
-    """)
-    processing_jobs = cursor.fetchall()
+        if processing_jobs:
+            print("🔄 진행 중인 트랜스코딩:")
+            print("-" * 70)
+            for tc_row in processing_jobs:
+                path = Path(tc_row["original_path"]).name
+                status = "⏳ 대기" if tc_row["status"] == "pending" else "🔄 진행"
+                progress = tc_row["progress_percent"] or 0
+                print(f"  {status} [{progress:3d}%] {path}")
+            print()
 
-    if processing_jobs:
-        print("🔄 진행 중인 트랜스코딩:")
-        print("-" * 70)
-        for job in processing_jobs:
-            path = Path(job["original_path"]).name
-            status = "⏳ 대기" if job["status"] == "pending" else "🔄 진행"
-            progress = job["progress_percent"] or 0
-            print(f"  {status} [{progress:3d}%] {path}")
-        print()
+        # 2. 최근 병합 작업
+        recent_merge_jobs = merge_repo.get_recent(limit=10)
 
-    # 2. 최근 병합 작업
-    cursor = conn.execute("""
-        SELECT id, title, date, status, youtube_id, output_path,
-               total_duration_seconds, total_size_bytes, created_at
-        FROM merge_jobs
-        ORDER BY created_at DESC
-        LIMIT 10
-    """)
-    merge_jobs = cursor.fetchall()
+        if recent_merge_jobs:
+            print("📁 최근 병합 작업:")
+            print("-" * 90)
+            print(f"{'ID':<4} {'상태':<10} {'제목':<25} {'날짜':<12} {'길이':<10} {'YouTube':<12}")
+            print("-" * 90)
+            for job in recent_merge_jobs:
+                title = (job.title or "-")[:23]
+                job_date = job.date or "-"
+                status_icon = STATUS_ICONS.get(job.status.value, job.status.value)
+                duration_str = format_duration(job.total_duration_seconds or 0)
+                yt_status = f"✅ {job.youtube_id[:8]}..." if job.youtube_id else "- 미업로드"
+                row_str = (
+                    f"{job.id:<4} {status_icon:<10} {title:<25} {job_date:<12} {duration_str:<10}"
+                )
+                print(f"{row_str} {yt_status}")
 
-    if merge_jobs:
-        print("📁 최근 병합 작업:")
-        print("-" * 90)
-        print(f"{'ID':<4} {'상태':<10} {'제목':<25} {'날짜':<12} {'길이':<10} {'YouTube':<12}")
-        print("-" * 90)
-        for job in merge_jobs:
-            job_id = job["id"]
-            title = (job["title"] or "-")[:23]
-            date = job["date"] or "-"
-            status = job["status"]
+            print("-" * 90)
+        else:
+            print("📁 병합 작업 없음\n")
 
-            status_icon = STATUS_ICONS.get(status, status)
-            duration_str = _format_duration(job["total_duration_seconds"] or 0)
+        # 3. 통계 요약
+        video_count = video_repo.count_all()
+        total_jobs = merge_repo.count_all()
+        uploaded_count = merge_repo.count_uploaded()
 
-            # YouTube 상태
-            yt_status = f"✅ {job['youtube_id'][:8]}..." if job["youtube_id"] else "- 미업로드"
-
-            row = f"{job_id:<4} {status_icon:<10} {title:<25} {date:<12} {duration_str:<10}"
-            print(f"{row} {yt_status}")
-
-        print("-" * 90)
-    else:
-        print("📁 병합 작업 없음\n")
-
-    # 3. 통계 요약
-    cursor = conn.execute("SELECT COUNT(*) as cnt FROM videos")
-    video_count = cursor.fetchone()["cnt"]
-
-    cursor = conn.execute("SELECT COUNT(*) as cnt FROM merge_jobs WHERE youtube_id IS NOT NULL")
-    uploaded_count = cursor.fetchone()["cnt"]
-
-    cursor = conn.execute("SELECT COUNT(*) as cnt FROM merge_jobs")
-    total_jobs = cursor.fetchone()["cnt"]
-
-    print(f"\n📈 통계: 영상 {video_count}개 등록 | 병합 {total_jobs}건 | 업로드 {uploaded_count}건")
-
-    conn.close()
+        print(
+            f"\n📈 통계: 영상 {video_count}개 등록"
+            f" | 병합 {total_jobs}건 | 업로드 {uploaded_count}건"
+        )
 
 
 def cmd_status_detail(job_id: int) -> None:
-    """
-    --status-detail 옵션 처리.
-
-    특정 작업의 상세 정보를 출력합니다.
+    """``--status-detail`` 옵션 처리: 특정 작업의 상세 정보를 출력한다.
 
     Args:
         job_id: merge_job ID
     """
-    import json
+    with database_session() as conn:
+        job = MergeJobRepository(conn).get_by_id(job_id)
 
-    conn = init_database()
+        if not job:
+            print(f"❌ 작업 ID {job_id}를 찾을 수 없습니다.")
+            return
 
-    cursor = conn.execute(
-        """
-        SELECT * FROM merge_jobs WHERE id = ?
-        """,
-        (job_id,),
-    )
-    job = cursor.fetchone()
+        print(f"\n📋 작업 상세 (ID: {job_id})\n")
+        print("=" * 60)
 
-    if not job:
-        print(f"❌ 작업 ID {job_id}를 찾을 수 없습니다.")
-        conn.close()
-        return
+        print(f"📌 제목: {job.title or '-'}")
+        print(f"📅 날짜: {job.date or '-'}")
+        print(f"📁 출력: {job.output_path}")
+        print(f"📊 상태: {STATUS_ICONS.get(job.status.value, job.status.value)}")
+        print(f"⏱️  길이: {format_duration(job.total_duration_seconds or 0)}")
+        print(f"💾 크기: {format_size(job.total_size_bytes or 0)}")
 
-    print(f"\n📋 작업 상세 (ID: {job_id})\n")
-    print("=" * 60)
+        if job.youtube_id:
+            print(f"🎬 YouTube: https://youtu.be/{job.youtube_id}")
+        else:
+            print("🎬 YouTube: 미업로드")
 
-    print(f"📌 제목: {job['title'] or '-'}")
-    print(f"📅 날짜: {job['date'] or '-'}")
-    print(f"📁 출력: {job['output_path']}")
+        # 클립 정보
+        if job.clips_info_json:
+            try:
+                clips = json.loads(job.clips_info_json)
+                print(f"\n📹 클립 ({len(clips)}개):")
+                print("-" * 60)
+                for i, clip in enumerate(clips, 1):
+                    name = clip.get("name", "-")
+                    clip_duration = clip.get("duration", 0)
+                    device = clip.get("device", "-")
+                    shot_time = clip.get("shot_time", "-")
+                    print(f"  {i}. {name}")
+                    print(f"     기기: {device} | 촬영: {shot_time} | 길이: {clip_duration:.1f}s")
+            except json.JSONDecodeError:
+                pass
 
-    # 상태
-    print(f"📊 상태: {STATUS_ICONS.get(job['status'], job['status'])}")
-
-    # 길이/크기
-    print(f"⏱️  길이: {_format_duration(job['total_duration_seconds'] or 0)}")
-    print(f"💾 크기: {format_size(job['total_size_bytes'] or 0)}")
-
-    # YouTube
-    if job["youtube_id"]:
-        print(f"🎬 YouTube: https://youtu.be/{job['youtube_id']}")
-    else:
-        print("🎬 YouTube: 미업로드")
-
-    # 클립 정보
-    clips_json = job["clips_info_json"]
-    if clips_json:
-        try:
-            clips = json.loads(clips_json)
-            print(f"\n📹 클립 ({len(clips)}개):")
-            print("-" * 60)
-            for i, clip in enumerate(clips, 1):
-                name = clip.get("name", "-")
-                clip_duration = clip.get("duration", 0)
-                device = clip.get("device", "-")
-                shot_time = clip.get("shot_time", "-")
-                print(f"  {i}. {name}")
-                print(f"     기기: {device} | 촬영: {shot_time} | 길이: {clip_duration:.1f}s")
-        except json.JSONDecodeError:
-            pass
-
-    print("=" * 60)
-    conn.close()
+        print("=" * 60)
 
 
 def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
-    """Dry run: 실행 계획만 출력한다."""
+    """실행 계획만 출력하고 실제 트랜스코딩은 수행하지 않는다.
+
+    입력 파일 목록, 출력 경로, 각종 옵션 설정값을 사람이 읽기 좋은
+    형태로 콘솔에 표시한다. ``--dry-run`` 플래그 처리용.
+
+    Args:
+        validated_args: 검증된 CLI 인자
+    """
     logger.info("Dry run mode - showing execution plan only")
 
     video_files = scan_videos(validated_args.targets)
@@ -2347,8 +1932,8 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     print("\n=== Dry Run Execution Plan ===")
     print(f"Input targets: {[str(t) for t in validated_args.targets]}")
     print(f"Video files found: {len(video_files)}")
-    for vf in video_files:
-        print(f"  - {vf.path}")
+    for video_file in video_files:
+        print(f"  - {video_file.path}")
     print(f"Output: {output_str}")
     print(f"Temp dir: {get_temp_dir()}")
     print(f"Resume enabled: {not validated_args.no_resume}")
@@ -2369,21 +1954,28 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
 
 
 def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
-    """파이프라인 완료 후 YouTube 업로드를 수행한다."""
+    """파이프라인 완료 후 YouTube 업로드를 수행한다.
+
+    DB에서 최신 merge_job을 조회하여 제목·설명을 가져온 뒤
+    :func:`upload_to_youtube` 를 호출한다.
+
+    Args:
+        output_path: 업로드할 병합 영상 파일 경로
+        args: 원본 CLI 인자 (playlist, upload_privacy, upload_chunk 등)
+    """
     print("\n📤 YouTube 업로드 시작...")
 
     merge_job_id = None
     title = None
     description = ""
     try:
-        conn = init_database()
-        repo = MergeJobRepository(conn)
-        job = repo.get_latest()
-        if job:
-            merge_job_id = job.id
-            title = job.title
-            description = job.summary_markdown or ""
-        conn.close()
+        with database_session() as conn:
+            repo = MergeJobRepository(conn)
+            job = repo.get_latest()
+            if job:
+                merge_job_id = job.id
+                title = job.title
+                description = job.summary_markdown or ""
     except Exception as e:
         logger.warning(f"Failed to get merge job: {e}")
 
@@ -2422,7 +2014,12 @@ def cmd_init_config() -> None:
 
 
 def main() -> None:
-    """CLI 진입점."""
+    """CLI 진입점.
+
+    인자를 파싱하고 설정 파일을 로드한 뒤, 요청된 서브커맨드를
+    적절한 핸들러 함수로 라우팅한다. 서브커맨드가 지정되지 않은
+    기본 동작은 :func:`run_pipeline` (트랜스코딩 + 병합).
+    """
     parser = create_parser()
     args = parser.parse_args()
 
@@ -2485,7 +2082,7 @@ def main() -> None:
             args.catalog
             or args.search is not None
             or args.device is not None
-            or _normalize_status_filter(args.status) is not None
+            or normalize_status_filter(args.status) is not None
         ):
             raise ValueError("--json/--csv 옵션은 --catalog 또는 --search와 함께 사용하세요.")
 
@@ -2493,7 +2090,7 @@ def main() -> None:
             args.catalog
             or args.search is not None
             or args.device is not None
-            or _normalize_status_filter(args.status) is not None
+            or normalize_status_filter(args.status) is not None
         ):
             cmd_catalog(args)
             return

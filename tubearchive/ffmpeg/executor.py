@@ -1,4 +1,15 @@
-"""FFmpeg 실행기."""
+"""FFmpeg 서브프로세스 실행기.
+
+FFmpeg / ffprobe 명령을 구성하고 서브프로세스로 실행한다.
+표준 에러(stderr)를 실시간 파싱하여 진행률 콜백을 호출하고,
+오류 발생 시 :class:`FFmpegError` 를 raise 한다.
+
+주요 역할:
+    - 트랜스코딩 명령 빌드 (``build_transcode_command``)
+    - 병합 명령 빌드 (``build_concat_command``)
+    - 라우드니스 분석 명령 빌드 (``build_loudness_analysis_command``)
+    - 프로세스 실행 및 진행률 파싱 (``run``, ``run_analysis``)
+"""
 
 import logging
 import os
@@ -14,7 +25,11 @@ logger = logging.getLogger(__name__)
 
 
 class FFmpegError(Exception):
-    """FFmpeg 실행 오류."""
+    """FFmpeg 프로세스가 0이 아닌 종료 코드로 실패했을 때 발생하는 예외.
+
+    Attributes:
+        stderr: FFmpeg stderr 전체 출력 (디버깅용)
+    """
 
     def __init__(self, message: str, stderr: str | None = None) -> None:
         """초기화."""
@@ -23,14 +38,22 @@ class FFmpegError(Exception):
 
 
 def parse_progress_line(line: str) -> dict[str, float] | None:
-    """
-    FFmpeg 진행률 라인 파싱.
+    """FFmpeg stderr 진행률 라인에서 처리 상태를 추출한다.
+
+    ``time=HH:MM:SS.CC`` 패턴이 없으면 None을 반환한다.
+    나머지 필드(frame, fps, bitrate)는 있는 경우에만 포함된다.
 
     Args:
-        line: FFmpeg stderr 라인
+        line: FFmpeg stderr 출력 한 줄.
+            예: ``"frame=1234 fps=29.97 time=00:01:30.50 bitrate=5000.0kbits/s"``
 
     Returns:
-        파싱된 진행률 정보 또는 None
+        파싱 결과 딕셔너리. ``time=`` 이 없으면 None.
+
+        - ``time_seconds`` (float): 처리된 시점 (초). **항상 포함**.
+        - ``frame`` (float): 처리된 프레임 수. 선택.
+        - ``fps`` (float): 현재 처리 속도 (frames/sec). 선택.
+        - ``bitrate`` (float): 현재 비트레이트 (kbits/s). 선택.
     """
     # time= 파싱
     time_match = re.search(r"time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})", line)
@@ -65,7 +88,11 @@ def parse_progress_line(line: str) -> dict[str, float] | None:
 
 
 class FFmpegExecutor:
-    """FFmpeg 명령 실행기."""
+    """FFmpeg 서브프로세스 빌더 및 실행기.
+
+    명령어 빌드(``build_*``)와 실행(``run``, ``run_analysis``)을 분리하여
+    테스트 가능성을 높이고, stderr 파싱으로 실시간 진행률 콜백을 지원한다.
+    """
 
     def __init__(self, ffmpeg_path: str = "ffmpeg") -> None:
         """초기화."""

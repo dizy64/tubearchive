@@ -11,7 +11,8 @@
 - **Resume 기능**: SQLite 기반 상태 추적, 중단된 작업 자동 재개
 - **VideoToolbox 하드웨어 가속**: Mac M1/M2에서 고속 인코딩
 - **기기별 자동 감지**: Nikon N-Log, iPhone, GoPro, DJI 자동 인식
-- **Dip-to-Black 효과**: 0.5초 Fade In/Out 자동 적용
+- **연속 시퀀스 그룹핑**: GoPro/DJI 분할 파일 자동 감지, 그룹 내 이음새 없이 연결
+- **Dip-to-Black 효과**: 0.5초 Fade In/Out 자동 적용 (그룹 경계에서만)
 - **오디오 라우드니스 정규화**: EBU R128 loudnorm 2-pass 자동 보정
 - **오디오 노이즈 제거**: FFmpeg afftdn 기반 바람소리/배경 소음 저감
 - **썸네일 자동 생성**: 병합 영상에서 주요 지점 JPEG 썸네일 추출
@@ -114,7 +115,7 @@ source ~/.zshrc  # 또는 터미널 재시작
 설치 확인:
 ```bash
 uv tool list
-# 출력: tubearchive v0.2.24
+# 출력: tubearchive v0.2.25
 ```
 
 업데이트:
@@ -556,25 +557,30 @@ TUBEARCHIVE_OUTPUT_DIR=~/Videos tubearchive ~/Downloads/clips/
 
 ```
 tubearchive/
-├── cli.py                # CLI 인터페이스
+├── cli.py                # CLI 인터페이스 및 파이프라인 오케스트레이터
+├── config.py             # TOML 설정 파일 관리 (환경변수 Shim)
+├── __init__.py           # 버전 정보
 ├── __main__.py           # python -m 진입점
+├── commands/
+│   └── catalog.py        # 메타데이터 카탈로그/검색 CLI
 ├── core/
 │   ├── scanner.py        # 파일 스캔 (3가지 케이스)
 │   ├── detector.py       # ffprobe 메타데이터 감지
+│   ├── grouper.py        # 연속 파일 시퀀스 그룹핑 (GoPro/DJI)
 │   ├── transcoder.py     # 트랜스코딩 엔진 (Resume 지원)
 │   └── merger.py         # concat 병합 (codec copy)
 ├── database/
 │   ├── schema.py         # SQLite 스키마
-│   ├── repository.py     # CRUD 작업
+│   ├── repository.py     # CRUD Repository (Video/TranscodingJob/MergeJob)
 │   └── resume.py         # Resume 상태 추적
 ├── ffmpeg/
 │   ├── executor.py       # FFmpeg 실행 및 진행률
-│   ├── effects.py        # 필터 (Portrait Layout, Fade, Loudnorm)
+│   ├── effects.py        # 필터 (Portrait Layout, Fade, Loudnorm, Denoise)
 │   ├── profiles.py       # 기기별 인코딩 프로파일
 │   └── thumbnail.py      # 썸네일 추출
 ├── models/
-│   ├── video.py          # VideoFile, VideoMetadata
-│   └── job.py            # TranscodingJob, MergeJob
+│   ├── video.py          # VideoFile, VideoMetadata, FadeConfig
+│   └── job.py            # TranscodingJob, MergeJob, JobStatus
 ├── youtube/
 │   ├── __init__.py       # 모듈 exports
 │   ├── auth.py           # OAuth 2.0 인증
@@ -582,8 +588,8 @@ tubearchive/
 │   └── playlist.py       # 플레이리스트 관리
 └── utils/
     ├── validators.py     # 입력 검증
-    ├── progress.py       # 진행률 표시
-    ├── summary_generator.py  # 요약 파일 생성
+    ├── progress.py       # 진행률 표시 (MultiProgressBar)
+    ├── summary_generator.py  # 요약 파일 / YouTube 챕터 생성
     └── temp_manager.py   # 임시 파일 관리
 ```
 

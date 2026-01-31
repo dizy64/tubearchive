@@ -1,9 +1,23 @@
-"""진행률 표시 유틸리티."""
+"""터미널 진행률 표시 유틸리티.
+
+트랜스코딩·업로드 등 장시간 작업의 진행 상황을 터미널에 표시한다.
+
+제공 클래스:
+    - :class:`ProgressBar`: 단일 파일 진행률 바 (파일명, 퍼센트, ETA)
+    - :class:`MultiProgressBar`: 여러 파일 순차 처리 시 전체/개별 진행률 표시
+
+유틸리티 함수:
+    - :func:`format_time`: 초 → ``HH:MM:SS`` 또는 ``MM:SS``
+    - :func:`format_size`: 바이트 → ``'1.5 GB'`` 등 사람이 읽기 좋은 단위
+"""
 
 import sys
 import time
 from dataclasses import dataclass
 from typing import TextIO
+
+# ETA 추정에 사용하는 기본 프레임 레이트 (NTSC 29.97fps)
+DEFAULT_FPS_ESTIMATE = 29.97
 
 
 def format_time(seconds: float) -> str:
@@ -28,7 +42,10 @@ def format_time(seconds: float) -> str:
 
 @dataclass
 class ProgressInfo:
-    """FFmpeg 진행률 상세 정보."""
+    """FFmpeg 진행률 상세 정보.
+
+    stderr 파싱 결과를 담아 :class:`MultiProgressBar` 에 전달된다.
+    """
 
     percent: int
     current_time: float  # 현재 처리된 시간 (초)
@@ -60,7 +77,7 @@ class ProgressInfo:
         if self.fps > 0:
             # fps는 초당 프레임 수, 29.97fps 기준 1초 영상 = 1초 처리
             # 실제로는 fps가 높을수록 빠름
-            frames_remaining = remaining_duration * 29.97  # 추정 프레임
+            frames_remaining = remaining_duration * DEFAULT_FPS_ESTIMATE
             eta = frames_remaining / self.fps
             return max(0, eta)
 
@@ -94,7 +111,7 @@ def format_size(bytes_: int) -> str:
 
 
 class ProgressBar:
-    """터미널 프로그레스 바."""
+    """단일 작업용 터미널 프로그레스 바 (``[████░░░░] 75%`` 형태)."""
 
     def __init__(
         self,
@@ -173,7 +190,11 @@ class ProgressBar:
 
 
 class MultiProgressBar:
-    """여러 작업의 진행률 표시."""
+    """여러 파일 순차 처리 시 전체/개별 진행률 표시.
+
+    파일명, 퍼센트, fps, ETA를 실시간 갱신하며,
+    ``\\r`` (carriage return)으로 같은 줄에 덮어쓴다.
+    """
 
     def __init__(self, total_files: int, file: TextIO | None = None) -> None:
         """

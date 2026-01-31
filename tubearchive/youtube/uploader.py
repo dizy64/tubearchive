@@ -1,4 +1,8 @@
-"""YouTube 영상 업로드."""
+"""YouTube Resumable Upload API를 통한 영상 업로드.
+
+청크 단위 업로드(resumable upload)를 지원하며,
+업로드 전 파일 크기·길이 검증을 수행한다.
+"""
 
 import logging
 import os
@@ -33,6 +37,12 @@ ENV_UPLOAD_CHUNK_MB = "TUBEARCHIVE_UPLOAD_CHUNK_MB"
 DEFAULT_CHUNK_MB = 32
 MIN_CHUNK_MB = 1
 MAX_CHUNK_MB = 256
+
+# YouTube 카테고리 ID (https://developers.google.com/youtube/v3/docs/videoCategories)
+YOUTUBE_CATEGORY_PEOPLE_BLOGS = "22"
+
+# 업로드 제한 경고 임계치 (최대치의 90% 도달 시 경고)
+UPLOAD_LIMIT_WARNING_RATIO = 0.9
 
 
 def get_chunk_size(chunk_mb: int | None = None) -> int:
@@ -71,7 +81,7 @@ def get_chunk_size(chunk_mb: int | None = None) -> int:
 
 @dataclass
 class UploadValidation:
-    """업로드 검증 결과."""
+    """업로드 전 검증 결과 (파일 크기, 길이, 제한 초과 여부)."""
 
     is_valid: bool
     file_size_bytes: int
@@ -184,14 +194,14 @@ def validate_upload(file_path: Path) -> UploadValidation:
     if file_size > YOUTUBE_MAX_FILE_SIZE_BYTES:
         excess_gb = (file_size - YOUTUBE_MAX_FILE_SIZE_BYTES) / (1024 * 1024 * 1024)
         errors.append(f"파일 크기 초과 ({excess_gb:.1f}GB 초과)")
-    elif file_size > YOUTUBE_MAX_FILE_SIZE_BYTES * 0.9:  # 90% 이상이면 경고
+    elif file_size > YOUTUBE_MAX_FILE_SIZE_BYTES * UPLOAD_LIMIT_WARNING_RATIO:
         warnings.append("파일 크기가 제한에 근접함")
 
     # 영상 길이 검증
     if duration > YOUTUBE_MAX_DURATION_SECONDS:
         excess_hours = (duration - YOUTUBE_MAX_DURATION_SECONDS) / 3600
         errors.append(f"영상 길이 초과 ({excess_hours:.1f}시간 초과)")
-    elif duration > YOUTUBE_MAX_DURATION_SECONDS * 0.9:  # 90% 이상이면 경고
+    elif duration > YOUTUBE_MAX_DURATION_SECONDS * UPLOAD_LIMIT_WARNING_RATIO:
         warnings.append("영상 길이가 제한에 근접함")
 
     # 길이를 못 가져온 경우 경고
@@ -215,14 +225,14 @@ MAX_RETRIES = 10
 
 
 class YouTubeUploadError(Exception):
-    """YouTube 업로드 에러."""
+    """YouTube 업로드 실패 시 발생하는 예외."""
 
     pass
 
 
 @dataclass
 class UploadResult:
-    """업로드 결과."""
+    """업로드 완료 결과 (YouTube 영상 ID, URL, 제목)."""
 
     video_id: str
     url: str
@@ -248,7 +258,10 @@ class UploadResult:
 
 
 class YouTubeUploader:
-    """YouTube 영상 업로더."""
+    """YouTube Resumable Upload 클라이언트.
+
+    인증된 YouTube API 서비스를 받아 청크 단위로 영상을 업로드한다.
+    """
 
     def __init__(self, service: YouTubeResource, chunk_mb: int | None = None) -> None:
         """
@@ -300,7 +313,7 @@ class YouTubeUploader:
             "snippet": {
                 "title": title,
                 "description": description,
-                "categoryId": "22",  # People & Blogs
+                "categoryId": YOUTUBE_CATEGORY_PEOPLE_BLOGS,
             },
             "status": {
                 "privacyStatus": privacy,

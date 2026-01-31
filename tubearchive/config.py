@@ -1,9 +1,15 @@
-"""TOML 설정 파일 지원.
+"""TOML 설정 파일 및 환경변수 기본값 관리.
 
-~/.tubearchive/config.toml로 기본 설정값을 관리한다.
-환경변수 Shim 패턴: config 값을 환경변수에 주입 (미설정인 경우만).
+``~/.tubearchive/config.toml`` 에서 사용자 설정을 로드하고,
+환경변수 Shim 패턴으로 기존 모듈의 ``os.environ.get()`` 코드를
+변경하지 않고 설정값을 주입한다.
 
-우선순위: CLI 옵션 > 환경변수 > 설정 파일 > 기본값
+우선순위::
+
+    CLI 옵션 > 환경변수 > config.toml > 기본값
+
+또한 환경변수에서 개별 기본값을 읽어오는 헬퍼 함수
+(``get_default_parallel``, ``get_default_denoise`` 등)도 이 모듈에서 제공한다.
 """
 
 from __future__ import annotations
@@ -33,7 +39,10 @@ ENV_FADE_DURATION = "TUBEARCHIVE_FADE_DURATION"
 
 @dataclass(frozen=True)
 class GeneralConfig:
-    """[general] 섹션 설정."""
+    """``config.toml`` 의 ``[general]`` 섹션.
+
+    모든 필드가 ``None`` 이면 해당 옵션은 환경변수 또는 기본값을 사용한다.
+    """
 
     output_dir: str | None = None
     parallel: int | None = None
@@ -47,7 +56,10 @@ class GeneralConfig:
 
 @dataclass(frozen=True)
 class YouTubeConfig:
-    """[youtube] 섹션 설정."""
+    """``config.toml`` 의 ``[youtube]`` 섹션.
+
+    OAuth 인증 경로, 플레이리스트, 업로드 옵션을 관리한다.
+    """
 
     client_secrets: str | None = None
     token: str | None = None
@@ -58,20 +70,50 @@ class YouTubeConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    """애플리케이션 전체 설정."""
+    """애플리케이션 전체 설정 (``[general]`` + ``[youtube]`` 통합)."""
 
     general: GeneralConfig = field(default_factory=GeneralConfig)
     youtube: YouTubeConfig = field(default_factory=YouTubeConfig)
 
 
-def _warn_type(field: str, expected: str, value: object) -> None:
+def _warn_type(field_name: str, expected: str, value: object) -> None:
     """타입 불일치 경고 출력."""
     logger.warning(
         "config: %s 타입 오류 (expected %s, got %s)",
-        field,
+        field_name,
         expected,
         type(value).__name__,
     )
+
+
+def _parse_str(data: dict[str, object], key: str, section: str) -> str | None:
+    """TOML dict에서 문자열 필드를 안전하게 파싱한다."""
+    raw = data.get(key)
+    if isinstance(raw, str):
+        return raw
+    if raw is not None:
+        _warn_type(f"{section}.{key}", "str", raw)
+    return None
+
+
+def _parse_bool(data: dict[str, object], key: str, section: str) -> bool | None:
+    """TOML dict에서 bool 필드를 안전하게 파싱한다."""
+    raw = data.get(key)
+    if isinstance(raw, bool):
+        return raw
+    if raw is not None:
+        _warn_type(f"{section}.{key}", "bool", raw)
+    return None
+
+
+def _parse_int(data: dict[str, object], key: str, section: str) -> int | None:
+    """TOML dict에서 정수 필드를 안전하게 파싱한다 (bool 제외)."""
+    raw = data.get(key)
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    if raw is not None:
+        _warn_type(f"{section}.{key}", "int", raw)
+    return None
 
 
 def get_default_config_path() -> Path:
@@ -81,137 +123,69 @@ def get_default_config_path() -> Path:
 
 def _parse_general(data: dict[str, object]) -> GeneralConfig:
     """[general] 섹션 파싱. 타입 오류 시 해당 필드 무시."""
-    output_dir: str | None = None
-    parallel: int | None = None
-    db_path: str | None = None
-    denoise: bool | None = None
-    denoise_level: str | None = None
-    normalize_audio: bool | None = None
-    group_sequences: bool | None = None
+    section = "general"
+
+    # denoise_level: 허용값 검증이 필요한 문자열
+    denoise_level = _parse_str(data, "denoise_level", section)
+    if denoise_level is not None and denoise_level not in ("light", "medium", "heavy"):
+        logger.warning("config: general.denoise_level 값 오류: %r", denoise_level)
+        denoise_level = None
+
+    # fade_duration: 음수가 아닌 실수 (int도 허용)
     fade_duration: float | None = None
-
-    raw_output_dir = data.get("output_dir")
-    if isinstance(raw_output_dir, str):
-        output_dir = raw_output_dir
-    elif raw_output_dir is not None:
-        _warn_type("general.output_dir", "str", raw_output_dir)
-
-    raw_parallel = data.get("parallel")
-    if isinstance(raw_parallel, int) and not isinstance(raw_parallel, bool):
-        parallel = raw_parallel
-    elif raw_parallel is not None:
-        _warn_type("general.parallel", "int", raw_parallel)
-
-    raw_db_path = data.get("db_path")
-    if isinstance(raw_db_path, str):
-        db_path = raw_db_path
-    elif raw_db_path is not None:
-        _warn_type("general.db_path", "str", raw_db_path)
-
-    raw_denoise = data.get("denoise")
-    if isinstance(raw_denoise, bool):
-        denoise = raw_denoise
-    elif raw_denoise is not None:
-        _warn_type("general.denoise", "bool", raw_denoise)
-
-    raw_denoise_level = data.get("denoise_level")
-    if isinstance(raw_denoise_level, str):
-        if raw_denoise_level in ("light", "medium", "heavy"):
-            denoise_level = raw_denoise_level
+    raw_fade = data.get("fade_duration")
+    if isinstance(raw_fade, (int, float)) and not isinstance(raw_fade, bool):
+        if raw_fade >= 0:
+            fade_duration = float(raw_fade)
         else:
-            logger.warning("config: general.denoise_level 값 오류: %r", raw_denoise_level)
-    elif raw_denoise_level is not None:
-        _warn_type("general.denoise_level", "str", raw_denoise_level)
-
-    raw_normalize_audio = data.get("normalize_audio")
-    if isinstance(raw_normalize_audio, bool):
-        normalize_audio = raw_normalize_audio
-    elif raw_normalize_audio is not None:
-        _warn_type("general.normalize_audio", "bool", raw_normalize_audio)
-
-    raw_group_sequences = data.get("group_sequences")
-    if isinstance(raw_group_sequences, bool):
-        group_sequences = raw_group_sequences
-    elif raw_group_sequences is not None:
-        _warn_type("general.group_sequences", "bool", raw_group_sequences)
-
-    raw_fade_duration = data.get("fade_duration")
-    if isinstance(raw_fade_duration, (int, float)) and not isinstance(raw_fade_duration, bool):
-        if raw_fade_duration >= 0:
-            fade_duration = float(raw_fade_duration)
-        else:
-            logger.warning("config: general.fade_duration 값 오류: %r", raw_fade_duration)
-    elif raw_fade_duration is not None:
-        _warn_type("general.fade_duration", "float", raw_fade_duration)
+            logger.warning("config: general.fade_duration 값 오류: %r", raw_fade)
+    elif raw_fade is not None:
+        _warn_type(f"{section}.fade_duration", "float", raw_fade)
 
     return GeneralConfig(
-        output_dir=output_dir,
-        parallel=parallel,
-        db_path=db_path,
-        denoise=denoise,
+        output_dir=_parse_str(data, "output_dir", section),
+        parallel=_parse_int(data, "parallel", section),
+        db_path=_parse_str(data, "db_path", section),
+        denoise=_parse_bool(data, "denoise", section),
         denoise_level=denoise_level,
-        normalize_audio=normalize_audio,
-        group_sequences=group_sequences,
+        normalize_audio=_parse_bool(data, "normalize_audio", section),
+        group_sequences=_parse_bool(data, "group_sequences", section),
         fade_duration=fade_duration,
     )
 
 
 def _parse_youtube(data: dict[str, object]) -> YouTubeConfig:
     """[youtube] 섹션 파싱. 타입 오류 시 해당 필드 무시."""
-    client_secrets: str | None = None
-    token: str | None = None
+    section = "youtube"
+
+    # playlist: list[str] 또는 단일 str 허용
     playlist: list[str] = []
-    upload_chunk_mb: int | None = None
-    upload_privacy: str | None = None
-
-    raw_secrets = data.get("client_secrets")
-    if isinstance(raw_secrets, str):
-        client_secrets = raw_secrets
-    elif raw_secrets is not None:
-        _warn_type("youtube.client_secrets", "str", raw_secrets)
-
-    raw_token = data.get("token")
-    if isinstance(raw_token, str):
-        token = raw_token
-    elif raw_token is not None:
-        _warn_type("youtube.token", "str", raw_token)
-
     raw_playlist = data.get("playlist")
     if isinstance(raw_playlist, list):
         playlist = [item for item in raw_playlist if isinstance(item, str)]
         skipped = len(raw_playlist) - len(playlist)
         if skipped > 0:
-            logger.warning(
-                "config: youtube.playlist에 비문자열 항목 %d개 무시됨",
-                skipped,
-            )
+            logger.warning("config: youtube.playlist에 비문자열 항목 %d개 무시됨", skipped)
     elif isinstance(raw_playlist, str):
-        # 단일 문자열도 허용
         playlist = [raw_playlist]
     elif raw_playlist is not None:
-        _warn_type("youtube.playlist", "list|str", raw_playlist)
+        _warn_type(f"{section}.playlist", "list|str", raw_playlist)
 
-    raw_chunk = data.get("upload_chunk_mb")
-    if isinstance(raw_chunk, int) and not isinstance(raw_chunk, bool):
-        if 1 <= raw_chunk <= 256:
-            upload_chunk_mb = raw_chunk
-        else:
-            logger.warning("config: youtube.upload_chunk_mb 범위 초과: %d (1-256)", raw_chunk)
-    elif raw_chunk is not None:
-        _warn_type("youtube.upload_chunk_mb", "int", raw_chunk)
+    # upload_chunk_mb: 범위 검증
+    upload_chunk_mb = _parse_int(data, "upload_chunk_mb", section)
+    if upload_chunk_mb is not None and not (1 <= upload_chunk_mb <= 256):
+        logger.warning("config: youtube.upload_chunk_mb 범위 초과: %d (1-256)", upload_chunk_mb)
+        upload_chunk_mb = None
 
-    raw_privacy = data.get("upload_privacy")
-    if isinstance(raw_privacy, str):
-        if raw_privacy in ("public", "unlisted", "private"):
-            upload_privacy = raw_privacy
-        else:
-            logger.warning("config: youtube.upload_privacy 값 오류: %r", raw_privacy)
-    elif raw_privacy is not None:
-        _warn_type("youtube.upload_privacy", "str", raw_privacy)
+    # upload_privacy: 허용값 검증
+    upload_privacy = _parse_str(data, "upload_privacy", section)
+    if upload_privacy is not None and upload_privacy not in ("public", "unlisted", "private"):
+        logger.warning("config: youtube.upload_privacy 값 오류: %r", upload_privacy)
+        upload_privacy = None
 
     return YouTubeConfig(
-        client_secrets=client_secrets,
-        token=token,
+        client_secrets=_parse_str(data, "client_secrets", section),
+        token=_parse_str(data, "token", section),
         playlist=playlist,
         upload_chunk_mb=upload_chunk_mb,
         upload_privacy=upload_privacy,
@@ -335,3 +309,131 @@ def generate_default_config() -> str:
 # upload_chunk_mb = 32                      # 1-256 (TUBEARCHIVE_UPLOAD_CHUNK_MB)
 # upload_privacy = "unlisted"               # public/unlisted/private
 """
+
+
+# ---------------------------------------------------------------------------
+# 환경변수 기본값 헬퍼
+# ---------------------------------------------------------------------------
+
+
+def parse_env_bool(value: str) -> bool:
+    """환경변수 문자열을 bool로 변환한다.
+
+    '1', 'true', 'yes', 'y', 'on' (대소문자 무시)이면 True, 그 외 False.
+
+    Args:
+        value: 환경변수 원본 문자열.
+
+    Returns:
+        변환된 bool 값.
+    """
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def get_default_output_dir() -> Path | None:
+    """환경변수에서 기본 출력 디렉토리를 가져온다.
+
+    ``TUBEARCHIVE_OUTPUT_DIR`` 환경변수가 유효한 디렉토리를 가리킬 때만
+    ``Path`` 를 반환하고, 그 외에는 ``None`` 을 반환한다.
+
+    Returns:
+        유효한 디렉토리 경로 또는 None.
+    """
+    env_dir = os.environ.get(ENV_OUTPUT_DIR)
+    if env_dir:
+        path = Path(env_dir)
+        if path.is_dir():
+            return path
+        logger.warning("%s=%s is not a valid directory", ENV_OUTPUT_DIR, env_dir)
+    return None
+
+
+def get_default_parallel() -> int:
+    """환경변수에서 기본 병렬 처리 수를 가져온다.
+
+    ``TUBEARCHIVE_PARALLEL`` 환경변수에서 정수를 읽어 반환한다.
+    유효하지 않은 값이면 기본값 **1** (순차 처리)을 반환한다.
+
+    Returns:
+        병렬 워커 수 (최소 1).
+    """
+    env_parallel = os.environ.get(ENV_PARALLEL)
+    if env_parallel:
+        try:
+            val = int(env_parallel)
+            if val >= 1:
+                return val
+            logger.warning("%s=%s must be >= 1, using 1", ENV_PARALLEL, env_parallel)
+        except ValueError:
+            logger.warning("%s=%s is not a valid number", ENV_PARALLEL, env_parallel)
+    return 1
+
+
+def _get_env_bool(env_key: str, *, default: bool = False) -> bool:
+    """환경변수에서 bool 값을 가져온다.
+
+    Args:
+        env_key: 환경변수 이름
+        default: 미설정 시 기본값
+
+    Returns:
+        파싱된 bool 값.
+    """
+    env_val = os.environ.get(env_key)
+    if env_val is None:
+        return default
+    return parse_env_bool(env_val)
+
+
+def get_default_denoise() -> bool:
+    """환경변수 ``TUBEARCHIVE_DENOISE`` 에서 노이즈 제거 활성화 여부를 가져온다."""
+    return _get_env_bool(ENV_DENOISE)
+
+
+def get_default_denoise_level() -> str | None:
+    """환경변수 ``TUBEARCHIVE_DENOISE_LEVEL`` 에서 노이즈 제거 강도를 가져온다.
+
+    Returns:
+        ``light`` / ``medium`` / ``heavy`` 또는 None (미설정·유효하지 않은 값).
+    """
+    env_level = os.environ.get(ENV_DENOISE_LEVEL)
+    if not env_level:
+        return None
+    normalized = env_level.strip().lower()
+    if normalized in {"light", "medium", "heavy"}:
+        return normalized
+    logger.warning("%s=%s is not a valid level", ENV_DENOISE_LEVEL, env_level)
+    return None
+
+
+def get_default_normalize_audio() -> bool:
+    """환경변수 ``TUBEARCHIVE_NORMALIZE_AUDIO`` 에서 라우드니스 정규화 여부를 가져온다."""
+    return _get_env_bool(ENV_NORMALIZE_AUDIO)
+
+
+def get_default_group_sequences() -> bool:
+    """환경변수 ``TUBEARCHIVE_GROUP_SEQUENCES`` 에서 시퀀스 그룹핑 여부를 가져온다."""
+    return _get_env_bool(ENV_GROUP_SEQUENCES, default=True)
+
+
+def get_default_fade_duration() -> float:
+    """환경변수에서 기본 페이드 시간(초)을 가져온다.
+
+    ``TUBEARCHIVE_FADE_DURATION`` 환경변수에서 실수를 읽어 반환한다.
+    유효하지 않거나 음수이면 기본값 **0.5** 를 반환한다.
+
+    Returns:
+        페이드 시간(초, >= 0).
+    """
+    env_val = os.environ.get(ENV_FADE_DURATION)
+    if not env_val:
+        return 0.5
+    try:
+        val = float(env_val)
+    except ValueError:
+        logger.warning("%s=%s is not a valid number", ENV_FADE_DURATION, env_val)
+        return 0.5
+    if val < 0:
+        logger.warning("%s=%s must be >= 0, using 0.5", ENV_FADE_DURATION, env_val)
+        return 0.5
+    return val

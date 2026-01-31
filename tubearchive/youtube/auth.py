@@ -1,4 +1,8 @@
-"""YouTube OAuth 2.0 인증."""
+"""YouTube Data API v3 OAuth 2.0 인증.
+
+Google Cloud Console의 OAuth 클라이언트 시크릿을 사용하여
+브라우저 기반 인증 플로우를 수행하고, 토큰을 로컬에 저장한다.
+"""
 
 import json
 import logging
@@ -29,14 +33,14 @@ GOOGLE_CLOUD_CONSOLE_URL = "https://console.cloud.google.com/apis/credentials"
 
 
 class YouTubeAuthError(Exception):
-    """YouTube 인증 에러."""
+    """YouTube 인증 실패 시 발생하는 예외 (시크릿 누락, 토큰 만료 등)."""
 
     pass
 
 
 @dataclass
 class AuthStatus:
-    """YouTube 인증 상태."""
+    """YouTube 인증 상태 (시크릿 존재, 토큰 유효성, 브라우저 인증 필요 여부)."""
 
     has_client_secrets: bool
     has_valid_token: bool

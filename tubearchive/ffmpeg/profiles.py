@@ -1,11 +1,27 @@
-"""메타데이터 기반 FFmpeg 인코딩 프로파일."""
+"""메타데이터 기반 FFmpeg 인코딩 프로파일.
+
+영상의 색 공간(BT.709 / BT.2020)과 전달 함수(SDR / HLG / PQ)를 기준으로
+적절한 HEVC 10-bit 인코딩 파라미터 세트를 제공한다.
+
+프로파일:
+    - ``PROFILE_SDR``: BT.709 SDR (기본, concat 호환)
+    - ``PROFILE_HDR_HLG``: BT.2020 + HLG
+    - ``PROFILE_HDR_PQ``: BT.2020 + PQ (HDR10)
+    - ``PROFILE_FALLBACK_LIBX265``: VideoToolbox 실패 시 소프트웨어 폴백
+"""
 
 from dataclasses import dataclass
+
+from tubearchive.ffmpeg.effects import HDR_TRANSFER_HLG, HDR_TRANSFER_PQ
 
 
 @dataclass(frozen=True)
 class EncodingProfile:
-    """인코딩 프로파일."""
+    """HEVC 인코딩 프로파일.
+
+    코덱·비트레이트·색 공간 등을 하나의 프로파일로 묶어
+    :meth:`to_ffmpeg_args` 로 FFmpeg 명령줄 인자를 생성한다.
+    """
 
     name: str
     video_codec: str
@@ -74,7 +90,7 @@ PROFILE_HDR_HLG = EncodingProfile(
     audio_codec="aac",
     audio_bitrate="256k",
     color_primaries="bt2020",
-    color_transfer="arib-std-b67",  # HLG
+    color_transfer=HDR_TRANSFER_HLG,
     color_space="bt2020nc",
     extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
 )
@@ -88,7 +104,7 @@ PROFILE_HDR_PQ = EncodingProfile(
     audio_codec="aac",
     audio_bitrate="256k",
     color_primaries="bt2020",
-    color_transfer="smpte2084",  # PQ
+    color_transfer=HDR_TRANSFER_PQ,
     color_space="bt2020nc",
     extra_args=("-tag:v", "hvc1", "-color_range", "tv"),
 )
@@ -122,11 +138,11 @@ def select_profile(
         적합한 EncodingProfile
     """
     # HDR HLG 감지 (아이폰 HDR, 일부 카메라)
-    if color_transfer == "arib-std-b67":
+    if color_transfer == HDR_TRANSFER_HLG:
         return PROFILE_HDR_HLG
 
     # HDR PQ/HDR10 감지 (Nikon N-Log, Sony S-Log, 일부 HDR 카메라)
-    if color_transfer == "smpte2084":
+    if color_transfer == HDR_TRANSFER_PQ:
         return PROFILE_HDR_PQ
 
     # BT.2020 색공간이지만 transfer가 불명확한 경우 → HLG로 처리

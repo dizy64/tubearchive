@@ -1,4 +1,15 @@
-"""SQLite 데이터베이스 스키마."""
+"""SQLite 데이터베이스 스키마 및 초기화.
+
+테이블 3개로 구성된 스키마를 정의하고, DB 연결·초기화·마이그레이션을 담당한다.
+
+테이블:
+    - ``videos``: 원본 영상 파일 메타데이터 (경로, 생성 시간, 기기 모델 등)
+    - ``transcoding_jobs``: 트랜스코딩 작업 상태 추적 (Resume 지원)
+    - ``merge_jobs``: 병합 작업 이력 및 YouTube 업로드 상태
+
+DB 위치:
+    ``TUBEARCHIVE_DB_PATH`` 환경변수 > ``~/.tubearchive/tubearchive.db``
+"""
 
 import os
 import sqlite3

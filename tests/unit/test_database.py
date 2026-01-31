@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.database.repository import TranscodingJobRepository, VideoRepository
+from tubearchive.database.repository import (
+    MergeJobRepository,
+    TranscodingJobRepository,
+    VideoRepository,
+)
 from tubearchive.database.schema import init_database
 from tubearchive.models.job import JobStatus
 from tubearchive.models.video import VideoFile, VideoMetadata
@@ -324,3 +328,166 @@ class TestTranscodingJobRepository:
         count = job_repo.mark_merged_by_video_ids([video_id])
 
         assert count == 0
+
+    def test_delete_by_video_ids(self, job_repo: TranscodingJobRepository, video_id: int) -> None:
+        """video_id 목록으로 트랜스코딩 작업 일괄 삭제."""
+        job_repo.create(video_id)
+        job_repo.create(video_id)
+
+        deleted = job_repo.delete_by_video_ids([video_id])
+
+        assert deleted == 2
+        assert job_repo.get_by_video_id(video_id) == []
+
+    def test_delete_by_video_ids_empty_list(self, job_repo: TranscodingJobRepository) -> None:
+        """빈 목록 전달 시 0 반환."""
+        assert job_repo.delete_by_video_ids([]) == 0
+
+    def test_get_active_with_paths(self, job_repo: TranscodingJobRepository, video_id: int) -> None:
+        """진행 중인 작업과 원본 경로 함께 조회."""
+        job_id = job_repo.create(video_id)
+        job_repo.update_status(job_id, JobStatus.PROCESSING)
+
+        active = job_repo.get_active_with_paths(limit=10)
+
+        assert len(active) == 1
+        assert active[0]["status"] == "processing"
+        assert active[0]["original_path"] is not None
+
+    def test_get_active_with_paths_excludes_completed(
+        self, job_repo: TranscodingJobRepository, video_id: int, tmp_path: Path
+    ) -> None:
+        """완료된 작업은 active에 포함되지 않음."""
+        job_id = job_repo.create(video_id)
+        job_repo.mark_completed(job_id, tmp_path / "output.mp4")
+
+        active = job_repo.get_active_with_paths(limit=10)
+
+        assert len(active) == 0
+
+
+class TestVideoRepositoryExtended:
+    """VideoRepository 추가 메서드 테스트."""
+
+    @pytest.fixture
+    def db_conn(self, tmp_path: Path) -> sqlite3.Connection:
+        """테스트용 DB 연결."""
+        db_path = tmp_path / "test.db"
+        conn = init_database(db_path)
+        yield conn
+        conn.close()
+
+    @pytest.fixture
+    def repo(self, db_conn: sqlite3.Connection) -> VideoRepository:
+        """VideoRepository 인스턴스."""
+        return VideoRepository(db_conn)
+
+    def _insert_video(self, repo: VideoRepository, tmp_path: Path, name: str = "v.mp4") -> int:
+        """헬퍼: 영상 삽입 후 ID 반환."""
+        video_path = tmp_path / name
+        video_path.write_text("")
+        video_file = VideoFile(path=video_path, creation_time=datetime.now(), size_bytes=1024)
+        metadata = VideoMetadata(
+            width=1920,
+            height=1080,
+            duration_seconds=60.0,
+            fps=30.0,
+            codec="h264",
+            pixel_format="yuv420p",
+            is_portrait=False,
+            is_vfr=False,
+            device_model=None,
+            color_space=None,
+            color_transfer=None,
+            color_primaries=None,
+        )
+        return repo.insert(video_file, metadata)
+
+    def test_count_all_empty(self, repo: VideoRepository) -> None:
+        """빈 DB에서 count_all은 0."""
+        assert repo.count_all() == 0
+
+    def test_count_all_with_data(self, repo: VideoRepository, tmp_path: Path) -> None:
+        """영상 삽입 후 count_all 정확성."""
+        self._insert_video(repo, tmp_path, "a.mp4")
+        self._insert_video(repo, tmp_path, "b.mp4")
+
+        assert repo.count_all() == 2
+
+    def test_delete_by_ids(self, repo: VideoRepository, tmp_path: Path) -> None:
+        """ID 목록으로 일괄 삭제."""
+        id1 = self._insert_video(repo, tmp_path, "a.mp4")
+        id2 = self._insert_video(repo, tmp_path, "b.mp4")
+
+        deleted = repo.delete_by_ids([id1, id2])
+
+        assert deleted == 2
+        assert repo.count_all() == 0
+
+    def test_delete_by_ids_empty_list(self, repo: VideoRepository) -> None:
+        """빈 목록 전달 시 0 반환."""
+        assert repo.delete_by_ids([]) == 0
+
+
+class TestMergeJobRepository:
+    """MergeJobRepository 테스트."""
+
+    @pytest.fixture
+    def db_conn(self, tmp_path: Path) -> sqlite3.Connection:
+        """테스트용 DB 연결."""
+        db_path = tmp_path / "test.db"
+        conn = init_database(db_path)
+        yield conn
+        conn.close()
+
+    @pytest.fixture
+    def repo(self, db_conn: sqlite3.Connection) -> MergeJobRepository:
+        """MergeJobRepository 인스턴스."""
+        return MergeJobRepository(db_conn)
+
+    def test_get_by_output_path(self, repo: MergeJobRepository, tmp_path: Path) -> None:
+        """출력 경로로 MergeJob 조회."""
+        output = tmp_path / "merged.mp4"
+        repo.create(output_path=output, video_ids=[1, 2], title="Test")
+
+        job = repo.get_by_output_path(output)
+
+        assert job is not None
+        assert job.title == "Test"
+        assert job.video_ids == [1, 2]
+
+    def test_get_by_output_path_not_found(self, repo: MergeJobRepository, tmp_path: Path) -> None:
+        """존재하지 않는 경로 조회 시 None."""
+        result = repo.get_by_output_path(tmp_path / "nonexistent.mp4")
+
+        assert result is None
+
+    def test_get_recent(self, repo: MergeJobRepository, tmp_path: Path) -> None:
+        """최근 병합 작업 조회."""
+        repo.create(output_path=tmp_path / "a.mp4", video_ids=[1])
+        repo.create(output_path=tmp_path / "b.mp4", video_ids=[2])
+        repo.create(output_path=tmp_path / "c.mp4", video_ids=[3])
+
+        recent = repo.get_recent(limit=2)
+
+        assert len(recent) == 2
+
+    def test_count_all(self, repo: MergeJobRepository, tmp_path: Path) -> None:
+        """전체 병합 작업 수."""
+        assert repo.count_all() == 0
+
+        repo.create(output_path=tmp_path / "a.mp4", video_ids=[1])
+        repo.create(output_path=tmp_path / "b.mp4", video_ids=[2])
+
+        assert repo.count_all() == 2
+
+    def test_count_uploaded(self, repo: MergeJobRepository, tmp_path: Path) -> None:
+        """업로드된 작업 수."""
+        job_id = repo.create(output_path=tmp_path / "a.mp4", video_ids=[1])
+        repo.create(output_path=tmp_path / "b.mp4", video_ids=[2])
+
+        assert repo.count_uploaded() == 0
+
+        repo.update_youtube_id(job_id, "yt_abc123")
+
+        assert repo.count_uploaded() == 1

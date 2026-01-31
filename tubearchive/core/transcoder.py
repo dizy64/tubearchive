@@ -1,4 +1,16 @@
-"""트랜스코딩 엔진."""
+"""영상 트랜스코딩 엔진.
+
+입력 영상을 HEVC 10-bit(p010le) BT.709 SDR 프로파일로 변환한다.
+VideoToolbox 하드웨어 가속을 우선 사용하고, 실패 시 libx265로 폴백한다.
+
+주요 기능:
+    - 세로 영상 → 가로(3840x2160) 레이아웃 자동 변환 (블러 배경)
+    - HDR(HLG/PQ) → SDR 톤매핑
+    - 오디오 노이즈 제거 (afftdn)
+    - EBU R128 라우드니스 정규화 (loudnorm 2-pass)
+    - 클립 간 Dip-to-Black 페이드
+    - Resume 지원 (중단 후 재시작)
+"""
 
 import logging
 from collections.abc import Callable
@@ -28,7 +40,15 @@ logger = logging.getLogger(__name__)
 
 
 class Transcoder:
-    """트랜스코딩 엔진."""
+    """영상 파일을 HEVC 10-bit SDR로 트랜스코딩하는 엔진.
+
+    컨텍스트 매니저로 사용하며, DB 연결·Resume 매니저·임시 디렉토리를 관리한다.
+
+    Usage::
+
+        with Transcoder(temp_dir=Path("/tmp/ta")) as t:
+            output, vid = t.transcode_video(video_file)
+    """
 
     def __init__(
         self,
@@ -98,7 +118,24 @@ class Transcoder:
         audio_filter: str,
         seek_start: float | None,
     ) -> list[str]:
-        """세로/가로 영상에 맞는 FFmpeg 커맨드를 생성한다."""
+        """세로/가로 영상에 맞는 FFmpeg 커맨드를 생성한다.
+
+        세로 영상(portrait)은 ``filter_complex`` 인자로 전달하여
+        split→blur→overlay 파이프라인을 구성하고,
+        가로 영상은 ``video_filter`` (-vf) 인자를 사용한다.
+
+        Args:
+            video_file: 입력 영상 파일.
+            metadata: ffprobe에서 추출한 영상 메타데이터.
+            output_path: 트랜스코딩 결과 저장 경로.
+            profile: 인코딩 프로파일 (코덱, 비트레이트, 색 공간).
+            video_filter: FFmpeg 비디오 필터 문자열.
+            audio_filter: FFmpeg 오디오 필터 문자열.
+            seek_start: Resume 시작 위치 (초). None이면 처음부터.
+
+        Returns:
+            FFmpeg 명령어 인자 리스트.
+        """
         # 세로: filter_complex (split → blur → overlay), 가로: -vf
         if metadata.is_portrait:
             return self.executor.build_transcode_command(
@@ -125,7 +162,17 @@ class Transcoder:
         job_id: int,
         progress_info_callback: Callable[[ProgressInfo], None] | None,
     ) -> None:
-        """FFmpeg를 실행하고 진행률을 DB(+UI)에 보고한다."""
+        """FFmpeg를 실행하고 진행률을 DB와 UI에 동시 보고한다.
+
+        ``progress_info_callback`` 이 지정되면 DB 저장과 UI 콜백을
+        모두 호출하는 래퍼를 구성하고, 없으면 DB 저장만 수행한다.
+
+        Args:
+            cmd: FFmpeg 명령어 인자 리스트.
+            duration: 영상 총 길이 (초). 진행률 퍼센트 계산에 사용.
+            job_id: ``transcoding_jobs`` 테이블의 작업 ID (진행률 저장용).
+            progress_info_callback: UI 진행률 업데이트 콜백 (선택).
+        """
         if progress_info_callback:
 
             def on_progress_info(info: ProgressInfo) -> None:
@@ -143,7 +190,18 @@ class Transcoder:
     # ---------- 공개 API ----------
 
     def _run_loudnorm_analysis(self, video_file: VideoFile) -> LoudnormAnalysis:
-        """loudnorm 1st pass: 오디오 라우드니스 분석."""
+        """EBU R128 loudnorm 1st pass — 오디오 라우드니스 분석.
+
+        FFmpeg의 ``loudnorm`` 필터를 분석 모드(``print_format=json``)로
+        실행하여 입력 영상의 라우드니스 통계(I, TP, LRA, threshold)를 측정한다.
+        이 결과는 2nd pass에서 정규화 파라미터로 사용된다.
+
+        Args:
+            video_file: 분석 대상 영상 파일.
+
+        Returns:
+            1st pass 분석 결과 (:class:`LoudnormAnalysis`).
+        """
         analysis_filter = create_loudnorm_analysis_filter()
         cmd = self.executor.build_loudness_analysis_command(
             input_path=video_file.path,

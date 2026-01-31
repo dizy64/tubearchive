@@ -1,4 +1,7 @@
-"""YouTube 플레이리스트 관리."""
+"""YouTube 플레이리스트 관리.
+
+플레이리스트 목록 조회, 영상 추가 기능을 제공한다.
+"""
 
 from __future__ import annotations
 
@@ -13,14 +16,14 @@ logger = logging.getLogger(__name__)
 
 
 class PlaylistError(Exception):
-    """플레이리스트 관련 에러."""
+    """플레이리스트 조회·추가 실패 시 발생하는 예외."""
 
     pass
 
 
 @dataclass
 class Playlist:
-    """플레이리스트 정보."""
+    """플레이리스트 정보 (ID, 제목, 항목 수)."""
 
     id: str
     title: str

@@ -1,4 +1,8 @@
-"""영상 병합기."""
+"""FFmpeg concat demuxer를 사용한 영상 병합기.
+
+트랜스코딩된 영상 파일들을 하나의 MP4 파일로 합치되,
+재인코딩 없이(``-c copy``) 스트림을 이어붙인다.
+"""
 
 import logging
 import shutil
@@ -36,7 +40,7 @@ def create_concat_file(video_paths: list[Path], output_dir: Path) -> Path:
 
 
 class Merger:
-    """영상 병합기."""
+    """FFmpeg concat demuxer 기반 영상 병합기 (스트림 복사, 재인코딩 없음)."""
 
     def __init__(
         self,

@@ -6,7 +6,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.cli import CATALOG_STATUS_SENTINEL, create_parser, main, validate_args
+from tubearchive.cli import (
+    CATALOG_STATUS_SENTINEL,
+    ClipInfo,
+    TranscodeOptions,
+    create_parser,
+    database_session,
+    main,
+    validate_args,
+)
+from tubearchive.utils import truncate_path
 
 
 class TestCreateParser:
@@ -581,3 +590,144 @@ class TestUploadAfterPipeline:
         mock_upload.assert_called_once()
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["privacy"] == "private"
+
+
+class TestTruncatePath:
+    """truncate_path 유틸리티 테스트."""
+
+    def test_short_path_unchanged(self) -> None:
+        """max_len 이하 경로는 그대로 반환."""
+        assert truncate_path("/short/path", max_len=40) == "/short/path"
+
+    def test_exact_length_unchanged(self) -> None:
+        """max_len과 정확히 같은 길이는 그대로 반환."""
+        path = "x" * 40
+        assert truncate_path(path, max_len=40) == path
+
+    def test_long_path_truncated(self) -> None:
+        """max_len 초과 경로는 '...' 접두사로 말줄임."""
+        path = "/very/long/path/that/exceeds/the/maximum/length/limit.mp4"
+        result = truncate_path(path, max_len=30)
+        assert result.startswith("...")
+        assert len(result) == 30
+
+    def test_custom_max_len(self) -> None:
+        """다양한 max_len 값에서 정상 동작."""
+        path = "a" * 50
+        result = truncate_path(path, max_len=20)
+        assert len(result) == 20
+        assert result == "..." + "a" * 17
+
+    def test_empty_string(self) -> None:
+        """빈 문자열은 그대로 반환."""
+        assert truncate_path("", max_len=40) == ""
+
+
+class TestTranscodeOptions:
+    """TranscodeOptions 데이터클래스 테스트."""
+
+    def test_default_values(self) -> None:
+        """기본값이 올바르게 설정되는지 확인."""
+        opts = TranscodeOptions()
+        assert opts.denoise is False
+        assert opts.denoise_level == "medium"
+        assert opts.normalize_audio is False
+        assert opts.fade_map is None
+        assert opts.fade_duration == 0.5
+
+    def test_custom_values(self) -> None:
+        """커스텀 값이 정상 할당되는지 확인."""
+        from tubearchive.models.video import FadeConfig
+
+        fade_map = {Path("/a.mp4"): FadeConfig(fade_in=0.3, fade_out=0.7)}
+        opts = TranscodeOptions(
+            denoise=True,
+            denoise_level="heavy",
+            normalize_audio=True,
+            fade_map=fade_map,
+            fade_duration=1.0,
+        )
+        assert opts.denoise is True
+        assert opts.denoise_level == "heavy"
+        assert opts.normalize_audio is True
+        assert opts.fade_map is not None
+        assert opts.fade_duration == 1.0
+
+    def test_frozen_immutable(self) -> None:
+        """frozen=True이므로 필드 변경 시 에러 발생."""
+        opts = TranscodeOptions()
+        with pytest.raises(AttributeError):
+            opts.denoise = True  # type: ignore[misc]
+
+
+class TestDatabaseSession:
+    """database_session context manager 테스트."""
+
+    @patch("tubearchive.cli.init_database")
+    def test_yields_connection(self, mock_init: MagicMock) -> None:
+        """context manager가 DB 연결 객체를 yield한다."""
+        mock_conn = MagicMock()
+        mock_init.return_value = mock_conn
+
+        with database_session() as conn:
+            assert conn is mock_conn
+
+    @patch("tubearchive.cli.init_database")
+    def test_closes_connection_on_exit(self, mock_init: MagicMock) -> None:
+        """블록 종료 시 DB 연결이 닫힌다."""
+        mock_conn = MagicMock()
+        mock_init.return_value = mock_conn
+
+        with database_session():
+            mock_conn.close.assert_not_called()
+
+        mock_conn.close.assert_called_once()
+
+    @patch("tubearchive.cli.init_database")
+    def test_closes_connection_on_exception(self, mock_init: MagicMock) -> None:
+        """예외 발생 시에도 DB 연결이 닫힌다."""
+        mock_conn = MagicMock()
+        mock_init.return_value = mock_conn
+
+        with pytest.raises(ValueError), database_session():
+            raise ValueError("test error")
+
+        mock_conn.close.assert_called_once()
+
+
+class TestClipInfo:
+    """ClipInfo NamedTuple 테스트."""
+
+    def test_creation(self) -> None:
+        """기본 생성과 필드 접근."""
+        info = ClipInfo(
+            name="test.mp4",
+            duration=120.5,
+            device="Nikon Z6III",
+            shot_time="14:30:00",
+        )
+        assert info.name == "test.mp4"
+        assert info.duration == 120.5
+        assert info.device == "Nikon Z6III"
+        assert info.shot_time == "14:30:00"
+
+    def test_optional_fields(self) -> None:
+        """device와 shot_time은 None 허용."""
+        info = ClipInfo(name="test.mp4", duration=0.0, device=None, shot_time=None)
+        assert info.device is None
+        assert info.shot_time is None
+
+    def test_tuple_unpacking(self) -> None:
+        """기존 tuple 언패킹과 동일하게 동작한다."""
+        info = ClipInfo(name="clip.mov", duration=60.0, device="GoPro", shot_time="10:00:00")
+        name, duration, device, shot_time = info
+        assert name == "clip.mov"
+        assert duration == 60.0
+        assert device == "GoPro"
+        assert shot_time == "10:00:00"
+
+    def test_immutable(self) -> None:
+        """NamedTuple이므로 필드 변경 불가."""
+        info = ClipInfo(name="a.mp4", duration=1.0, device=None, shot_time=None)
+        with pytest.raises(AttributeError):
+            info.name = "b.mp4"  # type: ignore[misc]

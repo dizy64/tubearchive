@@ -1,4 +1,16 @@
-"""영상 파일 스캐너."""
+"""영상 파일 스캐너.
+
+지정된 파일·디렉토리 목록에서 영상 파일을 재귀 탐색하고,
+각 파일의 메타데이터(크기, 생성 시간)를 수집하여
+:class:`~tubearchive.models.video.VideoFile` 리스트로 반환한다.
+
+지원 확장자:
+    ``VIDEO_EXTENSIONS`` 에 정의된 컨테이너
+    (``.mp4``, ``.mov``, ``.mkv``, ``.avi`` 등)
+
+생성 시간 감지:
+    macOS ``st_birthtime`` → ``st_mtime`` → ``st_ctime`` 순으로 폴백
+"""
 
 import sys
 from datetime import datetime
