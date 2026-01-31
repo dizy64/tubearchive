@@ -28,11 +28,6 @@ def parse_args() -> argparse.Namespace:
         help="Version part to increment (default: patch).",
     )
     parser.add_argument(
-        "--build",
-        action="store_true",
-        help="Run `uv build` after updating the version.",
-    )
-    parser.add_argument(
         "--branch",
         action="append",
         default=["main", "master"],
@@ -138,9 +133,6 @@ def main() -> int:
     replace_version(PYPROJECT, VERSION_RE, next_version)
     replace_version(INIT_FILE, INIT_RE, next_version)
     print(f"Bumped version: {pyproject_version} -> {next_version}")
-
-    if args.build:
-        subprocess.run(["uv", "build"], cwd=ROOT, check=True)
     return 0
 
 
