@@ -1,12 +1,18 @@
 """FFmpeg 효과 테스트."""
 
 from tubearchive.ffmpeg.effects import (
+    StabilizeCrop,
+    StabilizeStrength,
     _calculate_fade_params,
+    create_audio_filter_chain,
     create_combined_filter,
+    create_denoise_audio_filter,
     create_dip_to_black_audio_filter,
     create_dip_to_black_video_filter,
     create_hdr_to_sdr_filter,
     create_portrait_layout_filter,
+    create_vidstab_detect_filter,
+    create_vidstab_transform_filter,
 )
 
 
@@ -166,6 +172,28 @@ class TestDipToBlackAudioFilter:
         audio_fadeout_st = audio_filter.split("afade=t=out:st=")[1].split(":")[0]
 
         assert video_fadeout_st == audio_fadeout_st == "59.5"
+
+
+class TestDenoiseAudioFilter:
+    """오디오 노이즈 제거 필터 테스트."""
+
+    def test_creates_afftdn_with_level(self) -> None:
+        """강도별 afftdn 파라미터."""
+        assert create_denoise_audio_filter("light") == "afftdn=nr=6"
+        assert create_denoise_audio_filter("medium") == "afftdn=nr=12"
+        assert create_denoise_audio_filter("heavy") == "afftdn=nr=18"
+
+    def test_audio_chain_orders_denoise_before_fade(self) -> None:
+        """denoise -> fade 순서 확인."""
+        chain = create_audio_filter_chain(
+            total_duration=60.0,
+            fade_duration=0.5,
+            denoise=True,
+            denoise_level="medium",
+        )
+
+        assert chain.startswith("afftdn=nr=12")
+        assert "afade=t=in" in chain
 
 
 class TestHdrToSdrFilter:
@@ -352,3 +380,150 @@ class TestShortVideoDurationHandling:
         assert "boxblur" in video_filter
         # 음수 없음
         assert "st=-" not in video_filter
+
+
+class TestVidstabDetectFilter:
+    """vidstab 분석 패스 필터 테스트."""
+
+    def test_light_strength(self) -> None:
+        """light 강도: shakiness=4, accuracy=9."""
+        result = create_vidstab_detect_filter(
+            strength=StabilizeStrength.LIGHT,
+            trf_path="transforms/stab.trf",
+        )
+        assert "shakiness=4" in result
+        assert "accuracy=9" in result
+
+    def test_medium_strength(self) -> None:
+        """medium 강도: shakiness=6, accuracy=12."""
+        result = create_vidstab_detect_filter(
+            strength=StabilizeStrength.MEDIUM,
+            trf_path="transforms/stab.trf",
+        )
+        assert "shakiness=6" in result
+        assert "accuracy=12" in result
+
+    def test_heavy_strength(self) -> None:
+        """heavy 강도: shakiness=8, accuracy=15."""
+        result = create_vidstab_detect_filter(
+            strength=StabilizeStrength.HEAVY,
+            trf_path="transforms/stab.trf",
+        )
+        assert "shakiness=8" in result
+        assert "accuracy=15" in result
+
+    def test_includes_trf_path(self) -> None:
+        """result= 경로 포함."""
+        result = create_vidstab_detect_filter(
+            trf_path="transforms/my_video.trf",
+        )
+        assert "result=transforms/my_video.trf" in result
+
+
+class TestVidstabTransformFilter:
+    """vidstab 변환 필터 테스트."""
+
+    def test_light_smoothing(self) -> None:
+        """light 강도: smoothing=10."""
+        result = create_vidstab_transform_filter(
+            strength=StabilizeStrength.LIGHT,
+            trf_path="transforms/stab.trf",
+        )
+        assert "smoothing=10" in result
+
+    def test_medium_smoothing(self) -> None:
+        """medium 강도: smoothing=15."""
+        result = create_vidstab_transform_filter(
+            strength=StabilizeStrength.MEDIUM,
+            trf_path="transforms/stab.trf",
+        )
+        assert "smoothing=15" in result
+
+    def test_heavy_smoothing(self) -> None:
+        """heavy 강도: smoothing=30."""
+        result = create_vidstab_transform_filter(
+            strength=StabilizeStrength.HEAVY,
+            trf_path="transforms/stab.trf",
+        )
+        assert "smoothing=30" in result
+
+    def test_crop_mode(self) -> None:
+        """crop 모드: crop=keep."""
+        result = create_vidstab_transform_filter(
+            crop=StabilizeCrop.CROP,
+            trf_path="transforms/stab.trf",
+        )
+        assert "crop=keep" in result
+
+    def test_expand_mode(self) -> None:
+        """expand 모드: crop=black."""
+        result = create_vidstab_transform_filter(
+            crop=StabilizeCrop.EXPAND,
+            trf_path="transforms/stab.trf",
+        )
+        assert "crop=black" in result
+
+    def test_includes_trf_path(self) -> None:
+        """input= 경로 포함."""
+        result = create_vidstab_transform_filter(
+            trf_path="transforms/my_video.trf",
+        )
+        assert "input=transforms/my_video.trf" in result
+
+
+class TestCombinedFilterWithStabilize:
+    """안정화 필터 통합 테스트."""
+
+    def test_landscape_with_stabilize(self) -> None:
+        """가로 영상: vidstabtransform이 scale/pad 전에 위치."""
+        stab_filter = "vidstabtransform=input=stab.trf:smoothing=15:crop=keep"
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            stabilize_filter=stab_filter,
+        )
+        assert "vidstabtransform" in video_filter
+        # vidstabtransform이 scale 앞에 위치해야 함
+        stab_pos = video_filter.index("vidstabtransform")
+        scale_pos = video_filter.index("scale=")
+        assert stab_pos < scale_pos
+
+    def test_portrait_with_stabilize(self) -> None:
+        """세로 영상: vidstabtransform이 split 전에 위치."""
+        stab_filter = "vidstabtransform=input=stab.trf:smoothing=15:crop=keep"
+        video_filter, _ = create_combined_filter(
+            source_width=1080,
+            source_height=1920,
+            total_duration=60.0,
+            is_portrait=True,
+            stabilize_filter=stab_filter,
+        )
+        assert "vidstabtransform" in video_filter
+        # vidstabtransform이 split 앞에 위치해야 함
+        stab_pos = video_filter.index("vidstabtransform")
+        split_pos = video_filter.index("split=2")
+        assert stab_pos < split_pos
+
+    def test_landscape_without_stabilize(self) -> None:
+        """가로 영상: stabilize_filter="" 이면 vidstabtransform 미포함."""
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            stabilize_filter="",
+        )
+        assert "vidstabtransform" not in video_filter
+
+    def test_portrait_without_stabilize(self) -> None:
+        """세로 영상: stabilize_filter="" 이면 vidstabtransform 미포함."""
+        video_filter, _ = create_combined_filter(
+            source_width=1080,
+            source_height=1920,
+            total_duration=60.0,
+            is_portrait=True,
+            stabilize_filter="",
+        )
+        assert "vidstabtransform" not in video_filter

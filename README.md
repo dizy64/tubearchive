@@ -169,6 +169,9 @@ uv run tubearchive --no-resume ~/Videos/
 # 임시 파일 보존 (디버깅용)
 uv run tubearchive --keep-temp ~/Videos/
 
+# 오디오 노이즈 제거 (바람소리/배경 소음 저감)
+uv run tubearchive --denoise --denoise-level medium ~/Videos/
+
 # 상세 로그 출력
 uv run tubearchive -v ~/Videos/
 
@@ -386,6 +389,7 @@ tubearchive ~/Videos/ --upload
 ```
 usage: tubearchive [-h] [-V] [-o OUTPUT] [--output-dir DIR] [--no-resume]
                    [--keep-temp] [--dry-run] [-v] [-j N]
+                   [--denoise] [--denoise-level {light,medium,heavy}]
                    [--upload] [--upload-only FILE]
                    [--upload-title TITLE] [--upload-privacy {public,unlisted,private}]
                    [--playlist ID] [--setup-youtube] [--youtube-auth] [--list-playlists]
@@ -407,6 +411,8 @@ options:
   --dry-run             실행 계획만 출력 (실제 실행 안 함)
   -v, --verbose         상세 로그 출력
   -j, --parallel N      병렬 트랜스코딩 수 (환경변수: TUBEARCHIVE_PARALLEL, 기본: 1)
+  --denoise             FFmpeg 오디오 노이즈 제거 활성화 (afftdn)
+  --denoise-level       노이즈 제거 강도 (light/medium/heavy, 기본: medium)
   --upload              병합 완료 후 YouTube에 업로드
   --upload-only FILE    지정된 파일을 YouTube에 업로드 (병합 없이)
   --upload-title TITLE  YouTube 업로드 시 영상 제목
@@ -426,6 +432,8 @@ options:
 | `TUBEARCHIVE_OUTPUT_DIR` | 기본 출력 디렉토리 | 출력 파일과 같은 위치 |
 | `TUBEARCHIVE_DB_PATH` | 데이터베이스 파일 경로 | `~/.tubearchive/tubearchive.db` |
 | `TUBEARCHIVE_PARALLEL` | 병렬 트랜스코딩 수 | 1 (순차 처리) |
+| `TUBEARCHIVE_DENOISE` | 오디오 노이즈 제거 기본 활성화 (true/false) | false |
+| `TUBEARCHIVE_DENOISE_LEVEL` | 노이즈 제거 강도 (light/medium/heavy) | medium |
 | `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 클라이언트 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
 | `TUBEARCHIVE_YOUTUBE_TOKEN` | OAuth 토큰 저장 경로 | `~/.tubearchive/youtube_token.json` |
 | `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID (쉼표로 여러 개 지정) | - |
@@ -515,6 +523,29 @@ uv run ruff check tubearchive/ tests/
 
 # 포맷팅
 uv run ruff format tubearchive/ tests/
+```
+
+### 버전/빌드
+
+버전은 `pyproject.toml`과 `tubearchive/__init__.py`에 동시에 반영됩니다.
+
+```bash
+# 패치 버전 증가 (기본값)
+scripts/bump_version.py
+
+# 마이너/메이저 증가
+scripts/bump_version.py --part minor
+scripts/bump_version.py --part major
+
+# 다음 버전만 확인 (파일 변경 없음)
+scripts/bump_version.py --dry-run
+```
+
+빌드는 로컬에서만 사용하도록 `uv build`로 패키징합니다.
+
+```bash
+# 리패키징 (dist/ 생성)
+scripts/repackage.py
 ```
 
 ### 커밋 규칙

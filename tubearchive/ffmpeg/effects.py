@@ -1,7 +1,45 @@
 """FFmpeg 영상 효과 필터."""
 
+from enum import Enum
+
 # HDR 색공간 식별자
 HDR_COLOR_TRANSFERS = {"arib-std-b67", "smpte2084"}
+
+# 오디오 노이즈 제거 강도 (afftdn 기준)
+DENOISE_AFFTDN_LEVELS = {
+    "light": 6,
+    "medium": 12,
+    "heavy": 18,
+}
+
+
+class StabilizeStrength(Enum):
+    """영상 안정화 강도."""
+
+    LIGHT = "light"
+    MEDIUM = "medium"
+    HEAVY = "heavy"
+
+
+class StabilizeCrop(Enum):
+    """영상 안정화 테두리 처리."""
+
+    CROP = "crop"
+    EXPAND = "expand"
+
+
+# vidstab 강도별 파라미터 매핑
+_VIDSTAB_PARAMS: dict[StabilizeStrength, dict[str, int]] = {
+    StabilizeStrength.LIGHT: {"shakiness": 4, "accuracy": 9, "smoothing": 10},
+    StabilizeStrength.MEDIUM: {"shakiness": 6, "accuracy": 12, "smoothing": 15},
+    StabilizeStrength.HEAVY: {"shakiness": 8, "accuracy": 15, "smoothing": 30},
+}
+
+# vidstab crop 모드 매핑
+_VIDSTAB_CROP: dict[StabilizeCrop, str] = {
+    StabilizeCrop.CROP: "keep",
+    StabilizeCrop.EXPAND: "black",
+}
 
 
 def create_hdr_to_sdr_filter(color_transfer: str | None) -> str:
@@ -150,6 +188,88 @@ def create_dip_to_black_audio_filter(
     return f"afade=t=in:st=0:d={effective_fade},afade=t=out:st={fade_out_start}:d={effective_fade}"
 
 
+def create_denoise_audio_filter(level: str = "medium") -> str:
+    """
+    오디오 노이즈 제거 필터 생성 (afftdn).
+
+    Args:
+        level: 강도 (light/medium/heavy)
+
+    Returns:
+        FFmpeg -af 필터 문자열
+    """
+    key = level.lower()
+    if key not in DENOISE_AFFTDN_LEVELS:
+        raise ValueError(f"Unsupported denoise level: {level}")
+    nr = DENOISE_AFFTDN_LEVELS[key]
+    return f"afftdn=nr={nr}"
+
+
+def create_audio_filter_chain(
+    total_duration: float,
+    fade_duration: float = 0.5,
+    denoise: bool = False,
+    denoise_level: str = "medium",
+) -> str:
+    """
+    오디오 필터 체인 생성.
+
+    순서: denoise -> fade (향후 loudnorm 등과 결합 가능)
+    """
+    filters: list[str] = []
+    if denoise:
+        filters.append(create_denoise_audio_filter(denoise_level))
+
+    fade_filter = create_dip_to_black_audio_filter(total_duration, fade_duration)
+    if fade_filter:
+        filters.append(fade_filter)
+
+    return ",".join(filters)
+
+
+def create_vidstab_detect_filter(
+    strength: StabilizeStrength = StabilizeStrength.MEDIUM,
+    trf_path: str = "",
+) -> str:
+    """
+    vidstab 분석 패스 필터 생성 (Pass 1).
+
+    Args:
+        strength: 안정화 강도
+        trf_path: transform 파일 저장 경로
+
+    Returns:
+        vidstabdetect 필터 문자열
+    """
+    params = _VIDSTAB_PARAMS[strength]
+    return (
+        f"vidstabdetect=shakiness={params['shakiness']}"
+        f":accuracy={params['accuracy']}"
+        f":result={trf_path}"
+    )
+
+
+def create_vidstab_transform_filter(
+    strength: StabilizeStrength = StabilizeStrength.MEDIUM,
+    crop: StabilizeCrop = StabilizeCrop.CROP,
+    trf_path: str = "",
+) -> str:
+    """
+    vidstab 변환 필터 생성 (Pass 2).
+
+    Args:
+        strength: 안정화 강도
+        crop: 테두리 처리 방식
+        trf_path: transform 파일 경로
+
+    Returns:
+        vidstabtransform 필터 문자열
+    """
+    params = _VIDSTAB_PARAMS[strength]
+    crop_value = _VIDSTAB_CROP[crop]
+    return f"vidstabtransform=input={trf_path}:smoothing={params['smoothing']}:crop={crop_value}"
+
+
 def _build_portrait_video_filter(
     source_width: int,
     source_height: int,
@@ -158,14 +278,15 @@ def _build_portrait_video_filter(
     blur_radius: int,
     hdr_filter: str,
     fade_filters: str,
+    stabilize_filter: str = "",
 ) -> str:
-    """세로 영상용 filter_complex 문자열 생성 (split → blur → overlay)."""
+    """세로 영상용 filter_complex 문자열 생성 (stabilize → HDR → split → blur → overlay)."""
     fg_height = target_height
     fg_width = int(source_width * (fg_height / source_height))
 
-    # 입력: (HDR 변환) → split
-    # HDR을 split 전에 적용하여 이후 처리가 BT.709에서 수행되도록 함
-    split_input = ",".join(filter(None, [hdr_filter, "split=2[bg][fg]"]))
+    # 입력: (안정화) → (HDR 변환) → split
+    # 안정화를 가장 먼저 적용하여 이후 처리가 안정된 프레임 위에서 수행되도록 함
+    split_input = ",".join(filter(None, [stabilize_filter, hdr_filter, "split=2[bg][fg]"]))
 
     # 배경: 스케일 → crop → blur
     bg_chain = (
@@ -189,15 +310,16 @@ def _build_landscape_video_filter(
     target_height: int,
     hdr_filter: str,
     fade_filters: str,
+    stabilize_filter: str = "",
 ) -> str:
-    """가로 영상용 -vf 필터 문자열 생성 (scale → pad → fade)."""
+    """가로 영상용 -vf 필터 문자열 생성 (stabilize → HDR → scale → pad → fade)."""
     scale_pad = (
         f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
         f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2"
     )
 
-    # HDR 변환을 먼저 적용하여 이후 처리가 BT.709에서 수행되도록 함
-    parts = [p for p in [hdr_filter, scale_pad, fade_filters] if p]
+    # 안정화 → HDR 변환을 먼저 적용하여 이후 처리가 안정된 BT.709에서 수행되도록 함
+    parts = [p for p in [stabilize_filter, hdr_filter, scale_pad, fade_filters] if p]
     return f"[0:v]{','.join(parts)}[v_out]"
 
 
@@ -211,6 +333,9 @@ def create_combined_filter(
     fade_duration: float = 0.5,
     blur_radius: int = 20,
     color_transfer: str | None = None,
+    stabilize_filter: str = "",
+    denoise: bool = False,
+    denoise_level: str = "medium",
 ) -> tuple[str, str]:
     """
     모든 효과를 결합한 필터 생성.
@@ -225,6 +350,9 @@ def create_combined_filter(
         fade_duration: 페이드 지속 시간 (기본: 0.5초)
         blur_radius: 배경 블러 반경 (기본: 20)
         color_transfer: 소스 영상의 color_transfer (HDR 변환 판단용)
+        stabilize_filter: vidstabtransform 필터 문자열 (빈 문자열이면 미적용)
+        denoise: 오디오 노이즈 제거 활성화 여부
+        denoise_level: 노이즈 제거 강도 (light/medium/heavy)
 
     Returns:
         (video_filter, audio_filter) 튜플
@@ -247,6 +375,7 @@ def create_combined_filter(
             blur_radius,
             hdr_filter,
             fade_filters,
+            stabilize_filter,
         )
     else:
         video_filter = _build_landscape_video_filter(
@@ -254,7 +383,13 @@ def create_combined_filter(
             target_height,
             hdr_filter,
             fade_filters,
+            stabilize_filter,
         )
 
-    audio_filter = create_dip_to_black_audio_filter(total_duration, fade_duration)
+    audio_filter = create_audio_filter_chain(
+        total_duration=total_duration,
+        fade_duration=fade_duration,
+        denoise=denoise,
+        denoise_level=denoise_level,
+    )
     return video_filter, audio_filter
