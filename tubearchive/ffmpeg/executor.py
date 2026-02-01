@@ -36,6 +36,17 @@ class FFmpegError(Exception):
         super().__init__(message)
         self.stderr = stderr
 
+    def __str__(self) -> str:
+        """에러 메시지와 stderr 마지막 줄들을 함께 표시."""
+        base = super().__str__()
+        if not self.stderr:
+            return base
+        # stderr 마지막 20줄만 표시 (전체는 너무 길 수 있음)
+        lines = self.stderr.strip().splitlines()
+        tail = lines[-20:] if len(lines) > 20 else lines
+        stderr_snippet = "\n".join(tail)
+        return f"{base}\n--- FFmpeg stderr (last {len(tail)} lines) ---\n{stderr_snippet}"
+
 
 def parse_progress_line(line: str) -> dict[str, float] | None:
     """FFmpeg stderr 진행률 라인에서 처리 상태를 추출한다.
@@ -141,11 +152,14 @@ class FFmpegExecutor:
         # 입력 파일
         cmd.extend(["-i", str(input_path)])
 
-        # 필터
+        # 필터 및 스트림 매핑
         if filter_complex:
             cmd.extend(["-filter_complex", filter_complex])
-            cmd.extend(["-map", "[v_out]", "-map", "0:a"])
+            cmd.extend(["-map", "[v_out]", "-map", "0:a:0"])
         elif video_filter:
+            # 명시적 매핑: 첫 번째 비디오/오디오 스트림만 선택
+            # (iPhone 등 mebx data 스트림이 포함된 파일에서 디코더 오류 방지)
+            cmd.extend(["-map", "0:v:0", "-map", "0:a:0"])
             cmd.extend(["-vf", video_filter])
 
         if audio_filter:

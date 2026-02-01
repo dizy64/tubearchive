@@ -385,7 +385,8 @@ class Transcoder:
             return output_path, video_id, silence_segments
 
         except FFmpegError as e:
-            if "videotoolbox" not in str(e.stderr or "").lower():
+            # 하드웨어 인코더(VideoToolbox) 사용 중이 아니면 폴백 불가
+            if "videotoolbox" not in profile.video_codec.lower():
                 self.job_repo.mark_failed(job_id, str(e))
                 raise
 
