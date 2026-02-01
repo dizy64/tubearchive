@@ -114,6 +114,75 @@ class TestYouTubeAuth:
             assert "client_secrets.json" in str(exc_info.value)
 
 
+class TestSanitizeDescription:
+    """YouTube description 정제 테스트."""
+
+    def test_short_description_unchanged(self) -> None:
+        """5000자 이하의 정상 description은 그대로 반환."""
+        from tubearchive.youtube.uploader import sanitize_description
+
+        desc = "00:00 clip1\n01:30 clip2"
+        assert sanitize_description(desc) == desc
+
+    def test_empty_description(self) -> None:
+        """빈 description."""
+        from tubearchive.youtube.uploader import sanitize_description
+
+        assert sanitize_description("") == ""
+
+    def test_removes_angle_brackets(self) -> None:
+        """<> 문자 제거."""
+        from tubearchive.youtube.uploader import sanitize_description
+
+        desc = "test <script>alert(1)</script> end"
+        result = sanitize_description(desc)
+        assert "<" not in result
+        assert ">" not in result
+        assert "test script" in result
+
+    def test_truncates_long_description(self) -> None:
+        """5000자 초과 시 잘림."""
+        from tubearchive.youtube.uploader import (
+            YOUTUBE_MAX_DESCRIPTION_LENGTH,
+            sanitize_description,
+        )
+
+        # 5000자 초과하는 description 생성 (줄 단위)
+        lines = [f"00:{i:02d} clip_{i}" for i in range(500)]
+        desc = "\n".join(lines)
+        assert len(desc) > YOUTUBE_MAX_DESCRIPTION_LENGTH
+
+        result = sanitize_description(desc)
+        assert len(result) <= YOUTUBE_MAX_DESCRIPTION_LENGTH
+        assert result.endswith("...")
+
+    def test_truncates_at_line_boundary(self) -> None:
+        """잘림이 줄 경계에서 발생."""
+        from tubearchive.youtube.uploader import sanitize_description
+
+        # 정확히 줄 경계에서 잘리는지 확인
+        lines = [f"00:{i:02d} clip_{i}" for i in range(500)]
+        desc = "\n".join(lines)
+
+        result = sanitize_description(desc)
+        # 마지막 줄 앞의 내용은 완전한 줄이어야 함
+        body = result.removesuffix("\n\n...")
+        # 잘린 줄이 없어야 함 (모든 줄이 "00:" 으로 시작)
+        for line in body.split("\n"):
+            if line:
+                assert line.startswith("00:"), f"Incomplete line found: {line!r}"
+
+    def test_exact_5000_chars_unchanged(self) -> None:
+        """정확히 5000자이면 잘리지 않음."""
+        from tubearchive.youtube.uploader import (
+            YOUTUBE_MAX_DESCRIPTION_LENGTH,
+            sanitize_description,
+        )
+
+        desc = "a" * YOUTUBE_MAX_DESCRIPTION_LENGTH
+        assert sanitize_description(desc) == desc
+
+
 class TestUploadResult:
     """UploadResult 데이터 클래스 테스트."""
 

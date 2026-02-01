@@ -6,6 +6,7 @@
 
 import logging
 import os
+import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -43,6 +44,47 @@ YOUTUBE_CATEGORY_PEOPLE_BLOGS = "22"
 
 # 업로드 제한 경고 임계치 (최대치의 90% 도달 시 경고)
 UPLOAD_LIMIT_WARNING_RATIO = 0.9
+
+# YouTube description 제한
+YOUTUBE_MAX_DESCRIPTION_LENGTH = 5000
+# YouTube description에서 허용되지 않는 문자 패턴
+_INVALID_DESCRIPTION_CHARS = re.compile(r"[<>]")
+
+
+def sanitize_description(description: str) -> str:
+    """YouTube description을 API 제한에 맞게 정제한다.
+
+    - ``<`` / ``>`` 등 허용되지 않는 문자를 제거한다.
+    - 5000자 초과 시 마지막 완전한 줄까지만 유지하고 말줄임 표시를 추가한다.
+
+    Args:
+        description: 원본 설명 문자열.
+
+    Returns:
+        정제된 설명 문자열.
+    """
+    # 허용되지 않는 문자 제거
+    cleaned = _INVALID_DESCRIPTION_CHARS.sub("", description)
+
+    if len(cleaned) <= YOUTUBE_MAX_DESCRIPTION_LENGTH:
+        return cleaned
+
+    # 말줄임 표시를 위한 여유 확보
+    truncation_marker = "\n\n..."
+    budget = YOUTUBE_MAX_DESCRIPTION_LENGTH - len(truncation_marker)
+
+    # 마지막 완전한 줄 경계에서 자르기
+    truncated = cleaned[:budget]
+    last_newline = truncated.rfind("\n")
+    if last_newline > 0:
+        truncated = truncated[:last_newline]
+
+    logger.warning(
+        "YouTube description truncated: %d -> %d chars",
+        len(cleaned),
+        len(truncated) + len(truncation_marker),
+    )
+    return truncated + truncation_marker
 
 
 def get_chunk_size(chunk_mb: int | None = None) -> int:
@@ -307,6 +349,9 @@ class YouTubeUploader:
         logger.info(f"Uploading {file_path} to YouTube...")
         logger.info(f"  Title: {title}")
         logger.info(f"  Privacy: {privacy}")
+
+        # description 정제 (길이 제한 + 금지 문자 제거)
+        description = sanitize_description(description)
 
         # 메타데이터 설정
         body = {
