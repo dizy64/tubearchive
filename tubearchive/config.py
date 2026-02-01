@@ -324,7 +324,7 @@ def generate_default_config() -> str:
 # db_path = "~/.tubearchive/tubearchive.db" # TUBEARCHIVE_DB_PATH
 # denoise = false                           # TUBEARCHIVE_DENOISE
 # denoise_level = "medium"                  # light/medium/heavy (TUBEARCHIVE_DENOISE_LEVEL)
-# normalize_audio = false                   # EBU R128 loudnorm (TUBEARCHIVE_NORMALIZE_AUDIO)
+# normalize_audio = true                    # EBU R128 loudnorm (TUBEARCHIVE_NORMALIZE_AUDIO)
 # group_sequences = true                    # 연속 파일 시퀀스 그룹핑 (TUBEARCHIVE_GROUP_SEQUENCES)
 # fade_duration = 0.5                       # 기본 페이드 시간 (초, TUBEARCHIVE_FADE_DURATION)
 # trim_silence = false                      # 무음 구간 제거 (TUBEARCHIVE_TRIM_SILENCE)
@@ -437,7 +437,7 @@ def get_default_denoise_level() -> str | None:
 
 def get_default_normalize_audio() -> bool:
     """환경변수 ``TUBEARCHIVE_NORMALIZE_AUDIO`` 에서 라우드니스 정규화 여부를 가져온다."""
-    return _get_env_bool(ENV_NORMALIZE_AUDIO)
+    return _get_env_bool(ENV_NORMALIZE_AUDIO, default=True)
 
 
 def get_default_group_sequences() -> bool:

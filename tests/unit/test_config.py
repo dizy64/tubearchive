@@ -637,6 +637,31 @@ normalize_audio = "yes"
             else:
                 os.environ.pop("TUBEARCHIVE_NORMALIZE_AUDIO", None)
 
+    def test_normalize_audio_default_true(self) -> None:
+        """환경변수 미설정 시 기본값 True."""
+        from tubearchive.config import get_default_normalize_audio
+
+        saved = os.environ.pop("TUBEARCHIVE_NORMALIZE_AUDIO", None)
+        try:
+            assert get_default_normalize_audio() is True
+        finally:
+            if saved is not None:
+                os.environ["TUBEARCHIVE_NORMALIZE_AUDIO"] = saved
+
+    def test_normalize_audio_env_override_false(self) -> None:
+        """환경변수로 기본값 비활성화 가능."""
+        from tubearchive.config import get_default_normalize_audio
+
+        saved = os.environ.get("TUBEARCHIVE_NORMALIZE_AUDIO")
+        try:
+            os.environ["TUBEARCHIVE_NORMALIZE_AUDIO"] = "false"
+            assert get_default_normalize_audio() is False
+        finally:
+            if saved is not None:
+                os.environ["TUBEARCHIVE_NORMALIZE_AUDIO"] = saved
+            else:
+                os.environ.pop("TUBEARCHIVE_NORMALIZE_AUDIO", None)
+
     def test_normalize_audio_false_env_injection(self) -> None:
         """normalize_audio=False → "false" 주입."""
         config = AppConfig(

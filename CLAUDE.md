@@ -73,7 +73,7 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 # db_path = "~/.tubearchive/tubearchive.db" # TUBEARCHIVE_DB_PATH
 # denoise = false                           # TUBEARCHIVE_DENOISE
 # denoise_level = "medium"                  # light/medium/heavy (TUBEARCHIVE_DENOISE_LEVEL)
-# normalize_audio = false                   # EBU R128 loudnorm (TUBEARCHIVE_NORMALIZE_AUDIO)
+# normalize_audio = true                    # EBU R128 loudnorm (TUBEARCHIVE_NORMALIZE_AUDIO)
 # group_sequences = true                    # 연속 파일 시퀀스 그룹핑 (TUBEARCHIVE_GROUP_SEQUENCES)
 # fade_duration = 0.5                       # 기본 페이드 시간 (초, TUBEARCHIVE_FADE_DURATION)
 
@@ -187,7 +187,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 | `TUBEARCHIVE_DB_PATH` | DB 경로 | `~/.tubearchive/tubearchive.db` |
 | `TUBEARCHIVE_DENOISE` | 오디오 노이즈 제거 (true/false) | false |
 | `TUBEARCHIVE_DENOISE_LEVEL` | 노이즈 제거 강도 (light/medium/heavy) | medium |
-| `TUBEARCHIVE_NORMALIZE_AUDIO` | EBU R128 loudnorm (true/false) | false |
+| `TUBEARCHIVE_NORMALIZE_AUDIO` | EBU R128 loudnorm (true/false) | true |
 | `TUBEARCHIVE_GROUP_SEQUENCES` | 연속 파일 시퀀스 그룹핑 (true/false) | true |
 | `TUBEARCHIVE_FADE_DURATION` | 기본 페이드 시간(초) | 0.5 |
 | `TUBEARCHIVE_TRIM_SILENCE` | 무음 구간 제거 (true/false) | false |
