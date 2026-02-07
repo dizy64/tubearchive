@@ -59,6 +59,7 @@ uv run tubearchive --timelapse 5x --timelapse-resolution 1080p ~/Videos/  # 해�
 # LUT 컬러 그레이딩
 uv run tubearchive --lut ~/LUTs/nikon_rec709.cube ~/Videos/       # LUT 직접 지정
 uv run tubearchive --auto-lut ~/Videos/                           # 기기별 자동 LUT 매칭
+uv run tubearchive --no-auto-lut ~/Videos/                        # 자동 LUT 매칭 비활성화
 uv run tubearchive --lut ~/LUTs/nlog.cube --lut-before-hdr ~/Videos/  # HDR 변환 전 적용
 
 # 썸네일
@@ -134,8 +135,8 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 [color_grading]
 # auto_lut = true                           # 기기별 자동 LUT 매칭 (TUBEARCHIVE_AUTO_LUT)
 
-[color_grading.device_luts]
-# nikon = "~/LUTs/nikon_nlog_to_rec709.cube"
+[color_grading.device_luts]                 # 키워드=LUT경로 (부분 문자열 매칭, 대소문자 무시)
+# nikon = "~/LUTs/nikon_nlog_to_rec709.cube"  # "NIKON Z6III" → 매칭
 # gopro = "~/LUTs/gopro_flat_to_rec709.cube"
 # iphone = "~/LUTs/apple_log_to_rec709.cube"
 
@@ -172,7 +173,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 **cli.py**: CLI 인터페이스 및 파이프라인 오케스트레이터
 - `run_pipeline()`: 메인 파이프라인 (스캔→그룹핑→트랜스코딩→병합→저장→[분할])
 - `ValidatedArgs`: 검증된 CLI 인자 데이터클래스
-- `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, normalize_audio, stabilize, fade_map 등)
+- `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, normalize_audio, stabilize, fade_map, lut_path, auto_lut, lut_before_hdr, device_luts 등)
 - `TranscodeResult`: 단일 트랜스코딩 결과 (frozen dataclass)
 - `ClipInfo`: NamedTuple (name, duration, device, shot_time) — 클립 메타데이터
 - `_link_merge_job_to_project()`: 병합 결과를 프로젝트에 연결 (없으면 자동 생성, 날짜 범위 갱신)
@@ -248,6 +249,8 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - LUT 컬러 그레이딩: `create_lut_filter()` — .cube/.3dl 파일 → `lut3d=file=<경로>` 필터
   - `LUT_SUPPORTED_EXTENSIONS = {".cube", ".3dl"}`
   - 필터 체인 위치: 기본(after) HDR→scale→**LUT**→fade / before: stab→**LUT**→HDR→scale→fade
+  - LUT 우선순위: `--lut`(직접 지정) > `--auto-lut`(기기 매칭) > 없음
+  - `--lut` + `--auto-lut` 동시 지정 시 `--lut`이 항상 우선
 
 **ffmpeg/thumbnail.py**: 썸네일 추출
 - 병합 영상에서 지정 시점(기본: 10%, 33%, 50%) JPEG 썸네일 생성
