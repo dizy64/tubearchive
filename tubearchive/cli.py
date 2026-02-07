@@ -2963,6 +2963,10 @@ def main() -> None:
             cmd_status()
             return
 
+        # --period 단독 사용 경고
+        if args.period and not args.stats:
+            logger.warning("--period 옵션은 --stats와 함께 사용해야 합니다.")
+
         # --stats 옵션 처리 (통계 대시보드)
         if args.stats:
             from tubearchive.commands.stats import cmd_stats as _cmd_stats

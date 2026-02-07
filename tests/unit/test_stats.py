@@ -858,3 +858,34 @@ class TestEdgeCases:
         # 평균: (2.0 + 1.0) / 2 = 1.5
         assert data.transcoding.avg_encoding_speed is not None
         assert abs(data.transcoding.avg_encoding_speed - 1.5) < 0.1
+
+    def test_failed_job_excluded_from_encoding_speed(self, db_conn: sqlite3.Connection) -> None:
+        """실패한 작업은 인코딩 속도 평균에서 제외된다.
+
+        mark_failed()가 completed_at을 설정하므로, status 필터 없이는
+        실패 작업의 처리 시간이 평균 속도를 왜곡할 수 있다.
+        """
+        now = datetime.now()
+        # 성공 작업: 120s / 60s = 2x
+        vid1 = _insert_video(db_conn, path="/ok.mp4", duration=120.0)
+        _insert_transcoding_job(
+            db_conn,
+            vid1,
+            status="completed",
+            started_at=now.isoformat(),
+            completed_at=(now + timedelta(seconds=60)).isoformat(),
+        )
+        # 실패 작업: 120s / 600s = 0.2x (오래 걸린 후 실패)
+        vid2 = _insert_video(db_conn, path="/fail.mp4", duration=120.0)
+        _insert_transcoding_job(
+            db_conn,
+            vid2,
+            status="failed",
+            started_at=now.isoformat(),
+            completed_at=(now + timedelta(seconds=600)).isoformat(),
+        )
+        stats = TranscodingJobRepository(db_conn).get_stats()
+        speed = stats["avg_encoding_speed"]
+        assert speed is not None
+        # 실패 작업 제외 → 성공 작업만 평균: 2.0x
+        assert abs(speed - 2.0) < 0.1

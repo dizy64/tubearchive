@@ -381,9 +381,13 @@ class TranscodingJobRepository:
         ).fetchall()
         status_counts = {r["status"]: int(r["cnt"]) for r in status_rows}
 
+        # 성공한 작업만 대상으로 인코딩 속도를 집계한다.
+        # failed 작업도 completed_at이 설정되므로 제외하지 않으면
+        # 평균 속도가 왜곡될 수 있다.
         speed_where = (
             "WHERE tj.started_at IS NOT NULL"
             " AND tj.completed_at IS NOT NULL"
+            " AND tj.status IN ('completed', 'merged')"
             " AND v.duration_seconds > 0"
             " AND julianday(tj.completed_at)"
             " > julianday(tj.started_at)"
@@ -393,6 +397,10 @@ class TranscodingJobRepository:
             speed_where += " AND tj.created_at LIKE ?"
             speed_params.append(f"{period}%")
 
+        # 인코딩 속도 = 영상 길이(초) / 실제 처리 시간(초)
+        # julianday 차이(일) * 86400 = 초 변환
+        # MAX(…, 0.001) → 거의 즉시 완료된 경우 0 나누기 방지
+        # 결과: 2.5 = 재생 시간 대비 2.5배속으로 인코딩됨
         speed_row = self.conn.execute(
             f"""SELECT AVG(
                     v.duration_seconds /

@@ -156,8 +156,12 @@ def fetch_stats(conn: sqlite3.Connection, period: str | None = None) -> StatsDat
     merge_stats = MergeJobRepository(conn).get_stats(period)
     archive_stats = ArchiveHistoryRepository(conn).get_stats(period)
 
+    # Repository는 dict[str, object]를 반환하므로 mypy strict 모드에서
+    # 타입 안전을 위해 cast()로 실제 타입을 명시한다.
     status_counts = cast(dict[str, int], tc_stats["status_counts"])
 
+    # "merged"는 트랜스코딩 완료 후 병합까지 끝난 상태이므로
+    # 통계상 "completed"에 합산한다.
     tc_completed = status_counts.get("completed", 0) + status_counts.get("merged", 0)
     tc_failed = status_counts.get("failed", 0)
     tc_pending = status_counts.get("pending", 0)
@@ -225,7 +229,7 @@ def render_bar_chart(items: list[DeviceStat], max_width: int = BAR_MAX_WIDTH) ->
     lines: list[str] = []
     for item in items:
         bar_len = int(item.count / max_count * max_width) if max_count > 0 else 0
-        bar_len = max(bar_len, 1)
+        bar_len = max(bar_len, 1)  # 최소 1칸 — 0건이 아닌 항목이 보이지 않는 것 방지
         bar = BAR_CHAR * bar_len
         pct = item.count / total * 100
         label = item.device.ljust(label_width)
