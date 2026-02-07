@@ -44,6 +44,10 @@ uv run tubearchive --trim-silence --silence-threshold -35dB ~/Videos/  # 커스�
 uv run tubearchive --thumbnail ~/Videos/            # 기본 지점(10%, 33%, 50%) 썸네일
 uv run tubearchive --thumbnail --thumbnail-at 00:01:30 ~/Videos/  # 특정 시점
 
+# 영상 분할
+uv run tubearchive --split-duration 1h ~/Videos/    # 1시간 단위 분할 (segment muxer, 재인코딩 없음)
+uv run tubearchive --split-size 10G ~/Videos/       # 10GB 단위 분할
+
 # YouTube 업로드
 uv run tubearchive --setup-youtube                  # 인증 상태 확인
 uv run tubearchive --upload ~/Videos/               # 병합 후 업로드
@@ -96,13 +100,14 @@ scan_videos() → group_sequences() → reorder_with_groups()
   → Transcoder.transcode_video() (순차 또는 병렬)
   → Merger.merge()
   → save_merge_job_to_db() + save_summary()
+  → [VideoSplitter.split_video()] (--split-duration/--split-size)
   → [upload_to_youtube()]
 ```
 
 ### 핵심 컴포넌트
 
 **cli.py**: CLI 인터페이스 및 파이프라인 오케스트레이터
-- `run_pipeline()`: 메인 파이프라인 (스캔→그룹핑→트랜스코딩→병합→저장)
+- `run_pipeline()`: 메인 파이프라인 (스캔→그룹핑→트랜스코딩→병합→저장→[분할])
 - `ValidatedArgs`: 검증된 CLI 인자 데이터클래스
 - `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, normalize_audio, fade_map 등)
 - `TranscodeResult`: 단일 트랜스코딩 결과 (frozen dataclass)
@@ -115,6 +120,13 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `group_sequences()`: 파일 목록 → `FileSequenceGroup` 리스트
 - `compute_fade_map()`: 그룹 경계 기반 페이드 설정 맵 생성
 - 내부 모델: `_GoProEntry` (챕터 순서), `_DjiEntry` (타임스탬프+시퀀스)
+
+**core/splitter.py**: 영상 분할 엔진
+- `SplitOptions`: 분할 옵션 (duration 또는 size)
+- `VideoSplitter`: FFmpeg segment muxer를 사용한 영상 분할 (재인코딩 없음)
+- `parse_duration()`: 시간 문자열 파싱 (`1h`, `30m`, `1h30m15s` → 초)
+- `parse_size()`: 크기 문자열 파싱 (`10G`, `500M`, `1.5G` → 바이트)
+- `split_video()`: 실제 분할 실행 → 출력 파일 목록 반환
 
 **core/transcoder.py**: 트랜스코딩 엔진
 - `detect_metadata()` → 프로파일 선택 → FFmpeg 실행
@@ -162,8 +174,9 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `videos`: 원본 영상 메타데이터
 - `transcoding_jobs`: 작업 상태 (pending→processing→completed/failed)
 - `merge_jobs`: 병합 이력, YouTube 챕터 정보, `youtube_id` 저장
+- `split_jobs`: 영상 분할 이력 (merge_job FK, 분할 기준/값, 출력 파일 목록)
 - DB 위치: `~/.tubearchive/tubearchive.db` (또는 `TUBEARCHIVE_DB_PATH`)
-- Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`
+- Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `SplitJobRepository`
 - **DB 접근 규칙**: cli.py에서 직접 SQL을 실행하지 않고 반드시 Repository 메서드를 사용
 - DB 연결은 `database_session()` context manager로 자동 정리
 
