@@ -8,11 +8,12 @@ import pytest
 
 from tubearchive.database.repository import (
     MergeJobRepository,
+    SplitJobRepository,
     TranscodingJobRepository,
     VideoRepository,
 )
 from tubearchive.database.schema import init_database
-from tubearchive.models.job import JobStatus
+from tubearchive.models.job import JobStatus, SplitJob
 from tubearchive.models.video import VideoFile, VideoMetadata
 
 
@@ -31,6 +32,7 @@ class TestSchema:
         assert "videos" in tables
         assert "transcoding_jobs" in tables
         assert "merge_jobs" in tables
+        assert "split_jobs" in tables
 
         conn.close()
 
@@ -491,3 +493,195 @@ class TestMergeJobRepository:
         repo.update_youtube_id(job_id, "yt_abc123")
 
         assert repo.count_uploaded() == 1
+
+
+class TestSplitJobRepository:
+    """SplitJobRepository 테스트."""
+
+    @pytest.fixture
+    def db_conn(self, tmp_path: Path) -> sqlite3.Connection:
+        """테스트용 DB 연결."""
+        db_path = tmp_path / "test.db"
+        conn = init_database(db_path)
+        yield conn
+        conn.close()
+
+    @pytest.fixture
+    def merge_repo(self, db_conn: sqlite3.Connection) -> MergeJobRepository:
+        """MergeJobRepository 인스턴스."""
+        return MergeJobRepository(db_conn)
+
+    @pytest.fixture
+    def repo(self, db_conn: sqlite3.Connection) -> SplitJobRepository:
+        """SplitJobRepository 인스턴스."""
+        return SplitJobRepository(db_conn)
+
+    @pytest.fixture
+    def merge_job_id(self, merge_repo: MergeJobRepository, tmp_path: Path) -> int:
+        """테스트용 merge_job_id."""
+        return merge_repo.create(
+            output_path=tmp_path / "merged.mp4",
+            video_ids=[1, 2],
+            title="Test Merge",
+        )
+
+    def test_create_split_job(
+        self, repo: SplitJobRepository, merge_job_id: int, tmp_path: Path
+    ) -> None:
+        """분할 작업 생성."""
+        output_files = [tmp_path / "out_001.mp4", tmp_path / "out_002.mp4"]
+        job_id = repo.create(
+            merge_job_id=merge_job_id,
+            split_criterion="duration",
+            split_value="1h",
+            output_files=output_files,
+        )
+
+        assert job_id > 0
+
+    def test_get_by_id(self, repo: SplitJobRepository, merge_job_id: int, tmp_path: Path) -> None:
+        """ID로 분할 작업 조회."""
+        output_files = [tmp_path / "out_001.mp4", tmp_path / "out_002.mp4"]
+        job_id = repo.create(
+            merge_job_id=merge_job_id,
+            split_criterion="duration",
+            split_value="1h",
+            output_files=output_files,
+        )
+
+        job = repo.get_by_id(job_id)
+
+        assert job is not None
+        assert isinstance(job, SplitJob)
+        assert job.merge_job_id == merge_job_id
+        assert job.split_criterion == "duration"
+        assert job.split_value == "1h"
+        assert job.output_files == output_files
+        assert job.status == JobStatus.COMPLETED
+
+    def test_get_by_id_not_found(self, repo: SplitJobRepository) -> None:
+        """존재하지 않는 ID 조회 시 None."""
+        assert repo.get_by_id(999) is None
+
+    def test_get_by_merge_job_id(
+        self, repo: SplitJobRepository, merge_job_id: int, tmp_path: Path
+    ) -> None:
+        """merge_job_id로 분할 작업 조회."""
+        repo.create(
+            merge_job_id=merge_job_id,
+            split_criterion="duration",
+            split_value="1h",
+            output_files=[tmp_path / "a_001.mp4"],
+        )
+        repo.create(
+            merge_job_id=merge_job_id,
+            split_criterion="size",
+            split_value="10G",
+            output_files=[tmp_path / "b_001.mp4"],
+        )
+
+        jobs = repo.get_by_merge_job_id(merge_job_id)
+
+        assert len(jobs) == 2
+        assert jobs[0].split_criterion == "duration"
+        assert jobs[1].split_criterion == "size"
+
+    def test_get_by_merge_job_id_empty(self, repo: SplitJobRepository) -> None:
+        """존재하지 않는 merge_job_id 조회 시 빈 리스트."""
+        assert repo.get_by_merge_job_id(999) == []
+
+    def test_update_status(
+        self, repo: SplitJobRepository, merge_job_id: int, tmp_path: Path
+    ) -> None:
+        """상태 업데이트."""
+        job_id = repo.create(
+            merge_job_id=merge_job_id,
+            split_criterion="duration",
+            split_value="30m",
+            output_files=[tmp_path / "out_001.mp4"],
+        )
+
+        repo.update_status(job_id, JobStatus.FAILED)
+
+        job = repo.get_by_id(job_id)
+        assert job is not None
+        assert job.status == JobStatus.FAILED
+
+    def test_output_files_serialization(
+        self, repo: SplitJobRepository, merge_job_id: int, tmp_path: Path
+    ) -> None:
+        """output_files JSON 직렬화/역직렬화 검증."""
+        paths = [
+            tmp_path / "video_001.mp4",
+            tmp_path / "video_002.mp4",
+            tmp_path / "video_003.mp4",
+        ]
+        job_id = repo.create(
+            merge_job_id=merge_job_id,
+            split_criterion="size",
+            split_value="256M",
+            output_files=paths,
+        )
+
+        job = repo.get_by_id(job_id)
+        assert job is not None
+        assert len(job.output_files) == 3
+        assert all(isinstance(p, Path) for p in job.output_files)
+        assert job.output_files == paths
+
+    def test_split_criterion_duration(
+        self, repo: SplitJobRepository, merge_job_id: int, tmp_path: Path
+    ) -> None:
+        """duration 기준 분할 저장."""
+        job_id = repo.create(
+            merge_job_id=merge_job_id,
+            split_criterion="duration",
+            split_value="2h15m",
+            output_files=[tmp_path / "out.mp4"],
+        )
+
+        job = repo.get_by_id(job_id)
+        assert job is not None
+        assert job.split_criterion == "duration"
+        assert job.split_value == "2h15m"
+
+    def test_split_criterion_size(
+        self, repo: SplitJobRepository, merge_job_id: int, tmp_path: Path
+    ) -> None:
+        """size 기준 분할 저장."""
+        job_id = repo.create(
+            merge_job_id=merge_job_id,
+            split_criterion="size",
+            split_value="1.5G",
+            output_files=[tmp_path / "out.mp4"],
+        )
+
+        job = repo.get_by_id(job_id)
+        assert job is not None
+        assert job.split_criterion == "size"
+        assert job.split_value == "1.5G"
+
+    def test_foreign_key_constraint(
+        self, repo: SplitJobRepository, db_conn: sqlite3.Connection, tmp_path: Path
+    ) -> None:
+        """존재하지 않는 merge_job_id로 삽입 시 외래 키 제약."""
+        with pytest.raises(sqlite3.IntegrityError):
+            repo.create(
+                merge_job_id=99999,
+                split_criterion="duration",
+                split_value="1h",
+                output_files=[tmp_path / "out.mp4"],
+            )
+
+    def test_delete(self, repo: SplitJobRepository, merge_job_id: int, tmp_path: Path) -> None:
+        """분할 작업 삭제."""
+        job_id = repo.create(
+            merge_job_id=merge_job_id,
+            split_criterion="duration",
+            split_value="1h",
+            output_files=[tmp_path / "out.mp4"],
+        )
+
+        repo.delete(job_id)
+
+        assert repo.get_by_id(job_id) is None

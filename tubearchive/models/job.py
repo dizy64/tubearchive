@@ -6,6 +6,7 @@ SQLite에 저장되는 작업 상태·이력을 표현하는 데이터클래스 
     - :class:`JobStatus`: 작업 상태 열거형 (pending → processing → completed/failed → merged)
     - :class:`TranscodingJob`: 개별 영상의 트랜스코딩 작업 레코드
     - :class:`MergeJob`: 여러 트랜스코딩 결과를 병합한 최종 출력 레코드
+    - :class:`SplitJob`: 영상 분할 작업 레코드
 """
 
 from dataclasses import dataclass
@@ -104,3 +105,28 @@ class MergeJob:
     summary_markdown: str | None = None
 
     # video_ids 검증 제거 (기존 레코드 호환성)
+
+
+@dataclass
+class SplitJob:
+    """영상 분할 작업 레코드.
+
+    병합된 영상을 시간 또는 크기 기준으로 분할한 이력.
+
+    Attributes:
+        id: DB 기본키 (신규 생성 시 ``None``)
+        merge_job_id: ``merge_jobs`` 테이블의 외래키
+        split_criterion: 분할 기준 (``duration`` 또는 ``size``)
+        split_value: 분할 값 문자열 (예: ``1h``, ``10G``)
+        output_files: 분할된 출력 파일 경로 목록
+        status: 현재 작업 상태
+        created_at: 레코드 생성 시각
+    """
+
+    id: int | None
+    merge_job_id: int
+    split_criterion: str
+    split_value: str
+    output_files: list[Path]
+    status: JobStatus
+    created_at: datetime

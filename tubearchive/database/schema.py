@@ -1,11 +1,12 @@
 """SQLite 데이터베이스 스키마 및 초기화.
 
-테이블 3개로 구성된 스키마를 정의하고, DB 연결·초기화·마이그레이션을 담당한다.
+테이블 4개로 구성된 스키마를 정의하고, DB 연결·초기화·마이그레이션을 담당한다.
 
 테이블:
     - ``videos``: 원본 영상 파일 메타데이터 (경로, 생성 시간, 기기 모델 등)
     - ``transcoding_jobs``: 트랜스코딩 작업 상태 추적 (Resume 지원)
     - ``merge_jobs``: 병합 작업 이력 및 YouTube 업로드 상태
+    - ``split_jobs``: 영상 분할 작업 이력
 
 DB 위치:
     ``TUBEARCHIVE_DB_PATH`` 환경변수 > ``~/.tubearchive/tubearchive.db``
@@ -97,10 +98,25 @@ CREATE TABLE IF NOT EXISTS merge_jobs (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- split_jobs: 영상 분할 작업 이력
+CREATE TABLE IF NOT EXISTS split_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    merge_job_id INTEGER NOT NULL,
+    split_criterion TEXT NOT NULL
+        CHECK(split_criterion IN ('duration', 'size')),
+    split_value TEXT NOT NULL,
+    output_files TEXT NOT NULL,
+    status TEXT DEFAULT 'completed'
+        CHECK(status IN ('pending', 'processing', 'completed', 'failed')),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (merge_job_id) REFERENCES merge_jobs(id) ON DELETE CASCADE
+);
+
 -- 인덱스
 CREATE INDEX IF NOT EXISTS idx_transcoding_status ON transcoding_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_transcoding_video_id ON transcoding_jobs(video_id);
 CREATE INDEX IF NOT EXISTS idx_videos_path ON videos(original_path);
+CREATE INDEX IF NOT EXISTS idx_split_merge_job ON split_jobs(merge_job_id);
 """
 
 
