@@ -920,18 +920,18 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     bgm_loop = bgm_loop_arg or get_default_bgm_loop()
 
     # stabilize 설정 (CLI 인자 > 환경 변수 > 기본값)
-    stabilize_flag = bool(getattr(args, "stabilize", False))
+    # --stabilize-strength 또는 --stabilize-crop 지정 시 암묵적으로 활성화
     stabilize_strength_arg: str | None = getattr(args, "stabilize_strength", None)
     stabilize_crop_arg: str | None = getattr(args, "stabilize_crop", None)
     env_stabilize = get_default_stabilize()
     env_stabilize_strength = get_default_stabilize_strength()
     env_stabilize_crop = get_default_stabilize_crop()
-    # --stabilize-strength 또는 --stabilize-crop 지정 시 암묵적 활성화
-    if stabilize_strength_arg is not None or stabilize_crop_arg is not None:
-        stabilize_flag = True
-    # 환경변수에서 활성화된 경우
-    if env_stabilize:
-        stabilize_flag = True
+    stabilize_flag = (
+        bool(getattr(args, "stabilize", False))
+        or stabilize_strength_arg is not None
+        or stabilize_crop_arg is not None
+        or env_stabilize
+    )
     resolved_stabilize_strength = stabilize_strength_arg or env_stabilize_strength or "medium"
     resolved_stabilize_crop = stabilize_crop_arg or env_stabilize_crop or "crop"
 

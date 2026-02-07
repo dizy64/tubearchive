@@ -382,7 +382,10 @@ class Transcoder:
             except (FFmpegError, ValueError) as e:
                 logger.warning(f"Silence analysis failed, skipping trim: {e}")
 
-        # 5.7 vidstab 영상 안정화 분석 (활성화된 경우)
+        # 5.7 vidstab 영상 안정화 (2-pass)
+        # 1st pass: vidstabdetect로 손떨림 분석 → trf 파일에 모션 벡터 기록
+        # 2nd pass: vidstabtransform 필터가 trf를 읽어 트랜스코딩 중 보정 적용
+        # stabilize_filter=""이면 안정화 비활성 (create_combined_filter에서 무시)
         stabilize_filter = ""
         trf_path: Path | None = None
         if stabilize:
@@ -409,31 +412,27 @@ class Transcoder:
         profile = PROFILE_SDR
         logger.info(f"Using profile: {profile.name}")
 
-        try:
-            video_filter, audio_filter = create_combined_filter(
-                source_width=metadata.width,
-                source_height=metadata.height,
-                total_duration=metadata.duration_seconds,
-                is_portrait=metadata.is_portrait,
-                target_width=target_width,
-                target_height=target_height,
-                fade_duration=fade_duration,
-                fade_in_duration=fade_in_duration,
-                fade_out_duration=fade_out_duration,
-                color_transfer=metadata.color_transfer,
-                stabilize_filter=stabilize_filter,
-                denoise=denoise,
-                denoise_level=denoise_level,
-                silence_remove=silence_remove_filter,
-                loudnorm_analysis=loudnorm_analysis,
-            )
-        finally:
-            # trf 임시 파일 정리
-            if trf_path and trf_path.exists():
-                trf_path.unlink()
-                logger.debug("Cleaned up vidstab trf: %s", trf_path)
+        video_filter, audio_filter = create_combined_filter(
+            source_width=metadata.width,
+            source_height=metadata.height,
+            total_duration=metadata.duration_seconds,
+            is_portrait=metadata.is_portrait,
+            target_width=target_width,
+            target_height=target_height,
+            fade_duration=fade_duration,
+            fade_in_duration=fade_in_duration,
+            fade_out_duration=fade_out_duration,
+            color_transfer=metadata.color_transfer,
+            stabilize_filter=stabilize_filter,
+            denoise=denoise,
+            denoise_level=denoise_level,
+            silence_remove=silence_remove_filter,
+            loudnorm_analysis=loudnorm_analysis,
+        )
 
-        # 6. 실행: VideoToolbox → (실패 시) libx265 폴백
+        # 7. 실행: VideoToolbox → (실패 시) libx265 폴백
+        # Note: vidstab trf 파일은 vidstabtransform 필터가 트랜스코딩 중 참조하므로
+        # 트랜스코딩 완료(성공/실패 모두) 후 finally에서 정리한다.
         try:
             cmd = self._build_transcode_cmd(
                 video_file,
@@ -478,6 +477,12 @@ class Transcoder:
             except FFmpegError as fallback_error:
                 self.job_repo.mark_failed(job_id, str(fallback_error))
                 raise
+
+        finally:
+            # vidstab trf 임시 파일 정리 (트랜스코딩 성공/실패 후)
+            if trf_path and trf_path.exists():
+                trf_path.unlink()
+                logger.debug("Cleaned up vidstab trf: %s", trf_path)
 
     def close(self) -> None:
         """리소스 정리."""
