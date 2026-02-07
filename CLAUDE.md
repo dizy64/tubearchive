@@ -52,6 +52,8 @@ uv run tubearchive --split-size 10G ~/Videos/       # 10GB 단위 분할
 uv run tubearchive --setup-youtube                  # 인증 상태 확인
 uv run tubearchive --upload ~/Videos/               # 병합 후 업로드
 uv run tubearchive --upload-only video.mp4          # 파일만 업로드
+# 분할 + 업로드: --upload와 --split-duration/--split-size 조합 시
+# 분할 파일별 챕터 리매핑 + "(Part N/M)" 제목으로 순차 업로드
 
 # 작업 현황
 uv run tubearchive --status                         # 작업 현황 조회
@@ -112,6 +114,8 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, normalize_audio, fade_map 등)
 - `TranscodeResult`: 단일 트랜스코딩 결과 (frozen dataclass)
 - `ClipInfo`: NamedTuple (name, duration, device, shot_time) — 클립 메타데이터
+- `_upload_split_files()`: 분할 파일 순차 YouTube 업로드 (챕터 리매핑 + Part N/M 제목)
+- `_upload_after_pipeline()`: 업로드 라우터 — split_jobs DB에 분할 파일이 있으면 순차 업로드, 없으면 단일 업로드
 - `database_session()`: DB 연결 자동 정리 context manager
 - `truncate_path()`: 긴 경로 말줄임 유틸리티
 
@@ -127,6 +131,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `parse_duration()`: 시간 문자열 파싱 (`1h`, `30m`, `1h30m15s` → 초)
 - `parse_size()`: 크기 문자열 파싱 (`10G`, `500M`, `1.5G` → 바이트)
 - `split_video()`: 실제 분할 실행 → 출력 파일 목록 반환
+- `probe_duration()`: ffprobe로 분할 파일의 실제 길이(초) 조회 (키프레임 기준 분할이라 요청 시간과 다를 수 있음)
 
 **core/transcoder.py**: 트랜스코딩 엔진
 - `detect_metadata()` → 프로파일 선택 → FFmpeg 실행
@@ -169,6 +174,13 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `cmd_search()`: 날짜/기기/상태 필터 검색
 - `STATUS_ICONS`: 작업 상태 아이콘 매핑
 - `format_duration()`: 초→분:초 변환
+
+**utils/summary_generator.py**: Summary/챕터 생성
+- `generate_chapters()`: 클립 목록 → YouTube 챕터 타임스탬프
+- `generate_youtube_description()`: 병합 영상용 YouTube 설명
+- `remap_chapters_for_splits()`: 분할 파일별 챕터 리매핑 (경계 걸침 시 양쪽 포함)
+- `generate_split_youtube_description()`: 분할 파일 하나의 YouTube 설명 생성
+- `_aggregate_clips_for_chapters()`: 연속 시퀀스 그룹을 하나의 챕터로 병합
 
 **database/**: SQLite Resume 시스템 + Repository 패턴
 - `videos`: 원본 영상 메타데이터
