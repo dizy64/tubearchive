@@ -3,6 +3,8 @@
 import pytest
 
 from tubearchive.ffmpeg.effects import (
+    TIMELAPSE_MAX_SPEED,
+    TIMELAPSE_MIN_SPEED,
     LoudnormAnalysis,
     StabilizeCrop,
     StabilizeStrength,
@@ -18,6 +20,8 @@ from tubearchive.ffmpeg.effects import (
     create_portrait_layout_filter,
     create_silence_detect_filter,
     create_silence_remove_filter,
+    create_timelapse_audio_filter,
+    create_timelapse_video_filter,
     create_vidstab_detect_filter,
     create_vidstab_transform_filter,
     parse_loudnorm_stats,
@@ -898,3 +902,67 @@ class TestCreateAudioFilterChainWithSilenceRemove:
         denoise_idx = next(i for i, f in enumerate(filters) if "afftdn" in f)
         silence_idx = next(i for i, f in enumerate(filters) if "silenceremove" in f)
         assert denoise_idx < silence_idx
+
+
+class TestTimelapseVideoFilter:
+    """타임랩스 비디오 필터 테스트."""
+
+    def test_creates_setpts_filter(self) -> None:
+        """setpts 필터 생성 확인."""
+        filter_str = create_timelapse_video_filter(speed=10)
+        assert filter_str == "setpts=PTS/10"
+
+    def test_minimum_speed(self) -> None:
+        """최소 배속 (2x) 확인."""
+        filter_str = create_timelapse_video_filter(speed=TIMELAPSE_MIN_SPEED)
+        assert "setpts=PTS/2" in filter_str
+
+    def test_maximum_speed(self) -> None:
+        """최대 배속 (60x) 확인."""
+        filter_str = create_timelapse_video_filter(speed=TIMELAPSE_MAX_SPEED)
+        assert "setpts=PTS/60" in filter_str
+
+    def test_raises_on_invalid_speed_too_low(self) -> None:
+        """범위 미만 배속 시 에러."""
+        with pytest.raises(ValueError, match="must be between"):
+            create_timelapse_video_filter(speed=1)
+
+    def test_raises_on_invalid_speed_too_high(self) -> None:
+        """범위 초과 배속 시 에러."""
+        with pytest.raises(ValueError, match="must be between"):
+            create_timelapse_video_filter(speed=61)
+
+
+class TestTimelapseAudioFilter:
+    """타임랩스 오디오 필터 테스트."""
+
+    def test_simple_speed_within_atempo_limit(self) -> None:
+        """atempo 단일 필터로 처리 가능한 배속 (2x)."""
+        filter_str = create_timelapse_audio_filter(speed=2)
+        assert filter_str == "atempo=2.0"
+
+    def test_chain_for_high_speed(self) -> None:
+        """높은 배속은 atempo 체인 (10x = 2.0^3 * 1.25)."""
+        filter_str = create_timelapse_audio_filter(speed=10)
+        # 10 = 2.0 * 2.0 * 2.0 * 1.25 = 8 * 1.25
+        filters = filter_str.split(",")
+        assert len(filters) == 4
+        assert filters[0] == "atempo=2.0"
+        assert filters[1] == "atempo=2.0"
+        assert filters[2] == "atempo=2.0"
+        assert "atempo=1." in filters[3]  # 1.25
+
+    def test_maximum_speed_chain(self) -> None:
+        """최대 배속 (60x) 체인 확인."""
+        filter_str = create_timelapse_audio_filter(speed=60)
+        # 60 = 2.0^5 * 1.875 = 32 * 1.875
+        assert "atempo=2.0" in filter_str
+        assert filter_str.count("atempo=2.0") == 5  # 5번 체인
+
+    def test_raises_on_invalid_speed(self) -> None:
+        """잘못된 배속 시 에러."""
+        with pytest.raises(ValueError, match="must be between"):
+            create_timelapse_audio_filter(speed=1)
+
+        with pytest.raises(ValueError, match="must be between"):
+            create_timelapse_audio_filter(speed=61)

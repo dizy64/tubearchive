@@ -40,6 +40,11 @@ uv run tubearchive --detect-silence ~/Videos/                    # 무음 구간
 uv run tubearchive --trim-silence ~/Videos/                      # 시작/끝 무음 자동 제거
 uv run tubearchive --trim-silence --silence-threshold -35dB ~/Videos/  # 커스텀 설정
 
+# 타임랩스
+uv run tubearchive --timelapse 10x ~/Videos/                      # 10배속 타임랩스 생성
+uv run tubearchive --timelapse 30x --timelapse-audio ~/Videos/    # 오디오 유지 (atempo 가속)
+uv run tubearchive --timelapse 5x --timelapse-resolution 1080p ~/Videos/  # 해상도 변환
+
 # 썸네일
 uv run tubearchive --thumbnail ~/Videos/            # 기본 지점(10%, 33%, 50%) 썸네일
 uv run tubearchive --thumbnail --thumbnail-at 00:01:30 ~/Videos/  # 특정 시점
@@ -95,6 +100,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
   → TranscodeOptions 생성
   → Transcoder.transcode_video() (순차 또는 병렬)
   → Merger.merge()
+  → [TimelapseGenerator.generate()]
   → save_merge_job_to_db() + save_summary()
   → [upload_to_youtube()]
 ```
@@ -116,6 +122,14 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `compute_fade_map()`: 그룹 경계 기반 페이드 설정 맵 생성
 - 내부 모델: `_GoProEntry` (챕터 순서), `_DjiEntry` (타임스탬프+시퀀스)
 
+**core/timelapse.py**: 타임랩스 생성 엔진
+- `TimelapseGenerator`: 배속 조절 타임랩스 영상 생성 (2x ~ 60x)
+- `generate()`: setpts 기반 비디오 배속, atempo 체인 오디오 가속, 해상도 변환
+- `_parse_resolution()`: 프리셋(4k/1080p/720p) 또는 WIDTHxHEIGHT 형식 파싱
+- `RESOLUTION_PRESETS`: 해상도 프리셋 매핑
+- 비디오 코덱: libx264 (호환성 우선), CRF 23, yuv420p
+- 오디오: keep_audio=False면 제거(-an), True면 atempo 체인으로 가속 + AAC 128k
+
 **core/transcoder.py**: 트랜스코딩 엔진
 - `detect_metadata()` → 프로파일 선택 → FFmpeg 실행
 - VideoToolbox 실패 시 `_transcode_with_fallback()` (libx265)
@@ -132,6 +146,9 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - Loudnorm: EBU R128 타겟 상수 (`LOUDNORM_TARGET_I=-14.0`, `TP=-1.5`, `LRA=11.0`)
   - `create_loudnorm_analysis_filter()` (1st pass) → `parse_loudnorm_stats()` → `create_loudnorm_filter()` (2nd pass)
 - `create_audio_filter_chain()`: denoise → silence_remove → fade → loudnorm 오디오 필터 체인 통합
+- Timelapse: `setpts=PTS/{speed}` 비디오 배속, `atempo` 체인 오디오 가속 (0.5~2.0 범위 자동 분할)
+  - `create_timelapse_video_filter()`, `create_timelapse_audio_filter()`
+  - 상수: `TIMELAPSE_MIN_SPEED=2`, `TIMELAPSE_MAX_SPEED=60`, `ATEMPO_MAX=2.0`
 
 **ffmpeg/thumbnail.py**: 썸네일 추출
 - 병합 영상에서 지정 시점(기본: 10%, 33%, 50%) JPEG 썸네일 생성
