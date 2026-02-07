@@ -595,6 +595,31 @@ class SplitJobRepository:
         )
         self.conn.commit()
 
+    def append_youtube_id(self, job_id: int, youtube_id: str) -> None:
+        """분할 작업에 YouTube 영상 ID를 추가한다.
+
+        파트별 업로드 완료 시 호출하여 youtube_ids JSON 배열에 누적.
+
+        Args:
+            job_id: split_job ID
+            youtube_id: 업로드된 YouTube 영상 ID
+        """
+        row = self.conn.execute(
+            "SELECT youtube_ids FROM split_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        if row is None:
+            return
+        try:
+            ids = json.loads(row["youtube_ids"]) if row["youtube_ids"] else []
+        except (json.JSONDecodeError, TypeError):
+            ids = []
+        ids.append(youtube_id)
+        self.conn.execute(
+            "UPDATE split_jobs SET youtube_ids = ? WHERE id = ?",
+            (json.dumps(ids), job_id),
+        )
+        self.conn.commit()
+
     def delete(self, job_id: int) -> None:
         """분할 작업 삭제."""
         self.conn.execute("DELETE FROM split_jobs WHERE id = ?", (job_id,))
@@ -607,6 +632,10 @@ class SplitJobRepository:
         except (json.JSONDecodeError, TypeError):
             logger.warning(f"Failed to parse output_files for split_job {row['id']}")
             output_files = []
+        try:
+            youtube_ids = json.loads(row["youtube_ids"]) if row["youtube_ids"] else []
+        except (json.JSONDecodeError, TypeError):
+            youtube_ids = []
         return SplitJob(
             id=row["id"],
             merge_job_id=row["merge_job_id"],
@@ -615,4 +644,6 @@ class SplitJobRepository:
             output_files=output_files,
             status=JobStatus(row["status"]),
             created_at=datetime.fromisoformat(row["created_at"]),
+            youtube_ids=youtube_ids,
+            error_message=row["error_message"],
         )

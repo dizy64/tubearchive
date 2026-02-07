@@ -1383,10 +1383,6 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
                 if merge_job_id is not None:
                     try:
                         with database_session() as conn:
-                            from tubearchive.database.repository import (
-                                SplitJobRepository,
-                            )
-
                             split_repo = SplitJobRepository(conn)
                             split_repo.create(
                                 merge_job_id=merge_job_id,
@@ -1594,7 +1590,7 @@ def upload_to_youtube(
     merge_job_id: int | None = None,
     playlist_ids: list[str] | None = None,
     chunk_mb: int | None = None,
-) -> None:
+) -> str | None:
     """
     영상을 YouTube에 업로드.
 
@@ -1606,6 +1602,9 @@ def upload_to_youtube(
         merge_job_id: DB에 저장할 MergeJob ID
         playlist_ids: 추가할 플레이리스트 ID 리스트 (None이면 추가 안 함)
         chunk_mb: 업로드 청크 크기 MB (None이면 환경변수/기본값)
+
+    Returns:
+        업로드된 YouTube 영상 ID. 실패 시 None.
     """
     from tubearchive.youtube.auth import YouTubeAuthError, get_authenticated_service
     from tubearchive.youtube.playlist import PlaylistError, add_to_playlist
@@ -1634,10 +1633,10 @@ def upload_to_youtube(
             response = safe_input("\n계속 업로드하시겠습니까? (y/N): ").lower()
             if response not in ("y", "yes"):
                 print("업로드가 취소되었습니다.")
-                return
+                return None
         except KeyboardInterrupt:
             print("\n업로드가 취소되었습니다.")
-            return
+            return None
 
     # 제목 결정: 지정값 > 파일명(확장자 제외)
     # YYYYMMDD 형식을 'YYYY년 M월 D일'로 변환
@@ -1726,6 +1725,8 @@ def upload_to_youtube(
             except Exception as e:
                 logger.warning(f"Failed to save YouTube ID to DB: {e}")
 
+        return result.video_id
+
     except YouTubeAuthError as e:
         logger.error(f"YouTube authentication failed: {e}")
         print(f"\n❌ YouTube 인증 실패: {e}")
@@ -1735,6 +1736,7 @@ def upload_to_youtube(
         logger.error(f"YouTube upload failed: {e}")
         print(f"\n❌ YouTube 업로드 실패: {e}")
         raise
+    return None
 
 
 def cmd_setup_youtube() -> None:
@@ -2272,6 +2274,7 @@ def _upload_split_files(
     merge_job_id: int | None,
     playlist_ids: list[str] | None,
     chunk_mb: int | None,
+    split_job_id: int | None = None,
 ) -> None:
     """분할 파일을 순차적으로 YouTube에 업로드한다.
 
@@ -2286,6 +2289,7 @@ def _upload_split_files(
         merge_job_id: MergeJob DB ID
         playlist_ids: 플레이리스트 ID 목록
         chunk_mb: 업로드 청크 크기 MB
+        split_job_id: SplitJob DB ID (파트별 youtube_id 저장용)
     """
     from tubearchive.utils.summary_generator import (
         generate_split_youtube_description,
@@ -2329,15 +2333,24 @@ def _upload_split_files(
 
         print(f"\n📤 Part {i + 1}/{total} 업로드: {split_file.name}")
         try:
-            upload_to_youtube(
+            # merge_job_id=None: 분할 파트는 merge_job의 youtube_id를 덮어쓰지 않음
+            video_id = upload_to_youtube(
                 file_path=split_file,
                 title=part_title,
                 description=description,
                 privacy=privacy,
-                merge_job_id=merge_job_id,
+                merge_job_id=None,
                 playlist_ids=playlist_ids,
                 chunk_mb=chunk_mb,
             )
+            # 파트별 youtube_id를 split_job에 저장
+            if video_id and split_job_id is not None:
+                try:
+                    with database_session() as conn:
+                        split_repo = SplitJobRepository(conn)
+                        split_repo.append_youtube_id(split_job_id, video_id)
+                except Exception as e:
+                    logger.warning(f"Failed to save youtube_id for part {i + 1}: {e}")
         except Exception as e:
             logger.error(f"Part {i + 1}/{total} upload failed: {e}")
             print(f"  ⚠️  Part {i + 1} 업로드 실패: {e}")
@@ -2376,13 +2389,17 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
 
     # 분할 파일 확인
     split_files: list[Path] = []
+    split_job_id: int | None = None
     if merge_job_id is not None:
         try:
             with database_session() as conn:
                 split_repo = SplitJobRepository(conn)
                 split_jobs = split_repo.get_by_merge_job_id(merge_job_id)
                 for sj in split_jobs:
-                    split_files.extend(f for f in sj.output_files if f.exists())
+                    existing = [f for f in sj.output_files if f.exists()]
+                    if existing:
+                        split_files.extend(existing)
+                        split_job_id = sj.id
         except Exception as e:
             logger.warning(f"Failed to get split jobs: {e}")
 
@@ -2395,6 +2412,7 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
             merge_job_id=merge_job_id,
             playlist_ids=playlist_ids,
             chunk_mb=args.upload_chunk,
+            split_job_id=split_job_id,
         )
     else:
         upload_to_youtube(

@@ -469,8 +469,7 @@ class TestGenerateSplitYoutubeDescription:
 
         result = generate_split_youtube_description(clips, split_durations, part_index=1)
 
-        # 빈 파트이므로 타임스탬프 줄 없음
-        assert result == "" or "0:00" not in result.split("\n")[0]
+        assert result == ""
 
     def test_negative_part_index(self) -> None:
         """음수 part_index는 빈 문자열을 반환한다."""

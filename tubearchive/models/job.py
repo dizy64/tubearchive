@@ -9,10 +9,11 @@ SQLite에 저장되는 작업 상태·이력을 표현하는 데이터클래스 
     - :class:`SplitJob`: 영상 분할 작업 레코드
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 
 class JobStatus(Enum):
@@ -119,14 +120,18 @@ class SplitJob:
         split_criterion: 분할 기준 (``duration`` 또는 ``size``)
         split_value: 분할 값 문자열 (예: ``1h``, ``10G``)
         output_files: 분할된 출력 파일 경로 목록
+        youtube_ids: 파트별 YouTube 영상 ID 목록
         status: 현재 작업 상태
         created_at: 레코드 생성 시각
+        error_message: 실패 시 오류 메시지
     """
 
     id: int | None
     merge_job_id: int
-    split_criterion: str
+    split_criterion: Literal["duration", "size"]
     split_value: str
     output_files: list[Path]
     status: JobStatus
     created_at: datetime
+    youtube_ids: list[str] = field(default_factory=list)
+    error_message: str | None = None

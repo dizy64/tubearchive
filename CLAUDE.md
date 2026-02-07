@@ -132,6 +132,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `parse_size()`: 크기 문자열 파싱 (`10G`, `500M`, `1.5G` → 바이트)
 - `split_video()`: 실제 분할 실행 → 출력 파일 목록 반환
 - `probe_duration()`: ffprobe로 분할 파일의 실제 길이(초) 조회 (키프레임 기준 분할이라 요청 시간과 다를 수 있음)
+- `probe_bitrate()`: ffprobe로 영상 비트레이트(bps) 조회 (크기 기준 분할 시 segment_time 추정에 사용)
 
 **core/transcoder.py**: 트랜스코딩 엔진
 - `detect_metadata()` → 프로파일 선택 → FFmpeg 실행
@@ -186,7 +187,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `videos`: 원본 영상 메타데이터
 - `transcoding_jobs`: 작업 상태 (pending→processing→completed/failed)
 - `merge_jobs`: 병합 이력, YouTube 챕터 정보, `youtube_id` 저장
-- `split_jobs`: 영상 분할 이력 (merge_job FK, 분할 기준/값, 출력 파일 목록)
+- `split_jobs`: 영상 분할 이력 (merge_job FK, 분할 기준/값, 출력 파일 목록, `youtube_ids` JSON 배열, `error_message`)
 - DB 위치: `~/.tubearchive/tubearchive.db` (또는 `TUBEARCHIVE_DB_PATH`)
 - Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `SplitJobRepository`
 - **DB 접근 규칙**: cli.py에서 직접 SQL을 실행하지 않고 반드시 Repository 메서드를 사용
@@ -280,7 +281,7 @@ ffmpeg -i input.mov -filter_complex "..." -c:v hevc_videotoolbox -t 5 test.mp4
 ```
 
 ### DB 작업
-- **모든 DB 접근은 Repository 패턴** (`VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`)
+- **모든 DB 접근은 Repository 패턴** (`VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `SplitJobRepository`)
 - CLI에서 raw SQL 직접 실행 금지 — 새 쿼리가 필요하면 Repository에 메서드 추가
 - DB 연결은 `database_session()` context manager 사용 (자동 close 보장)
 - 상태 변경은 트랜잭션 사용

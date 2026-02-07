@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS split_jobs (
         CHECK(split_criterion IN ('duration', 'size')),
     split_value TEXT NOT NULL,
     output_files TEXT NOT NULL,
+    youtube_ids TEXT,
+    error_message TEXT,
     status TEXT DEFAULT 'completed'
         CHECK(status IN ('pending', 'processing', 'completed', 'failed')),
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -152,6 +154,19 @@ def _migrate_add_merged_status(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migrate_split_jobs_columns(conn: sqlite3.Connection) -> None:
+    """기존 split_jobs 테이블에 youtube_ids, error_message 컬럼 추가."""
+    cursor = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='split_jobs'")
+    row = cursor.fetchone()
+    if row is None:
+        return
+    schema_sql = row[0]
+    if "youtube_ids" not in schema_sql:
+        conn.execute("ALTER TABLE split_jobs ADD COLUMN youtube_ids TEXT")
+    if "error_message" not in schema_sql:
+        conn.execute("ALTER TABLE split_jobs ADD COLUMN error_message TEXT")
+
+
 def init_database(db_path: Path | None = None) -> sqlite3.Connection:
     """
     데이터베이스 초기화.
@@ -177,6 +192,7 @@ def init_database(db_path: Path | None = None) -> sqlite3.Connection:
 
     # 기존 DB 마이그레이션
     _migrate_add_merged_status(conn)
+    _migrate_split_jobs_columns(conn)
 
     conn.commit()
 

@@ -40,17 +40,59 @@ def probe_duration(file_path: Path) -> float:
             capture_output=True,
             text=True,
             check=True,
+            timeout=30,
         )
         data = json.loads(result.stdout)
         return float(data.get("format", {}).get("duration", 0))
     except (
         subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
         json.JSONDecodeError,
         ValueError,
         TypeError,
         AttributeError,
     ):
         return 0.0
+
+
+def probe_bitrate(file_path: Path) -> int:
+    """ffprobe로 영상 비트레이트(bps)를 조회한다.
+
+    크기 기준 분할 시 segment_time 추정에 사용된다.
+
+    Args:
+        file_path: 영상 파일 경로
+
+    Returns:
+        bps 단위 비트레이트. 실패 시 0.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(file_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        data = json.loads(result.stdout)
+        return int(data.get("format", {}).get("bit_rate", 0))
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+        AttributeError,
+    ):
+        return 0
 
 
 @dataclass
@@ -95,8 +137,12 @@ class VideoSplitter:
                 raise ValueError("Duration must be positive")
             return seconds
 
-        # 시간 단위 파싱: 1h, 30m, 1h30m, 2h15m30s 등 (음수 포함)
-        pattern = r"(?:(-?\d+)h)?(?:(-?\d+)m)?(?:(-?\d+)s)?"
+        # 전체 음수: 선두 '-' 감지
+        if duration_str.startswith("-"):
+            raise ValueError("Duration must be positive")
+
+        # 시간 단위 파싱: 1h, 30m, 1h30m, 2h15m30s 등
+        pattern = r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?"
         match = re.fullmatch(pattern, duration_str.lower())
 
         if not match:
@@ -111,10 +157,6 @@ class VideoSplitter:
             raise ValueError(f"Invalid duration format: {duration_str}")
 
         total_seconds = hours * 3600 + minutes * 60 + seconds
-
-        if total_seconds <= 0:
-            raise ValueError("Duration must be positive")
-
         return total_seconds
 
     def parse_size(self, size_str: str) -> int:
@@ -135,11 +177,12 @@ class VideoSplitter:
         # 단위 없는 숫자는 바이트로 해석
         try:
             size_bytes = int(size_str)
+        except ValueError:
+            pass  # 단위가 있는 경우로 계속 진행
+        else:
             if size_bytes <= 0:
                 raise ValueError("Size must be positive")
             return size_bytes
-        except ValueError:
-            pass  # 단위가 있는 경우로 계속 진행
 
         # 크기 단위 파싱: 10G, 256M, 1.5G 등 (음수 포함)
         pattern = r"^(-?[\d.]+)([KMGB]?)$"
@@ -174,40 +217,13 @@ class VideoSplitter:
 
         return size_bytes
 
-    def generate_split_filenames(self, base_path: Path, count: int) -> list[Path]:
-        """분할 파일명 목록 생성.
-
-        Args:
-            base_path: 원본 파일 경로 (예: /output/video.mp4)
-            count: 분할 파일 개수
-
-        Returns:
-            분할 파일 경로 목록 (예: [/output/video_001.mp4, /output/video_002.mp4, ...])
-
-        Raises:
-            ValueError: count가 2 미만인 경우
-        """
-        if count < 2:
-            raise ValueError("Count must be at least 2")
-
-        # 경로 분리
-        parent = base_path.parent
-        stem = base_path.stem
-        suffix = base_path.suffix
-
-        # 3자리 숫자 패딩 (001, 002, ...)
-        filenames = []
-        for i in range(1, count + 1):
-            filename = parent / f"{stem}_{i:03d}{suffix}"
-            filenames.append(filename)
-
-        return filenames
-
     def build_ffmpeg_command(
         self,
         input_path: Path,
         output_pattern: Path,
         options: SplitOptions,
+        *,
+        bitrate: int = 0,
     ) -> list[str]:
         """FFmpeg segment 명령어 생성.
 
@@ -215,12 +231,14 @@ class VideoSplitter:
             input_path: 입력 영상 경로
             output_pattern: 출력 파일 패턴 (예: /output/video_%03d.mp4)
             options: 분할 옵션
+            bitrate: 입력 영상의 비트레이트(bps). 크기 기준 분할 시 필수.
 
         Returns:
             FFmpeg 명령어 리스트
 
         Raises:
-            ValueError: 분할 기준이 하나도 설정되지 않은 경우
+            ValueError: 분할 기준이 하나도 설정되지 않은 경우,
+                또는 크기 기준인데 bitrate가 0인 경우
         """
         if options.duration is None and options.size is None:
             raise ValueError("At least one split criterion (duration or size) must be specified")
@@ -237,20 +255,20 @@ class VideoSplitter:
         if options.duration is not None:
             cmd.extend(["-segment_time", str(options.duration)])
         elif options.size is not None:
-            # 크기 기준 분할 (근사치, 정확하지 않음)
-            # segment muxer는 정확한 크기 제어가 어려우므로
-            # -fs (파일 크기 제한) 사용
-            cmd.extend(["-fs", str(options.size)])
+            # 크기 기준 분할: 비트레이트에서 segment_time 추정
+            # segment muxer는 시간 기준만 지원하므로
+            # segment_time = (target_bytes * 8) / bitrate_bps
+            if bitrate <= 0:
+                raise ValueError("bitrate is required for size-based splitting")
+            segment_time = (options.size * 8) // bitrate
+            cmd.extend(["-segment_time", str(segment_time)])
 
-        # 키프레임 기준 분할 (정확한 시점이 아닐 수 있음)
         cmd.extend(
             [
-                "-segment_list_type",
-                "flat",
                 "-reset_timestamps",
                 "1",
                 "-c",
-                "copy",  # 재인코딩 없이 stream copy
+                "copy",
                 str(output_pattern),
             ]
         )
@@ -289,8 +307,17 @@ class VideoSplitter:
         # 출력 파일 패턴 생성
         output_pattern = output_dir / f"{input_path.stem}_%03d{input_path.suffix}"
 
+        # 크기 기준 분할 시 비트레이트 조회
+        bitrate = 0
+        if options.size is not None:
+            bitrate = probe_bitrate(input_path)
+            if bitrate <= 0:
+                raise RuntimeError(
+                    f"Cannot determine bitrate for size-based splitting: {input_path}"
+                )
+
         # FFmpeg 명령어 생성
-        cmd = self.build_ffmpeg_command(input_path, output_pattern, options)
+        cmd = self.build_ffmpeg_command(input_path, output_pattern, options, bitrate=bitrate)
 
         # FFmpeg 실행
         logger.info(f"Splitting video: {input_path}")
@@ -301,6 +328,7 @@ class VideoSplitter:
             capture_output=True,
             text=True,
             check=False,
+            timeout=3600,
         )
 
         if result.returncode != 0:

@@ -8,7 +8,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.core.splitter import SplitOptions, VideoSplitter, probe_duration
+from tubearchive.core.splitter import (
+    SplitOptions,
+    VideoSplitter,
+    probe_bitrate,
+    probe_duration,
+)
 
 
 class TestSplitOptions:
@@ -93,6 +98,11 @@ class TestVideoSplitterParsing:
         with pytest.raises(ValueError, match="Duration must be positive"):
             self.splitter.parse_duration("-1h")
 
+    def test_parse_duration_negative_component(self) -> None:
+        """개별 컴포넌트 음수 불가 (예: 1h-30m)."""
+        with pytest.raises(ValueError, match="Invalid duration format"):
+            self.splitter.parse_duration("1h-30m")
+
     # --- 크기 파싱 테스트 ---
 
     def test_parse_size_gigabytes(self) -> None:
@@ -151,54 +161,6 @@ class TestVideoSplitterParsing:
             self.splitter.parse_size("0G")
 
 
-class TestVideoSplitterFilename:
-    """분할 파일명 생성 테스트."""
-
-    def setup_method(self) -> None:
-        """각 테스트 전 초기화."""
-        self.splitter = VideoSplitter()
-
-    def test_generate_split_filenames_simple(self) -> None:
-        """기본 파일명 생성."""
-        base_path = Path("/tmp/video.mp4")
-        filenames = self.splitter.generate_split_filenames(base_path, count=3)
-
-        assert len(filenames) == 3
-        assert filenames[0] == Path("/tmp/video_001.mp4")
-        assert filenames[1] == Path("/tmp/video_002.mp4")
-        assert filenames[2] == Path("/tmp/video_003.mp4")
-
-    def test_generate_split_filenames_large_count(self) -> None:
-        """많은 분할 파일."""
-        base_path = Path("/output/test.mp4")
-        filenames = self.splitter.generate_split_filenames(base_path, count=100)
-
-        assert len(filenames) == 100
-        assert filenames[0] == Path("/output/test_001.mp4")
-        assert filenames[9] == Path("/output/test_010.mp4")
-        assert filenames[99] == Path("/output/test_100.mp4")
-
-    def test_generate_split_filenames_different_extension(self) -> None:
-        """다양한 확장자."""
-        filenames = self.splitter.generate_split_filenames(Path("video.mov"), count=2)
-        assert filenames[0] == Path("video_001.mov")
-        assert filenames[1] == Path("video_002.mov")
-
-    def test_generate_split_filenames_no_extension(self) -> None:
-        """확장자 없는 경우."""
-        filenames = self.splitter.generate_split_filenames(Path("video"), count=2)
-        assert filenames[0] == Path("video_001")
-        assert filenames[1] == Path("video_002")
-
-    def test_generate_split_filenames_invalid_count(self) -> None:
-        """잘못된 개수."""
-        with pytest.raises(ValueError, match="Count must be at least 2"):
-            self.splitter.generate_split_filenames(Path("video.mp4"), count=1)
-
-        with pytest.raises(ValueError, match="Count must be at least 2"):
-            self.splitter.generate_split_filenames(Path("video.mp4"), count=0)
-
-
 class TestVideoSplitterCommand:
     """FFmpeg 명령어 생성 테스트."""
 
@@ -226,19 +188,37 @@ class TestVideoSplitterCommand:
         assert str(output_pattern) in cmd
 
     def test_build_ffmpeg_command_size(self) -> None:
-        """크기 기준 분할 명령어."""
+        """크기 기준 분할: 비트레이트에서 segment_time 추정."""
         input_path = Path("/input/video.mp4")
         output_pattern = Path("/output/video_%03d.mp4")
+        # 10GB, 50Mbps → segment_time = 10*1024^3*8 / 50_000_000 ≈ 1717초
         options = SplitOptions(size=10 * 1024**3)
+        bitrate = 50_000_000  # 50 Mbps
 
-        cmd = self.splitter.build_ffmpeg_command(input_path, output_pattern, options)
+        cmd = self.splitter.build_ffmpeg_command(
+            input_path, output_pattern, options, bitrate=bitrate
+        )
 
         assert "ffmpeg" in cmd
         assert "-f" in cmd
         assert "segment" in cmd
-        assert "-segment_list_size" in cmd or "-fs" in cmd  # 크기 제한 옵션
+        assert "-segment_time" in cmd
+        assert "-fs" not in cmd  # -fs 사용하지 않음
         assert "-c" in cmd
         assert "copy" in cmd
+        # segment_time 값 검증
+        idx = cmd.index("-segment_time")
+        segment_time = int(cmd[idx + 1])
+        expected = (10 * 1024**3 * 8) // 50_000_000
+        assert segment_time == expected
+
+    def test_build_ffmpeg_command_size_no_bitrate_raises(self) -> None:
+        """크기 기준 분할인데 bitrate가 0이면 에러."""
+        options = SplitOptions(size=10 * 1024**3)
+        with pytest.raises(ValueError, match=r"bitrate.*required"):
+            self.splitter.build_ffmpeg_command(
+                Path("input.mp4"), Path("out_%03d.mp4"), options, bitrate=0
+            )
 
     def test_build_ffmpeg_command_no_criteria(self) -> None:
         """분할 기준 없음 → 에러."""
@@ -375,3 +355,36 @@ class TestProbeDuration:
         """빈 stdout이면 0.0을 반환한다."""
         mock_run.return_value = MagicMock(stdout="")
         assert probe_duration(Path("/fake/video.mp4")) == 0.0
+
+
+class TestProbeBitrate:
+    """probe_bitrate 단위 테스트."""
+
+    @patch("tubearchive.core.splitter.subprocess.run")
+    def test_returns_bitrate_on_success(self, mock_run: MagicMock) -> None:
+        """ffprobe 성공 시 올바른 bit_rate를 반환한다."""
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps({"format": {"bit_rate": "50000000"}}),
+        )
+        result = probe_bitrate(Path("/fake/video.mp4"))
+        assert result == 50_000_000
+
+    @patch("tubearchive.core.splitter.subprocess.run")
+    def test_returns_zero_on_failure(self, mock_run: MagicMock) -> None:
+        """ffprobe 실패 시 0을 반환한다."""
+        mock_run.side_effect = subprocess.CalledProcessError(1, "ffprobe")
+        assert probe_bitrate(Path("/fake/video.mp4")) == 0
+
+    @patch("tubearchive.core.splitter.subprocess.run")
+    def test_returns_zero_on_missing_bitrate(self, mock_run: MagicMock) -> None:
+        """bit_rate 필드 누락 시 0을 반환한다."""
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps({"format": {"duration": "123"}}),
+        )
+        assert probe_bitrate(Path("/fake/video.mp4")) == 0
+
+    @patch("tubearchive.core.splitter.subprocess.run")
+    def test_returns_zero_on_invalid_json(self, mock_run: MagicMock) -> None:
+        """잘못된 JSON 시 0을 반환한다."""
+        mock_run.return_value = MagicMock(stdout="not json")
+        assert probe_bitrate(Path("/fake/video.mp4")) == 0
