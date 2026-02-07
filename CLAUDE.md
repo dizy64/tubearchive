@@ -35,6 +35,11 @@ uv run tubearchive --dry-run ~/Videos/
 uv run tubearchive --normalize-audio ~/Videos/      # EBU R128 loudnorm 2-pass
 uv run tubearchive --denoise ~/Videos/              # 오디오 노이즈 제거
 
+# BGM 믹싱
+uv run tubearchive --bgm ~/Music/bgm.mp3 ~/Videos/                        # BGM 믹싱
+uv run tubearchive --bgm ~/Music/bgm.mp3 --bgm-volume 0.3 ~/Videos/      # 볼륨 조절 (0.0~1.0)
+uv run tubearchive --bgm ~/Music/bgm.mp3 --bgm-loop ~/Videos/            # BGM 루프 재생
+
 # 무음 구간 감지 및 제거
 uv run tubearchive --detect-silence ~/Videos/                    # 무음 구간 감지만
 uv run tubearchive --trim-silence ~/Videos/                      # 시작/끝 무음 자동 제거
@@ -86,6 +91,11 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 # group_sequences = true                    # 연속 파일 시퀀스 그룹핑 (TUBEARCHIVE_GROUP_SEQUENCES)
 # fade_duration = 0.5                       # 기본 페이드 시간 (초, TUBEARCHIVE_FADE_DURATION)
 
+[bgm]
+# bgm_path = "~/Music/bgm.mp3"             # 기본 BGM 파일 경로 (TUBEARCHIVE_BGM_PATH)
+# bgm_volume = 0.2                          # 상대 볼륨 0.0~1.0 (TUBEARCHIVE_BGM_VOLUME)
+# bgm_loop = false                          # 루프 재생 여부 (TUBEARCHIVE_BGM_LOOP)
+
 [archive]
 # policy = "keep"                           # keep/move/delete (TUBEARCHIVE_ARCHIVE_POLICY)
 # destination = "~/Videos/archive"          # move 정책 시 이동 경로 (TUBEARCHIVE_ARCHIVE_DESTINATION)
@@ -108,6 +118,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
   → TranscodeOptions 생성
   → Transcoder.transcode_video() (순차 또는 병렬)
   → Merger.merge()
+  → [_apply_bgm_mixing()]  ← BGM 믹싱 (--bgm 옵션 시)
   → [TimelapseGenerator.generate()]
   → save_merge_job_to_db() + save_summary()
   → [_archive_originals()]
@@ -122,6 +133,9 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, normalize_audio, fade_map 등)
 - `TranscodeResult`: 단일 트랜스코딩 결과 (frozen dataclass)
 - `ClipInfo`: NamedTuple (name, duration, device, shot_time) — 클립 메타데이터
+- `_apply_bgm_mixing()`: 병합 영상에 BGM 믹싱 (ffprobe 길이 확인 → create_bgm_filter → ffmpeg)
+- `_get_media_duration()`: ffprobe로 미디어 길이 조회 헬퍼
+- `_has_audio_stream()`: ffprobe로 오디오 스트림 존재 확인 헬퍼
 - `database_session()`: DB 연결 자동 정리 context manager
 - `truncate_path()`: 긴 경로 말줄임 유틸리티
 
@@ -155,6 +169,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - Loudnorm: EBU R128 타겟 상수 (`LOUDNORM_TARGET_I=-14.0`, `TP=-1.5`, `LRA=11.0`)
   - `create_loudnorm_analysis_filter()` (1st pass) → `parse_loudnorm_stats()` → `create_loudnorm_filter()` (2nd pass)
 - `create_audio_filter_chain()`: denoise → silence_remove → fade → loudnorm 오디오 필터 체인 통합
+- BGM 믹싱: `create_bgm_filter()` — aloop(무한루프)+atrim / atrim+afade / volume → amix 필터 생성
 - Timelapse: `setpts=PTS/{speed}` 비디오 배속, `atempo` 체인 오디오 가속 (0.5~2.0 범위 자동 분할)
   - `create_timelapse_video_filter()`, `create_timelapse_audio_filter()`
   - 상수: `TIMELAPSE_MIN_SPEED=2`, `TIMELAPSE_MAX_SPEED=60`, `ATEMPO_MAX=2.0`
@@ -176,6 +191,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 
 **config.py**: TOML 설정 파일 관리
 - `GeneralConfig`: output_dir, parallel, db_path, denoise, denoise_level, normalize_audio, group_sequences, fade_duration
+- `BGMConfig`: bgm_path, bgm_volume, bgm_loop
 - `ArchiveConfig`: policy (keep/move/delete), destination
 - `YouTubeConfig`: client_secrets, token, playlist, upload_chunk_mb, upload_privacy
 - `load_config()`: `~/.tubearchive/config.toml` 파싱 (에러 시 빈 config)
@@ -227,6 +243,9 @@ scan_videos() → group_sequences() → reorder_with_groups()
 | `TUBEARCHIVE_TRIM_SILENCE` | 무음 구간 제거 (true/false) | false |
 | `TUBEARCHIVE_SILENCE_THRESHOLD` | 무음 기준 데시벨 | -30dB |
 | `TUBEARCHIVE_SILENCE_MIN_DURATION` | 최소 무음 길이(초) | 2.0 |
+| `TUBEARCHIVE_BGM_PATH` | 기본 BGM 파일 경로 | - |
+| `TUBEARCHIVE_BGM_VOLUME` | BGM 상대 볼륨 (0.0~1.0) | 0.2 |
+| `TUBEARCHIVE_BGM_LOOP` | BGM 루프 재생 (true/false) | false |
 | `TUBEARCHIVE_ARCHIVE_POLICY` | 아카이브 정책 (keep/move/delete) | keep |
 | `TUBEARCHIVE_ARCHIVE_DESTINATION` | move 정책 시 이동 경로 | - |
 | `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 시크릿 경로 | `~/.tubearchive/client_secrets.json` |

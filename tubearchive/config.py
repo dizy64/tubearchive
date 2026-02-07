@@ -38,6 +38,9 @@ ENV_FADE_DURATION = "TUBEARCHIVE_FADE_DURATION"
 ENV_TRIM_SILENCE = "TUBEARCHIVE_TRIM_SILENCE"
 ENV_SILENCE_THRESHOLD = "TUBEARCHIVE_SILENCE_THRESHOLD"
 ENV_SILENCE_MIN_DURATION = "TUBEARCHIVE_SILENCE_MIN_DURATION"
+ENV_BGM_PATH = "TUBEARCHIVE_BGM_PATH"
+ENV_BGM_VOLUME = "TUBEARCHIVE_BGM_VOLUME"
+ENV_BGM_LOOP = "TUBEARCHIVE_BGM_LOOP"
 ENV_ARCHIVE_POLICY = "TUBEARCHIVE_ARCHIVE_POLICY"
 ENV_ARCHIVE_DESTINATION = "TUBEARCHIVE_ARCHIVE_DESTINATION"
 
@@ -60,6 +63,21 @@ class GeneralConfig:
     trim_silence: bool | None = None
     silence_threshold: str | None = None
     silence_min_duration: float | None = None
+
+
+@dataclass(frozen=True)
+class BGMConfig:
+    """``config.toml`` 의 ``[bgm]`` 섹션.
+
+    배경음악 믹싱 설정을 관리한다.
+    """
+
+    bgm_path: str | None = None
+    """배경 음악 파일 경로."""
+    bgm_volume: float | None = None
+    """배경 음악 상대 볼륨 (0.0~1.0)."""
+    bgm_loop: bool | None = None
+    """BGM 루프 재생 여부."""
 
 
 @dataclass(frozen=True)
@@ -89,9 +107,10 @@ class ArchiveConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    """애플리케이션 전체 설정 (``[general]`` + ``[youtube]`` + ``[archive]`` 통합)."""
+    """애플리케이션 전체 설정 (``[general]`` + ``[bgm]`` + ``[youtube]`` + ``[archive]`` 통합)."""
 
     general: GeneralConfig = field(default_factory=GeneralConfig)
+    bgm: BGMConfig = field(default_factory=BGMConfig)
     youtube: YouTubeConfig = field(default_factory=YouTubeConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
 
@@ -188,6 +207,28 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
     )
 
 
+def _parse_bgm(data: dict[str, object]) -> BGMConfig:
+    """[bgm] 섹션 파싱. 타입 오류 시 해당 필드 무시."""
+    section = "bgm"
+
+    # bgm_volume: 범위 검증 (0.0~1.0)
+    bgm_volume: float | None = None
+    raw_volume = data.get("bgm_volume")
+    if isinstance(raw_volume, (int, float)) and not isinstance(raw_volume, bool):
+        if 0.0 <= raw_volume <= 1.0:
+            bgm_volume = float(raw_volume)
+        else:
+            logger.warning("config: bgm.bgm_volume 범위 초과: %r (0.0~1.0)", raw_volume)
+    elif raw_volume is not None:
+        _warn_type(f"{section}.bgm_volume", "float", raw_volume)
+
+    return BGMConfig(
+        bgm_path=_parse_str(data, "bgm_path", section),
+        bgm_volume=bgm_volume,
+        bgm_loop=_parse_bool(data, "bgm_loop", section),
+    )
+
+
 def _parse_youtube(data: dict[str, object]) -> YouTubeConfig:
     """[youtube] 섹션 파싱. 타입 오류 시 해당 필드 무시."""
     section = "youtube"
@@ -271,6 +312,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         return AppConfig()
 
     general_data = raw.get("general", {})
+    bgm_data = raw.get("bgm", {})
     youtube_data = raw.get("youtube", {})
     archive_data = raw.get("archive", {})
 
@@ -283,6 +325,16 @@ def load_config(path: Path | None = None) -> AppConfig:
                 type(general_data).__name__,
             )
         general = GeneralConfig()
+
+    if isinstance(bgm_data, dict):
+        bgm = _parse_bgm(bgm_data)
+    else:
+        if bgm_data:
+            logger.warning(
+                "config: [bgm] 섹션이 테이블이 아닙니다 (got %s)",
+                type(bgm_data).__name__,
+            )
+        bgm = BGMConfig()
 
     if isinstance(youtube_data, dict):
         youtube = _parse_youtube(youtube_data)
@@ -304,7 +356,7 @@ def load_config(path: Path | None = None) -> AppConfig:
             )
         archive = ArchiveConfig()
 
-    return AppConfig(general=general, youtube=youtube, archive=archive)
+    return AppConfig(general=general, bgm=bgm, youtube=youtube, archive=archive)
 
 
 def apply_config_to_env(config: AppConfig) -> None:
@@ -344,6 +396,14 @@ def apply_config_to_env(config: AppConfig) -> None:
     if config.general.silence_min_duration is not None:
         mappings.append((ENV_SILENCE_MIN_DURATION, str(config.general.silence_min_duration)))
 
+    # BGM 설정
+    if config.bgm.bgm_path is not None:
+        mappings.append((ENV_BGM_PATH, config.bgm.bgm_path))
+    if config.bgm.bgm_volume is not None:
+        mappings.append((ENV_BGM_VOLUME, str(config.bgm.bgm_volume)))
+    if config.bgm.bgm_loop is not None:
+        mappings.append((ENV_BGM_LOOP, str(config.bgm.bgm_loop).lower()))
+
     # playlist: list → CSV
     if config.youtube.playlist:
         mappings.append((ENV_YOUTUBE_PLAYLIST, ",".join(config.youtube.playlist)))
@@ -380,6 +440,11 @@ def generate_default_config() -> str:
 # trim_silence = false                      # 무음 구간 제거 (TUBEARCHIVE_TRIM_SILENCE)
 # silence_threshold = "-30dB"               # 무음 기준 데시벨 (TUBEARCHIVE_SILENCE_THRESHOLD)
 # silence_min_duration = 2.0                # 최소 무음 길이(초, TUBEARCHIVE_SILENCE_MIN_DURATION)
+
+[bgm]
+# bgm_path = "~/Music/bgm.mp3"              # 배경음악 파일 경로 (TUBEARCHIVE_BGM_PATH)
+# bgm_volume = 0.2                          # 배경음악 볼륨 0.0~1.0 (TUBEARCHIVE_BGM_VOLUME)
+# bgm_loop = false                          # BGM 루프 재생 (TUBEARCHIVE_BGM_LOOP)
 
 [youtube]
 # client_secrets = "~/.tubearchive/client_secrets.json"
@@ -549,3 +614,49 @@ def get_default_archive_destination() -> Path | None:
         path = Path(env_dest).expanduser()
         return path
     return None
+
+
+def get_default_bgm_path() -> Path | None:
+    """환경변수에서 기본 BGM 파일 경로를 가져온다.
+
+    ``TUBEARCHIVE_BGM_PATH`` 환경변수가 유효한 파일을 가리킬 때만
+    ``Path`` 를 반환하고, 그 외에는 ``None`` 을 반환한다.
+
+    Returns:
+        유효한 파일 경로 또는 None.
+    """
+    env_path = os.environ.get(ENV_BGM_PATH)
+    if env_path:
+        path = Path(env_path).expanduser()
+        if path.is_file():
+            return path
+        logger.warning("%s=%s is not a valid file", ENV_BGM_PATH, env_path)
+    return None
+
+
+def get_default_bgm_volume() -> float | None:
+    """환경변수에서 기본 BGM 볼륨을 가져온다.
+
+    ``TUBEARCHIVE_BGM_VOLUME`` 환경변수에서 실수를 읽어 반환한다.
+    범위는 0.0~1.0이며, 범위 밖이면 None을 반환한다.
+
+    Returns:
+        BGM 볼륨 (0.0~1.0) 또는 None.
+    """
+    env_val = os.environ.get(ENV_BGM_VOLUME)
+    if not env_val:
+        return None
+    try:
+        val = float(env_val)
+    except ValueError:
+        logger.warning("%s=%s is not a valid number", ENV_BGM_VOLUME, env_val)
+        return None
+    if not (0.0 <= val <= 1.0):
+        logger.warning("%s=%s must be in range [0.0, 1.0]", ENV_BGM_VOLUME, env_val)
+        return None
+    return val
+
+
+def get_default_bgm_loop() -> bool:
+    """환경변수 ``TUBEARCHIVE_BGM_LOOP`` 에서 BGM 루프 재생 여부를 가져온다."""
+    return _get_env_bool(ENV_BGM_LOOP)
