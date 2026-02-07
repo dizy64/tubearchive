@@ -69,6 +69,13 @@ uv run tubearchive --upload-only video.mp4          # 파일만 업로드
 uv run tubearchive --archive-originals ~/Videos/archive ~/Videos/  # 원본 파일을 지정 경로로 이동
 uv run tubearchive --archive-force ~/Videos/                       # delete 정책 시 확인 프롬프트 우회
 
+# 프로젝트 관리
+uv run tubearchive --project "제주도 여행" ~/Videos/     # 병합 결과를 프로젝트에 연결 (자동 생성)
+uv run tubearchive --project-list                        # 프로젝트 목록 조회
+uv run tubearchive --project-list --json                 # JSON 형식 출력
+uv run tubearchive --project-detail 1                    # 프로젝트 상세 조회 (ID: 1)
+uv run tubearchive --project-detail 1 --json             # JSON 형식 출력
+
 # 작업 현황
 uv run tubearchive --status                         # 작업 현황 조회
 uv run tubearchive --status-detail 1                # 특정 작업 상세 조회
@@ -127,9 +134,10 @@ scan_videos() → group_sequences() → reorder_with_groups()
   → [_apply_bgm_mixing()]  ← BGM 믹싱 (--bgm 옵션 시)
   → [TimelapseGenerator.generate()]
   → save_merge_job_to_db() + save_summary()
+  → [_link_merge_job_to_project()]  ← 프로젝트 연결 (--project 옵션 시)
   → [VideoSplitter.split_video()] (--split-duration/--split-size)
   → [_archive_originals()]
-  → [upload_to_youtube()]
+  → [upload_to_youtube()]  ← 프로젝트 플레이리스트 자동 생성/재사용
 ```
 
 ### 핵심 컴포넌트
@@ -140,6 +148,8 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, normalize_audio, fade_map 등)
 - `TranscodeResult`: 단일 트랜스코딩 결과 (frozen dataclass)
 - `ClipInfo`: NamedTuple (name, duration, device, shot_time) — 클립 메타데이터
+- `_link_merge_job_to_project()`: 병합 결과를 프로젝트에 연결 (없으면 자동 생성, 날짜 범위 갱신)
+- `_get_or_create_project_playlist()`: 프로젝트 플레이리스트 자동 생성/재사용
 - `_upload_split_files()`: 분할 파일 순차 YouTube 업로드 (챕터 리매핑 + Part N/M 제목)
 - `_upload_after_pipeline()`: 업로드 라우터 — split_jobs DB에 분할 파일이 있으면 순차 업로드, 없으면 단일 업로드
 - `_apply_bgm_mixing()`: 병합 영상에 BGM 믹싱 (ffprobe 길이 확인 → create_bgm_filter → ffmpeg)
@@ -219,6 +229,12 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - 환경변수 헬퍼: `_get_env_bool()` (공통 bool 환경변수 파싱)
 - ENV 상수: `ENV_OUTPUT_DIR`, `ENV_PARALLEL`, `ENV_DENOISE` 등 (중앙 관리)
 
+**commands/project.py**: 프로젝트 관리 CLI 커맨드
+- `cmd_project_list()`: `--project-list` 진입점 (테이블/JSON 출력)
+- `cmd_project_detail()`: `--project-detail` 진입점 (날짜별 그룹핑, 업로드 상태)
+- `print_project_list()`: 프로젝트 목록 테이블 렌더링
+- `print_project_detail()`: 프로젝트 상세 정보 렌더링 (merge_jobs, 날짜 그룹, 크기/시간 집계)
+
 **commands/catalog.py**: 메타데이터 카탈로그/검색 CLI
 - `cmd_catalog()`: DB 영상 메타데이터 조회 (기기별 그룹핑, JSON/CSV 출력)
 - `cmd_search()`: 날짜/기기/상태 필터 검색
@@ -238,15 +254,17 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `merge_jobs`: 병합 이력, YouTube 챕터 정보, `youtube_id` 저장
 - `split_jobs`: 영상 분할 이력 (merge_job FK, 분할 기준/값, 출력 파일 목록, `youtube_ids` JSON 배열, `error_message`)
 - `archive_history`: 원본 파일 아카이브(이동/삭제) 이력
+- `projects`: 프로젝트 메타데이터 (name UNIQUE, description, date_range, playlist_id)
+- `project_merge_jobs`: 프로젝트 ↔ merge_jobs 다대다 관계 (복합 PK, CASCADE DELETE)
 - DB 위치: `~/.tubearchive/tubearchive.db` (또는 `TUBEARCHIVE_DB_PATH`)
-- Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `SplitJobRepository`, `ArchiveHistoryRepository`
+- Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `SplitJobRepository`, `ArchiveHistoryRepository`, `ProjectRepository`
 - **DB 접근 규칙**: cli.py에서 직접 SQL을 실행하지 않고 반드시 Repository 메서드를 사용
 - DB 연결은 `database_session()` context manager로 자동 정리
 
 **youtube/**: YouTube 업로드 모듈
 - `auth.py`: OAuth 2.0 인증 (토큰 저장/갱신, 브라우저 인증 플로우)
 - `uploader.py`: Resumable upload (청크 단위, 재시도 로직)
-- `playlist.py`: 플레이리스트 관리 (목록 조회, 영상 추가)
+- `playlist.py`: 플레이리스트 관리 (목록 조회, 영상 추가, 플레이리스트 생성)
 - 설정 파일: `~/.tubearchive/client_secrets.json`, `~/.tubearchive/youtube_token.json`
 - 환경 변수:
   - `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS`: OAuth 클라이언트 시크릿 경로
@@ -336,7 +354,7 @@ ffmpeg -i input.mov -filter_complex "..." -c:v hevc_videotoolbox -t 5 test.mp4
 ```
 
 ### DB 작업
-- **모든 DB 접근은 Repository 패턴** (`VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `SplitJobRepository`)
+- **모든 DB 접근은 Repository 패턴** (`VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `SplitJobRepository`, `ProjectRepository`)
 - CLI에서 raw SQL 직접 실행 금지 — 새 쿼리가 필요하면 Repository에 메서드 추가
 - DB 연결은 `database_session()` context manager 사용 (자동 close 보장)
 - 상태 변경은 트랜잭션 사용

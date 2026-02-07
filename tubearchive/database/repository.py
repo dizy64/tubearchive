@@ -890,8 +890,15 @@ class ProjectRepository:
 
         Returns:
             상세 정보 딕셔너리 또는 프로젝트 미존재 시 None.
-            키: project, merge_jobs, total_duration_seconds, total_size_bytes,
-                uploaded_count, total_count, date_groups
+
+            딕셔너리 키:
+                - ``project``: ``Project`` 인스턴스
+                - ``merge_jobs``: ``list[MergeJob]`` 날짜순 정렬
+                - ``total_duration_seconds``: ``float`` 총 재생 시간
+                - ``total_size_bytes``: ``int`` 총 파일 크기
+                - ``uploaded_count``: ``int`` YouTube 업로드 완료 수
+                - ``total_count``: ``int`` 전체 merge_job 수
+                - ``date_groups``: ``dict[str, list[MergeJob]]`` 날짜별 그룹
         """
         project = self.get_by_id(project_id)
         if project is None:

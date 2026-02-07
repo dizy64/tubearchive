@@ -6,10 +6,12 @@
 파이프라인 흐름::
 
     scan_videos → Transcoder.transcode_video → Merger.merge
-    → save_merge_job_to_db → [upload_to_youtube]
+    → save_merge_job_to_db → [프로젝트 연결] → [upload_to_youtube]
 
 주요 서브커맨드:
     - 기본(인자 없음): 영상 스캔 → 트랜스코딩 → 병합
+    - ``--project NAME``: 병합 결과를 프로젝트에 연결 (자동 생성)
+    - ``--project-list`` / ``--project-detail ID``: 프로젝트 관리
     - ``--upload`` / ``--upload-only``: YouTube 업로드
     - ``--status`` / ``--catalog``: 작업 현황·메타데이터 조회
     - ``--setup-youtube`` / ``--youtube-auth``: 인증 관리
@@ -740,7 +742,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--project-list",
         action="store_true",
-        help="프로젝트 목록 조회",
+        help="프로젝트 목록 조회 (--json 옵션으로 JSON 출력)",
     )
 
     parser.add_argument(
@@ -748,7 +750,7 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         metavar="ID",
-        help="프로젝트 상세 조회 (프로젝트 ID)",
+        help="프로젝트 상세 조회 (프로젝트 ID, --json 옵션으로 JSON 출력)",
     )
 
     # 아카이브 옵션
