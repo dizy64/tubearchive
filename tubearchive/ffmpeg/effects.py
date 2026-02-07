@@ -456,55 +456,65 @@ def create_bgm_filter(
     bgm_volume: float = 0.2,
     bgm_loop: bool = False,
     fade_out_duration: float = 3.0,
+    has_audio: bool = True,
 ) -> str:
     """
     배경음악(BGM) 믹싱 필터 생성.
 
     Args:
-        bgm_duration: BGM 파일의 길이 (초)
-        video_duration: 영상 파일의 길이 (초)
+        bgm_duration: BGM 파일의 길이 (초, > 0)
+        video_duration: 영상 파일의 길이 (초, > 0)
         bgm_volume: BGM 상대 볼륨 (0.0~1.0, 기본: 0.2)
         bgm_loop: BGM 루프 재생 여부 (기본: False)
         fade_out_duration: 자동 페이드 아웃 시간 (초, 기본: 3.0)
+        has_audio: 영상에 오디오 트랙이 있는지 여부 (기본: True)
 
     Returns:
         filter_complex 문자열 (BGM 입력은 [1:a], 원본 오디오는 [0:a])
+
+    Raises:
+        ValueError: bgm_duration 또는 video_duration이 0 이하인 경우
 
     Examples:
         BGM 길이 < 영상: 루프 재생
         BGM 길이 > 영상: 마지막 3초 페이드 아웃
         BGM 길이 = 영상: 그대로 믹싱
     """
+    if bgm_duration <= 0:
+        raise ValueError(f"BGM duration must be > 0, got: {bgm_duration}")
+    if video_duration <= 0:
+        raise ValueError(f"Video duration must be > 0, got: {video_duration}")
+
     bgm_filters: list[str] = []
 
     # BGM 길이가 영상보다 짧고 루프가 활성화된 경우
+    # loop=-1 (무한 루프) + atrim으로 정확한 길이 보장
     if bgm_duration < video_duration and bgm_loop:
-        # aloop: 무한 반복, atrim으로 영상 길이에 맞춤
-        loop_count = int(video_duration / bgm_duration) + 1
-        bgm_filters.append(f"aloop=loop={loop_count}:size=2e+09")
+        bgm_filters.append("aloop=loop=-1:size=2000000000")
         bgm_filters.append(f"atrim=end={video_duration}")
 
     # BGM 길이가 영상보다 긴 경우: 페이드 아웃
     elif bgm_duration > video_duration:
-        # atrim으로 영상 길이에 맞추고, 마지막 3초 페이드 아웃
         bgm_filters.append(f"atrim=end={video_duration}")
-        fade_start = max(video_duration - fade_out_duration, 0.0)
-        if fade_out_duration > 0 and fade_start > 0:
-            bgm_filters.append(f"afade=t=out:st={fade_start}:d={fade_out_duration}")
+        # 짧은 영상: fade_out_duration을 video_duration에 맞춤
+        effective_fade = min(fade_out_duration, video_duration)
+        fade_start = video_duration - effective_fade
+        if effective_fade > 0:
+            bgm_filters.append(f"afade=t=out:st={fade_start}:d={effective_fade}")
 
     # 볼륨 조절
     bgm_filters.append(f"volume={bgm_volume}")
 
-    # BGM 필터 체인 구성
     bgm_chain = ",".join(bgm_filters)
 
+    if not has_audio:
+        # 오디오 트랙 없는 영상: BGM만 단독 출력
+        return f"[1:a]{bgm_chain}[a_out]"
+
     # amix로 원본 오디오와 BGM 믹싱
-    # [0:a]: 원본 오디오, [1:a]: BGM
-    # inputs=2: 2개의 입력 스트림
-    # duration=first: 첫 번째 입력(원본 오디오)의 길이에 맞춤
-    # dropout_transition=0: 부드러운 믹싱
-    amix_filter = "amix=inputs=2:duration=first:dropout_transition=0"
-    return f"[1:a]{bgm_chain}[bgm_out];[0:a][bgm_out]{amix_filter}[a_out]"
+    # weights: 원본=1, BGM=bgm_volume (amix 정규화 상쇄)
+    amix = f"amix=inputs=2:duration=first:dropout_transition=0:weights=1 {bgm_volume}"
+    return f"[1:a]{bgm_chain}[bgm_out];[0:a][bgm_out]{amix}[a_out]"
 
 
 def create_audio_filter_chain(

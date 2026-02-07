@@ -287,9 +287,6 @@ class TranscodeOptions:
         trim_silence: 무음 구간 제거 여부
         silence_threshold: 무음 기준 데시벨
         silence_min_duration: 최소 무음 길이 (초)
-        bgm_path: 배경음악 파일 경로
-        bgm_volume: 배경음악 상대 볼륨 (0.0~1.0)
-        bgm_loop: BGM 루프 재생 여부
     """
 
     denoise: bool = False
@@ -300,9 +297,6 @@ class TranscodeOptions:
     trim_silence: bool = False
     silence_threshold: str = "-30dB"
     silence_min_duration: float = 2.0
-    bgm_path: Path | None = None
-    bgm_volume: float = 0.2
-    bgm_loop: bool = False
 
 
 @dataclass(frozen=True)
@@ -868,7 +862,8 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         bgm_volume = bgm_volume_arg
     else:
         # 환경변수/설정파일에서 기본값, 없으면 0.2
-        bgm_volume = get_default_bgm_volume() or 0.2
+        env_bgm_volume = get_default_bgm_volume()
+        bgm_volume = env_bgm_volume if env_bgm_volume is not None else 0.2
 
     bgm_loop_arg = getattr(args, "bgm_loop", False)
     bgm_loop = bgm_loop_arg or get_default_bgm_loop()
@@ -983,6 +978,72 @@ def get_output_filename(targets: list[Path]) -> str:
     return f"{name}.mp4"
 
 
+def _get_media_duration(media_path: Path) -> float:
+    """ffprobe를 사용하여 미디어 파일의 길이를 초 단위로 반환한다.
+
+    Args:
+        media_path: 미디어 파일 경로
+
+    Returns:
+        길이 (초)
+
+    Raises:
+        RuntimeError: ffprobe 실행 실패 또는 길이 파싱 실패
+    """
+    try:
+        probe_result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(media_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        info = json.loads(probe_result.stdout)
+        return float(info["format"]["duration"])
+    except (subprocess.CalledProcessError, KeyError, ValueError) as e:
+        raise RuntimeError(f"Failed to probe duration: {media_path} - {e}") from e
+
+
+def _has_audio_stream(media_path: Path) -> bool:
+    """ffprobe를 사용하여 미디어 파일에 오디오 스트림이 있는지 확인한다.
+
+    Args:
+        media_path: 미디어 파일 경로
+
+    Returns:
+        오디오 스트림 존재 여부
+    """
+    try:
+        probe_result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                "-select_streams",
+                "a",
+                str(media_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        info = json.loads(probe_result.stdout)
+        streams = info.get("streams", [])
+        return len(streams) > 0
+    except (subprocess.CalledProcessError, ValueError):
+        return False
+
+
 def _apply_bgm_mixing(
     video_path: Path,
     bgm_path: Path,
@@ -990,8 +1051,11 @@ def _apply_bgm_mixing(
     bgm_loop: bool,
     output_path: Path,
 ) -> Path:
-    """
-    병합된 영상에 BGM 믹싱 적용.
+    """병합된 영상에 BGM을 믹싱한다.
+
+    ffprobe로 영상/BGM 길이와 오디오 스트림 존재 여부를 확인한 뒤
+    :func:`~tubearchive.ffmpeg.effects.create_bgm_filter` 로 필터를 생성하고
+    ffmpeg로 오디오만 재인코딩한다 (영상은 ``-c:v copy``).
 
     Args:
         video_path: 병합된 영상 파일 경로
@@ -1010,59 +1074,23 @@ def _apply_bgm_mixing(
 
     logger.info(f"Applying BGM mixing: {bgm_path.name}")
 
-    # 1. 영상 길이 확인
-    try:
-        probe_result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_format",
-                str(video_path),
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        video_info = json.loads(probe_result.stdout)
-        video_duration = float(video_info["format"]["duration"])
-    except (subprocess.CalledProcessError, KeyError, ValueError) as e:
-        raise RuntimeError(f"Failed to probe video duration: {e}") from e
+    video_duration = _get_media_duration(video_path)
+    bgm_duration = _get_media_duration(bgm_path)
+    has_audio = _has_audio_stream(video_path)
 
-    # 2. BGM 길이 확인
-    try:
-        probe_result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_format",
-                str(bgm_path),
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        bgm_info = json.loads(probe_result.stdout)
-        bgm_duration = float(bgm_info["format"]["duration"])
-    except (subprocess.CalledProcessError, KeyError, ValueError) as e:
-        raise RuntimeError(f"Failed to probe BGM duration: {e}") from e
+    logger.info(
+        f"Video duration: {video_duration:.2f}s, BGM duration: {bgm_duration:.2f}s, "
+        f"has_audio: {has_audio}"
+    )
 
-    logger.info(f"Video duration: {video_duration:.2f}s, BGM duration: {bgm_duration:.2f}s")
-
-    # 3. BGM 필터 생성
     bgm_filter = create_bgm_filter(
         bgm_duration=bgm_duration,
         video_duration=video_duration,
         bgm_volume=bgm_volume,
         bgm_loop=bgm_loop,
+        has_audio=has_audio,
     )
 
-    # 4. FFmpeg 명령어 빌드 및 실행
     cmd = [
         "ffmpeg",
         "-y",
@@ -1073,11 +1101,11 @@ def _apply_bgm_mixing(
         "-filter_complex",
         bgm_filter,
         "-map",
-        "0:v",  # 원본 영상 스트림
+        "0:v",
         "-map",
-        "[a_out]",  # 필터링된 오디오
+        "[a_out]",
         "-c:v",
-        "copy",  # 영상 재인코딩 없음
+        "copy",
         "-c:a",
         "aac",
         "-b:a",
@@ -1538,9 +1566,6 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         trim_silence=validated_args.trim_silence,
         silence_threshold=validated_args.silence_threshold,
         silence_min_duration=validated_args.silence_min_duration,
-        bgm_path=validated_args.bgm_path,
-        bgm_volume=validated_args.bgm_volume,
-        bgm_loop=validated_args.bgm_loop,
     )
 
     parallel = validated_args.parallel
@@ -2593,6 +2618,10 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
             print(f"  timestamps: {validated_args.thumbnail_timestamps}")
         else:
             print("  timestamps: auto (10%, 33%, 50%)")
+    if validated_args.bgm_path:
+        print(f"BGM: {validated_args.bgm_path}")
+        print(f"  volume: {validated_args.bgm_volume}")
+        print(f"  loop: {validated_args.bgm_loop}")
     print("=" * 30)
 
 
