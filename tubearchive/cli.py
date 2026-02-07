@@ -260,6 +260,9 @@ class ValidatedArgs:
     reorder: bool = False
     archive_originals: Path | None = None
     archive_force: bool = False
+    timelapse_speed: int | None = None
+    timelapse_audio: bool = False
+    timelapse_resolution: str | None = None
 
 
 @dataclass(frozen=True)
@@ -610,6 +613,29 @@ def create_parser() -> argparse.ArgumentParser:
         help="썸네일 JPEG 품질 (1-31, 낮을수록 고품질, 기본: 2)",
     )
 
+    # 타임랩스 옵션
+    parser.add_argument(
+        "--timelapse",
+        type=str,
+        default=None,
+        metavar="SPEED",
+        help="타임랩스 배속 (예: 10x, 범위: 2x-60x)",
+    )
+
+    parser.add_argument(
+        "--timelapse-audio",
+        action="store_true",
+        help="타임랩스에서 오디오 가속 (기본: 오디오 제거)",
+    )
+
+    parser.add_argument(
+        "--timelapse-resolution",
+        type=str,
+        default=None,
+        metavar="RES",
+        help="타임랩스 출력 해상도 (예: 1080p, 4k, 1920x1080, 기본: 원본 유지)",
+    )
+
     parser.add_argument(
         "--status",
         nargs="?",
@@ -804,6 +830,26 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
 
     archive_force_flag: bool = getattr(args, "archive_force", False)
 
+    # 타임랩스 옵션 검증
+    timelapse_speed: int | None = None
+    if hasattr(args, "timelapse") and args.timelapse:
+        timelapse_str = args.timelapse.lower().rstrip("x")
+        try:
+            timelapse_speed = int(timelapse_str)
+        except ValueError:
+            raise ValueError(f"Invalid timelapse speed format: {args.timelapse}") from None
+
+        from tubearchive.ffmpeg.effects import TIMELAPSE_MAX_SPEED, TIMELAPSE_MIN_SPEED
+
+        if timelapse_speed < TIMELAPSE_MIN_SPEED or timelapse_speed > TIMELAPSE_MAX_SPEED:
+            raise ValueError(
+                f"Timelapse speed must be between {TIMELAPSE_MIN_SPEED}x and "
+                f"{TIMELAPSE_MAX_SPEED}x, got {timelapse_speed}x"
+            )
+
+    timelapse_audio: bool = getattr(args, "timelapse_audio", False)
+    timelapse_resolution: str | None = getattr(args, "timelapse_resolution", None)
+
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -831,6 +877,9 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         reorder=reorder_flag,
         archive_originals=archive_originals,
         archive_force=archive_force_flag,
+        timelapse_speed=timelapse_speed,
+        timelapse_audio=timelapse_audio,
+        timelapse_resolution=timelapse_resolution,
     )
 
 
@@ -1349,6 +1398,14 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
             for tp in thumbnail_paths:
                 print(f"  - {tp}")
 
+    # 4.6 타임랩스 생성 (비필수)
+    timelapse_path: Path | None = None
+    if validated_args.timelapse_speed:
+        timelapse_path = _generate_timelapse(final_path, validated_args)
+        if timelapse_path:
+            print(f"\n⏩ 타임랩스 ({validated_args.timelapse_speed}x) 생성:")
+            print(f"  - {timelapse_path}")
+
     # 5. 임시 파일 정리
     if not validated_args.keep_temp:
         _cleanup_temp(temp_dir, results, final_path, video_ids)
@@ -1526,6 +1583,47 @@ def _generate_thumbnails(
     except Exception:
         logger.warning("Failed to generate thumbnails", exc_info=True)
         return []
+
+
+def _generate_timelapse(
+    video_path: Path,
+    validated_args: ValidatedArgs,
+) -> Path | None:
+    """병합 영상에서 타임랩스 생성.
+
+    실패 시 경고만 남기고 None 반환 (파이프라인 중단 없음).
+
+    Args:
+        video_path: 입력 병합 영상 경로
+        validated_args: 검증된 CLI 인자
+
+    Returns:
+        타임랩스 파일 경로 (실패 시 None)
+    """
+    from tubearchive.core.timelapse import TimelapseGenerator
+
+    if validated_args.timelapse_speed is None:
+        return None
+
+    # 출력 경로 생성
+    stem = video_path.stem
+    suffix = video_path.suffix
+    output_dir = validated_args.output_dir or video_path.parent
+    output_path = output_dir / f"{stem}_timelapse_{validated_args.timelapse_speed}x{suffix}"
+
+    try:
+        logger.info(f"Generating {validated_args.timelapse_speed}x timelapse: {output_path.name}")
+        generator = TimelapseGenerator()
+        return generator.generate(
+            input_path=video_path,
+            output_path=output_path,
+            speed=validated_args.timelapse_speed,
+            keep_audio=validated_args.timelapse_audio,
+            resolution=validated_args.timelapse_resolution,
+        )
+    except Exception:
+        logger.warning("Failed to generate timelapse", exc_info=True)
+        return None
 
 
 def _mark_transcoding_jobs_merged(video_ids: list[int]) -> None:
