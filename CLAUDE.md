@@ -54,10 +54,16 @@ uv run tubearchive --timelapse 5x --timelapse-resolution 1080p ~/Videos/  # 해�
 uv run tubearchive --thumbnail ~/Videos/            # 기본 지점(10%, 33%, 50%) 썸네일
 uv run tubearchive --thumbnail --thumbnail-at 00:01:30 ~/Videos/  # 특정 시점
 
+# 영상 분할
+uv run tubearchive --split-duration 1h ~/Videos/    # 1시간 단위 분할 (segment muxer, 재인코딩 없음)
+uv run tubearchive --split-size 10G ~/Videos/       # 10GB 단위 분할
+
 # YouTube 업로드
 uv run tubearchive --setup-youtube                  # 인증 상태 확인
 uv run tubearchive --upload ~/Videos/               # 병합 후 업로드
 uv run tubearchive --upload-only video.mp4          # 파일만 업로드
+# 분할 + 업로드: --upload와 --split-duration/--split-size 조합 시
+# 분할 파일별 챕터 리매핑 + "(Part N/M)" 제목으로 순차 업로드
 
 # 원본 파일 아카이브
 uv run tubearchive --archive-originals ~/Videos/archive ~/Videos/  # 원본 파일을 지정 경로로 이동
@@ -121,6 +127,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
   → [_apply_bgm_mixing()]  ← BGM 믹싱 (--bgm 옵션 시)
   → [TimelapseGenerator.generate()]
   → save_merge_job_to_db() + save_summary()
+  → [VideoSplitter.split_video()] (--split-duration/--split-size)
   → [_archive_originals()]
   → [upload_to_youtube()]
 ```
@@ -128,11 +135,13 @@ scan_videos() → group_sequences() → reorder_with_groups()
 ### 핵심 컴포넌트
 
 **cli.py**: CLI 인터페이스 및 파이프라인 오케스트레이터
-- `run_pipeline()`: 메인 파이프라인 (스캔→그룹핑→트랜스코딩→병합→저장)
+- `run_pipeline()`: 메인 파이프라인 (스캔→그룹핑→트랜스코딩→병합→저장→[분할])
 - `ValidatedArgs`: 검증된 CLI 인자 데이터클래스
 - `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, normalize_audio, fade_map 등)
 - `TranscodeResult`: 단일 트랜스코딩 결과 (frozen dataclass)
 - `ClipInfo`: NamedTuple (name, duration, device, shot_time) — 클립 메타데이터
+- `_upload_split_files()`: 분할 파일 순차 YouTube 업로드 (챕터 리매핑 + Part N/M 제목)
+- `_upload_after_pipeline()`: 업로드 라우터 — split_jobs DB에 분할 파일이 있으면 순차 업로드, 없으면 단일 업로드
 - `_apply_bgm_mixing()`: 병합 영상에 BGM 믹싱 (ffprobe 길이 확인 → create_bgm_filter → ffmpeg)
 - `_get_media_duration()`: ffprobe로 미디어 길이 조회 헬퍼
 - `_has_audio_stream()`: ffprobe로 오디오 스트림 존재 확인 헬퍼
@@ -144,6 +153,15 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `group_sequences()`: 파일 목록 → `FileSequenceGroup` 리스트
 - `compute_fade_map()`: 그룹 경계 기반 페이드 설정 맵 생성
 - 내부 모델: `_GoProEntry` (챕터 순서), `_DjiEntry` (타임스탬프+시퀀스)
+
+**core/splitter.py**: 영상 분할 엔진
+- `SplitOptions`: 분할 옵션 (duration 또는 size)
+- `VideoSplitter`: FFmpeg segment muxer를 사용한 영상 분할 (재인코딩 없음)
+- `parse_duration()`: 시간 문자열 파싱 (`1h`, `30m`, `1h30m15s` → 초)
+- `parse_size()`: 크기 문자열 파싱 (`10G`, `500M`, `1.5G` → 바이트)
+- `split_video()`: 실제 분할 실행 → 출력 파일 목록 반환
+- `probe_duration()`: ffprobe로 분할 파일의 실제 길이(초) 조회 (키프레임 기준 분할이라 요청 시간과 다를 수 있음)
+- `probe_bitrate()`: ffprobe로 영상 비트레이트(bps) 조회 (크기 기준 분할 시 segment_time 추정에 사용)
 
 **core/timelapse.py**: 타임랩스 생성 엔진
 - `TimelapseGenerator`: 배속 조절 타임랩스 영상 생성 (2x ~ 60x)
@@ -207,13 +225,21 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `STATUS_ICONS`: 작업 상태 아이콘 매핑
 - `format_duration()`: 초→분:초 변환
 
+**utils/summary_generator.py**: Summary/챕터 생성
+- `generate_chapters()`: 클립 목록 → YouTube 챕터 타임스탬프
+- `generate_youtube_description()`: 병합 영상용 YouTube 설명
+- `remap_chapters_for_splits()`: 분할 파일별 챕터 리매핑 (경계 걸침 시 양쪽 포함)
+- `generate_split_youtube_description()`: 분할 파일 하나의 YouTube 설명 생성
+- `_aggregate_clips_for_chapters()`: 연속 시퀀스 그룹을 하나의 챕터로 병합
+
 **database/**: SQLite Resume 시스템 + Repository 패턴
 - `videos`: 원본 영상 메타데이터
 - `transcoding_jobs`: 작업 상태 (pending→processing→completed/failed)
 - `merge_jobs`: 병합 이력, YouTube 챕터 정보, `youtube_id` 저장
+- `split_jobs`: 영상 분할 이력 (merge_job FK, 분할 기준/값, 출력 파일 목록, `youtube_ids` JSON 배열, `error_message`)
 - `archive_history`: 원본 파일 아카이브(이동/삭제) 이력
 - DB 위치: `~/.tubearchive/tubearchive.db` (또는 `TUBEARCHIVE_DB_PATH`)
-- Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `ArchiveHistoryRepository`
+- Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `SplitJobRepository`, `ArchiveHistoryRepository`
 - **DB 접근 규칙**: cli.py에서 직접 SQL을 실행하지 않고 반드시 Repository 메서드를 사용
 - DB 연결은 `database_session()` context manager로 자동 정리
 
@@ -310,7 +336,7 @@ ffmpeg -i input.mov -filter_complex "..." -c:v hevc_videotoolbox -t 5 test.mp4
 ```
 
 ### DB 작업
-- **모든 DB 접근은 Repository 패턴** (`VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`)
+- **모든 DB 접근은 Repository 패턴** (`VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `SplitJobRepository`)
 - CLI에서 raw SQL 직접 실행 금지 — 새 쿼리가 필요하면 Repository에 메서드 추가
 - DB 연결은 `database_session()` context manager 사용 (자동 close 보장)
 - 상태 변경은 트랜잭션 사용

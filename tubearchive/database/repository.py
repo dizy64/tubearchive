@@ -1,20 +1,24 @@
 """데이터베이스 CRUD 리포지토리.
 
-SQLite DB 위의 영상·트랜스코딩·병합 작업 정보를 조회·생성·수정·삭제한다.
+SQLite DB 위의 영상·트랜스코딩·병합·분할 작업 정보를 조회·생성·수정·삭제한다.
 
 리포지토리 클래스:
     - :class:`VideoRepository`: 원본 영상 메타데이터
     - :class:`TranscodingJobRepository`: 트랜스코딩 작업 상태·진행률
     - :class:`MergeJobRepository`: 병합 작업 이력·YouTube 업로드 정보
+    - :class:`SplitJobRepository`: 영상 분할 작업 이력
 """
 
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from tubearchive.models.job import JobStatus, MergeJob, TranscodingJob
+from tubearchive.models.job import JobStatus, MergeJob, SplitJob, TranscodingJob
 from tubearchive.models.video import VideoFile, VideoMetadata
+
+logger = logging.getLogger(__name__)
 
 
 class VideoRepository:
@@ -525,6 +529,123 @@ class MergeJobRepository:
             total_size_bytes=row["total_size_bytes"],
             clips_info_json=row["clips_info_json"],
             summary_markdown=row["summary_markdown"],
+        )
+
+
+class SplitJobRepository:
+    """영상 분할 작업 리포지토리.
+
+    ``split_jobs`` 테이블을 관리한다.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+
+    def create(
+        self,
+        merge_job_id: int,
+        split_criterion: str,
+        split_value: str,
+        output_files: list[Path],
+        status: JobStatus = JobStatus.COMPLETED,
+    ) -> int:
+        """분할 작업 생성.
+
+        Args:
+            merge_job_id: 원본 merge_job의 ID
+            split_criterion: 분할 기준 (``duration`` 또는 ``size``)
+            split_value: 분할 값 문자열 (예: ``1h``, ``10G``)
+            output_files: 분할된 출력 파일 경로 목록
+            status: 초기 상태 (기본: COMPLETED)
+
+        Returns:
+            생성된 split_job ID
+        """
+        output_json = json.dumps([str(p) for p in output_files])
+        cursor = self.conn.execute(
+            """INSERT INTO split_jobs
+               (merge_job_id, split_criterion, split_value, output_files, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            (merge_job_id, split_criterion, split_value, output_json, status.value),
+        )
+        self.conn.commit()
+        return cursor.lastrowid or 0
+
+    def get_by_id(self, job_id: int) -> SplitJob | None:
+        """ID로 분할 작업 조회."""
+        cursor = self.conn.execute("SELECT * FROM split_jobs WHERE id = ?", (job_id,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_job(row)
+
+    def get_by_merge_job_id(self, merge_job_id: int) -> list[SplitJob]:
+        """merge_job_id로 분할 작업 목록 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM split_jobs WHERE merge_job_id = ? ORDER BY id",
+            (merge_job_id,),
+        )
+        return [self._row_to_job(row) for row in cursor.fetchall()]
+
+    def update_status(self, job_id: int, status: JobStatus) -> None:
+        """분할 작업 상태 업데이트."""
+        self.conn.execute(
+            "UPDATE split_jobs SET status = ? WHERE id = ?",
+            (status.value, job_id),
+        )
+        self.conn.commit()
+
+    def append_youtube_id(self, job_id: int, youtube_id: str) -> None:
+        """분할 작업에 YouTube 영상 ID를 추가한다.
+
+        파트별 업로드 완료 시 호출하여 youtube_ids JSON 배열에 누적.
+
+        Args:
+            job_id: split_job ID
+            youtube_id: 업로드된 YouTube 영상 ID
+        """
+        row = self.conn.execute(
+            "SELECT youtube_ids FROM split_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        if row is None:
+            return
+        try:
+            ids = json.loads(row["youtube_ids"]) if row["youtube_ids"] else []
+        except (json.JSONDecodeError, TypeError):
+            ids = []
+        ids.append(youtube_id)
+        self.conn.execute(
+            "UPDATE split_jobs SET youtube_ids = ? WHERE id = ?",
+            (json.dumps(ids), job_id),
+        )
+        self.conn.commit()
+
+    def delete(self, job_id: int) -> None:
+        """분할 작업 삭제."""
+        self.conn.execute("DELETE FROM split_jobs WHERE id = ?", (job_id,))
+        self.conn.commit()
+
+    def _row_to_job(self, row: sqlite3.Row) -> SplitJob:
+        """Row를 SplitJob으로 변환."""
+        try:
+            output_files = [Path(p) for p in json.loads(row["output_files"])]
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"Failed to parse output_files for split_job {row['id']}")
+            output_files = []
+        try:
+            youtube_ids = json.loads(row["youtube_ids"]) if row["youtube_ids"] else []
+        except (json.JSONDecodeError, TypeError):
+            youtube_ids = []
+        return SplitJob(
+            id=row["id"],
+            merge_job_id=row["merge_job_id"],
+            split_criterion=row["split_criterion"],
+            split_value=row["split_value"],
+            output_files=output_files,
+            status=JobStatus(row["status"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            youtube_ids=youtube_ids,
+            error_message=row["error_message"],
         )
 
 

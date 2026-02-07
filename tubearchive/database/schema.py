@@ -6,6 +6,7 @@
     - ``videos``: 원본 영상 파일 메타데이터 (경로, 생성 시간, 기기 모델 등)
     - ``transcoding_jobs``: 트랜스코딩 작업 상태 추적 (Resume 지원)
     - ``merge_jobs``: 병합 작업 이력 및 YouTube 업로드 상태
+    - ``split_jobs``: 영상 분할 작업 이력
     - ``archive_history``: 원본 파일 아카이브(이동/삭제) 이력
 
 DB 위치:
@@ -98,6 +99,22 @@ CREATE TABLE IF NOT EXISTS merge_jobs (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- split_jobs: 영상 분할 작업 이력
+CREATE TABLE IF NOT EXISTS split_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    merge_job_id INTEGER NOT NULL,
+    split_criterion TEXT NOT NULL
+        CHECK(split_criterion IN ('duration', 'size')),
+    split_value TEXT NOT NULL,
+    output_files TEXT NOT NULL,
+    youtube_ids TEXT,
+    error_message TEXT,
+    status TEXT DEFAULT 'completed'
+        CHECK(status IN ('pending', 'processing', 'completed', 'failed')),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (merge_job_id) REFERENCES merge_jobs(id) ON DELETE CASCADE
+);
+
 -- archive_history: 원본 파일 아카이브 이력
 CREATE TABLE IF NOT EXISTS archive_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,11 +126,11 @@ CREATE TABLE IF NOT EXISTS archive_history (
     archived_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
 );
-
 -- 인덱스
 CREATE INDEX IF NOT EXISTS idx_transcoding_status ON transcoding_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_transcoding_video_id ON transcoding_jobs(video_id);
 CREATE INDEX IF NOT EXISTS idx_videos_path ON videos(original_path);
+CREATE INDEX IF NOT EXISTS idx_split_merge_job ON split_jobs(merge_job_id);
 CREATE INDEX IF NOT EXISTS idx_archive_video_id ON archive_history(video_id);
 CREATE INDEX IF NOT EXISTS idx_archive_operation ON archive_history(operation);
 """
@@ -151,6 +168,19 @@ def _migrate_add_merged_status(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migrate_split_jobs_columns(conn: sqlite3.Connection) -> None:
+    """기존 split_jobs 테이블에 youtube_ids, error_message 컬럼 추가."""
+    cursor = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='split_jobs'")
+    row = cursor.fetchone()
+    if row is None:
+        return
+    schema_sql = row[0]
+    if "youtube_ids" not in schema_sql:
+        conn.execute("ALTER TABLE split_jobs ADD COLUMN youtube_ids TEXT")
+    if "error_message" not in schema_sql:
+        conn.execute("ALTER TABLE split_jobs ADD COLUMN error_message TEXT")
+
+
 def init_database(db_path: Path | None = None) -> sqlite3.Connection:
     """
     데이터베이스 초기화.
@@ -176,6 +206,7 @@ def init_database(db_path: Path | None = None) -> sqlite3.Connection:
 
     # 기존 DB 마이그레이션
     _migrate_add_merged_status(conn)
+    _migrate_split_jobs_columns(conn)
 
     conn.commit()
 
