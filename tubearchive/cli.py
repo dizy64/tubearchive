@@ -72,9 +72,11 @@ from tubearchive.core.ordering import (
     sort_videos,
 )
 from tubearchive.core.scanner import scan_videos
+from tubearchive.core.splitter import probe_duration
 from tubearchive.core.transcoder import Transcoder
 from tubearchive.database.repository import (
     MergeJobRepository,
+    SplitJobRepository,
     TranscodingJobRepository,
     VideoRepository,
 )
@@ -2262,11 +2264,86 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     print("=" * 30)
 
 
+def _upload_split_files(
+    split_files: list[Path],
+    title: str | None,
+    clips_info_json: str | None,
+    privacy: str,
+    merge_job_id: int | None,
+    playlist_ids: list[str] | None,
+    chunk_mb: int | None,
+) -> None:
+    """분할 파일을 순차적으로 YouTube에 업로드한다.
+
+    각 파일에 대해 챕터를 리매핑하여 설명을 생성하고,
+    제목에 ``(Part N/M)`` 형식을 추가한다.
+
+    Args:
+        split_files: 분할된 파일 경로 목록
+        title: 원본 영상 제목 (None이면 파일명 사용)
+        clips_info_json: 클립 메타데이터 JSON 문자열
+        privacy: 공개 설정
+        merge_job_id: MergeJob DB ID
+        playlist_ids: 플레이리스트 ID 목록
+        chunk_mb: 업로드 청크 크기 MB
+    """
+    from tubearchive.utils.summary_generator import (
+        generate_split_youtube_description,
+    )
+
+    # clips_info_json → ClipInfo 리스트 복원
+    video_clips: list[ClipInfo] = []
+    if clips_info_json:
+        try:
+            raw = json.loads(clips_info_json)
+            for item in raw:
+                video_clips.append(
+                    ClipInfo(
+                        name=item.get("name", ""),
+                        duration=float(item.get("duration", 0)),
+                        device=item.get("device"),
+                        shot_time=item.get("shot_time"),
+                    )
+                )
+        except (json.JSONDecodeError, KeyError, TypeError):
+            logger.warning("Failed to parse clips_info_json for split upload")
+
+    # 각 분할 파일의 실제 길이 조회
+    split_durations = [probe_duration(f) for f in split_files]
+
+    total = len(split_files)
+    for i, split_file in enumerate(split_files):
+        part_title = f"{title} (Part {i + 1}/{total})" if title else None
+
+        # 챕터 리매핑된 설명 생성
+        description = ""
+        if video_clips and any(d > 0 for d in split_durations):
+            try:
+                description = generate_split_youtube_description(
+                    video_clips=video_clips,
+                    split_durations=split_durations,
+                    part_index=i,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to generate split description: {e}")
+
+        print(f"\n📤 Part {i + 1}/{total} 업로드: {split_file.name}")
+        upload_to_youtube(
+            file_path=split_file,
+            title=part_title,
+            description=description,
+            privacy=privacy,
+            merge_job_id=merge_job_id,
+            playlist_ids=playlist_ids,
+            chunk_mb=chunk_mb,
+        )
+
+
 def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
     """파이프라인 완료 후 YouTube 업로드를 수행한다.
 
-    DB에서 최신 merge_job을 조회하여 제목·설명을 가져온 뒤
-    :func:`upload_to_youtube` 를 호출한다.
+    DB에서 최신 merge_job을 조회하여 제목·설명을 가져온 뒤,
+    분할 파일이 있으면 순차 업로드, 없으면 단일 업로드한다.
 
     Args:
         output_path: 업로드할 병합 영상 파일 경로
@@ -2277,6 +2354,7 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
     merge_job_id = None
     title = None
     description = ""
+    clips_info_json: str | None = None
     try:
         with database_session() as conn:
             repo = MergeJobRepository(conn)
@@ -2285,20 +2363,44 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
                 merge_job_id = job.id
                 title = job.title
                 description = job.summary_markdown or ""
+                clips_info_json = job.clips_info_json
     except Exception as e:
         logger.warning(f"Failed to get merge job: {e}")
 
     playlist_ids = resolve_playlist_ids(args.playlist)
 
-    upload_to_youtube(
-        file_path=output_path,
-        title=title,
-        description=description,
-        privacy=args.upload_privacy,
-        merge_job_id=merge_job_id,
-        playlist_ids=playlist_ids,
-        chunk_mb=args.upload_chunk,
-    )
+    # 분할 파일 확인
+    split_files: list[Path] = []
+    if merge_job_id is not None:
+        try:
+            with database_session() as conn:
+                split_repo = SplitJobRepository(conn)
+                split_jobs = split_repo.get_by_merge_job_id(merge_job_id)
+                for sj in split_jobs:
+                    split_files.extend(f for f in sj.output_files if f.exists())
+        except Exception as e:
+            logger.warning(f"Failed to get split jobs: {e}")
+
+    if split_files:
+        _upload_split_files(
+            split_files=split_files,
+            title=title,
+            clips_info_json=clips_info_json,
+            privacy=args.upload_privacy,
+            merge_job_id=merge_job_id,
+            playlist_ids=playlist_ids,
+            chunk_mb=args.upload_chunk,
+        )
+    else:
+        upload_to_youtube(
+            file_path=output_path,
+            title=title,
+            description=description,
+            privacy=args.upload_privacy,
+            merge_job_id=merge_job_id,
+            playlist_ids=playlist_ids,
+            chunk_mb=args.upload_chunk,
+        )
 
 
 def cmd_init_config() -> None:

@@ -668,6 +668,184 @@ class TestUploadAfterPipeline:
         assert call_kwargs["privacy"] == "private"
 
 
+class TestUploadSplitFiles:
+    """_upload_split_files 분할 업로드 테스트."""
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.probe_duration", return_value=3600.0)
+    def test_uploads_each_split_file(
+        self,
+        _mock_probe: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """분할 파일 각각에 대해 upload_to_youtube가 호출된다."""
+        from tubearchive.cli import _upload_split_files
+
+        f1 = tmp_path / "video_001.mp4"
+        f2 = tmp_path / "video_002.mp4"
+        f1.touch()
+        f2.touch()
+
+        clips_json = (
+            '[{"name":"A.mp4","duration":3600,"start":0,"end":3600,"device":"Nikon","shot_time":"10:00"},'
+            '{"name":"B.mp4","duration":3600,"start":3600,"end":7200,"device":"GoPro","shot_time":"11:00"}]'
+        )
+
+        _upload_split_files(
+            split_files=[f1, f2],
+            title="Test",
+            clips_info_json=clips_json,
+            privacy="unlisted",
+            merge_job_id=1,
+            playlist_ids=None,
+            chunk_mb=32,
+        )
+
+        assert mock_upload.call_count == 2
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.probe_duration", return_value=3600.0)
+    def test_title_includes_part_numbers(
+        self,
+        _mock_probe: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """제목에 (Part N/M) 형식이 포함된다."""
+        from tubearchive.cli import _upload_split_files
+
+        f1 = tmp_path / "video_001.mp4"
+        f2 = tmp_path / "video_002.mp4"
+        f1.touch()
+        f2.touch()
+
+        clips_json = (
+            '[{"name":"A.mp4","duration":7200,"start":0,"end":7200,"device":null,"shot_time":null}]'
+        )
+
+        _upload_split_files(
+            split_files=[f1, f2],
+            title="MyVideo",
+            clips_info_json=clips_json,
+            privacy="unlisted",
+            merge_job_id=1,
+            playlist_ids=None,
+            chunk_mb=None,
+        )
+
+        first_call_title = mock_upload.call_args_list[0][1]["title"]
+        second_call_title = mock_upload.call_args_list[1][1]["title"]
+        assert "(Part 1/2)" in first_call_title
+        assert "(Part 2/2)" in second_call_title
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.cli.init_database")
+    def test_falls_back_when_no_split_files(
+        self,
+        mock_db: MagicMock,
+        _mock_playlist: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """분할 파일이 없으면 단일 파일 업로드로 폴백한다."""
+        from tubearchive.cli import _upload_after_pipeline
+
+        mock_conn = MagicMock()
+        mock_db.return_value = mock_conn
+        mock_conn.close = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.get_latest.return_value = MagicMock(
+            id=1,
+            title="Video",
+            summary_markdown="desc",
+            clips_info_json=None,
+        )
+
+        mock_split_repo = MagicMock()
+        mock_split_repo.get_by_merge_job_id.return_value = []
+
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        args = argparse.Namespace(
+            upload_privacy="unlisted",
+            playlist=None,
+            upload_chunk=32,
+        )
+
+        with (
+            patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo),
+            patch("tubearchive.cli.SplitJobRepository", return_value=mock_split_repo),
+        ):
+            _upload_after_pipeline(output_path, args)
+
+        # 단일 파일로 업로드
+        mock_upload.assert_called_once()
+        call_kwargs = mock_upload.call_args[1]
+        assert call_kwargs["file_path"] == output_path
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.probe_duration", return_value=3600.0)
+    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.cli.init_database")
+    def test_uploads_split_files_when_present(
+        self,
+        mock_db: MagicMock,
+        _mock_playlist: MagicMock,
+        _mock_probe: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """분할 파일이 DB에 있고 디스크에 존재하면 분할 파일을 업로드한다."""
+        from tubearchive.cli import _upload_after_pipeline
+
+        mock_conn = MagicMock()
+        mock_db.return_value = mock_conn
+        mock_conn.close = MagicMock()
+
+        f1 = tmp_path / "video_001.mp4"
+        f2 = tmp_path / "video_002.mp4"
+        f1.touch()
+        f2.touch()
+
+        clips_json = (
+            '[{"name":"A.mp4","duration":3600,"start":0,"end":3600,"device":null,"shot_time":null}]'
+        )
+
+        mock_repo = MagicMock()
+        mock_repo.get_latest.return_value = MagicMock(
+            id=1,
+            title="Video",
+            summary_markdown="desc",
+            clips_info_json=clips_json,
+        )
+
+        mock_split_job = MagicMock()
+        mock_split_job.output_files = [f1, f2]
+
+        mock_split_repo = MagicMock()
+        mock_split_repo.get_by_merge_job_id.return_value = [mock_split_job]
+
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        args = argparse.Namespace(
+            upload_privacy="unlisted",
+            playlist=None,
+            upload_chunk=32,
+        )
+
+        with (
+            patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo),
+            patch("tubearchive.cli.SplitJobRepository", return_value=mock_split_repo),
+        ):
+            _upload_after_pipeline(output_path, args)
+
+        # 분할 파일 2개가 업로드됨
+        assert mock_upload.call_count == 2
+
+
 class TestTruncatePath:
     """truncate_path 유틸리티 테스트."""
 
