@@ -167,8 +167,7 @@ def fetch_stats(conn: sqlite3.Connection, period: str | None = None) -> StatsDat
     raw_devices = cast(list[tuple[str, int]], video_stats["devices"])
     devices = [DeviceStat(device=d, count=c) for d, c in raw_devices]
 
-    avg_speed = cast(float | None, tc_stats["avg_encoding_speed"])
-    avg_encoding_speed = avg_speed
+    avg_encoding_speed = cast(float | None, tc_stats["avg_encoding_speed"])
 
     return StatsData(
         period=period,

@@ -385,6 +385,8 @@ class TranscodingJobRepository:
             "WHERE tj.started_at IS NOT NULL"
             " AND tj.completed_at IS NOT NULL"
             " AND v.duration_seconds > 0"
+            " AND julianday(tj.completed_at)"
+            " > julianday(tj.started_at)"
         )
         speed_params: list[str] = []
         if period:
@@ -890,17 +892,19 @@ class ArchiveHistoryRepository:
             where = "WHERE archived_at LIKE ?"
             params.append(f"{period}%")
 
-        rows = self.conn.execute(
-            f"""SELECT operation, COUNT(*) as cnt
-                FROM archive_history {where}
-                GROUP BY operation""",
+        row = self.conn.execute(
+            f"""SELECT
+                    COALESCE(SUM(
+                        CASE WHEN operation = 'move' THEN 1 ELSE 0 END
+                    ), 0) as moved,
+                    COALESCE(SUM(
+                        CASE WHEN operation = 'delete' THEN 1 ELSE 0 END
+                    ), 0) as deleted
+                FROM archive_history {where}""",
             params,
-        ).fetchall()
+        ).fetchone()
 
-        result = {"moved": 0, "deleted": 0}
-        for r in rows:
-            if r["operation"] == "move":
-                result["moved"] = int(r["cnt"])
-            elif r["operation"] == "delete":
-                result["deleted"] = int(r["cnt"])
-        return result
+        return {
+            "moved": int(row["moved"]),
+            "deleted": int(row["deleted"]),
+        }
