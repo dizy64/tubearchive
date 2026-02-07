@@ -339,6 +339,35 @@ class FFmpegExecutor:
             os.devnull,
         ]
 
+    def build_vidstab_detect_command(
+        self,
+        input_path: Path,
+        video_filter: str,
+    ) -> list[str]:
+        """
+        vidstab detect (1st pass) 분석용 FFmpeg 명령어 빌드.
+
+        비디오만 분석하므로 -an (오디오 무시), 출력은 os.devnull.
+
+        Args:
+            input_path: 입력 파일 경로
+            video_filter: vidstabdetect 필터 문자열
+
+        Returns:
+            FFmpeg 명령어 리스트
+        """
+        return [
+            self.ffmpeg_path,
+            "-i",
+            str(input_path),
+            "-vf",
+            video_filter,
+            "-an",
+            "-f",
+            "null",
+            os.devnull,
+        ]
+
     def run_analysis(self, cmd: list[str]) -> str:
         """
         분석용 FFmpeg 명령 실행 (stderr 반환).

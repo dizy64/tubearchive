@@ -58,6 +58,9 @@ from tubearchive.config import (
     get_default_normalize_audio,
     get_default_output_dir,
     get_default_parallel,
+    get_default_stabilize,
+    get_default_stabilize_crop,
+    get_default_stabilize_strength,
 )
 from tubearchive.core.detector import detect_metadata
 from tubearchive.core.grouper import (
@@ -273,6 +276,9 @@ class ValidatedArgs:
     timelapse_speed: int | None = None
     timelapse_audio: bool = False
     timelapse_resolution: str | None = None
+    stabilize: bool = False
+    stabilize_strength: str = "medium"
+    stabilize_crop: str = "crop"
 
 
 @dataclass(frozen=True)
@@ -301,6 +307,9 @@ class TranscodeOptions:
     trim_silence: bool = False
     silence_threshold: str = "-30dB"
     silence_min_duration: float = 2.0
+    stabilize: bool = False
+    stabilize_strength: str = "medium"
+    stabilize_crop: str = "crop"
 
 
 @dataclass(frozen=True)
@@ -535,6 +544,28 @@ def create_parser() -> argparse.ArgumentParser:
         default=2.0,
         metavar="SECONDS",
         help="최소 무음 길이(초, 기본: 2.0)",
+    )
+
+    parser.add_argument(
+        "--stabilize",
+        action="store_true",
+        help="영상 안정화 활성화 (vidstab 2-pass, 트랜스코딩 시간 증가)",
+    )
+
+    parser.add_argument(
+        "--stabilize-strength",
+        type=str,
+        choices=["light", "medium", "heavy"],
+        default=None,
+        help="영상 안정화 강도 (light/medium/heavy, 기본: medium)",
+    )
+
+    parser.add_argument(
+        "--stabilize-crop",
+        type=str,
+        choices=["crop", "expand"],
+        default=None,
+        help="안정화 후 프레임 처리 (crop: 잘라냄, expand: 검은색 채움, 기본: crop)",
     )
 
     group_toggle = parser.add_mutually_exclusive_group()
@@ -888,6 +919,22 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     bgm_loop_arg = getattr(args, "bgm_loop", False)
     bgm_loop = bgm_loop_arg or get_default_bgm_loop()
 
+    # stabilize 설정 (CLI 인자 > 환경 변수 > 기본값)
+    stabilize_flag = bool(getattr(args, "stabilize", False))
+    stabilize_strength_arg: str | None = getattr(args, "stabilize_strength", None)
+    stabilize_crop_arg: str | None = getattr(args, "stabilize_crop", None)
+    env_stabilize = get_default_stabilize()
+    env_stabilize_strength = get_default_stabilize_strength()
+    env_stabilize_crop = get_default_stabilize_crop()
+    # --stabilize-strength 또는 --stabilize-crop 지정 시 암묵적 활성화
+    if stabilize_strength_arg is not None or stabilize_crop_arg is not None:
+        stabilize_flag = True
+    # 환경변수에서 활성화된 경우
+    if env_stabilize:
+        stabilize_flag = True
+    resolved_stabilize_strength = stabilize_strength_arg or env_stabilize_strength or "medium"
+    resolved_stabilize_crop = stabilize_crop_arg or env_stabilize_crop or "crop"
+
     exclude_patterns: list[str] | None = getattr(args, "exclude", None)
     include_only_patterns: list[str] | None = getattr(args, "include_only", None)
     sort_key_str: str = getattr(args, "sort", None) or "time"
@@ -960,6 +1007,9 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         timelapse_speed=timelapse_speed,
         timelapse_audio=timelapse_audio,
         timelapse_resolution=timelapse_resolution,
+        stabilize=stabilize_flag,
+        stabilize_strength=resolved_stabilize_strength,
+        stabilize_crop=resolved_stabilize_crop,
     )
 
 
@@ -1291,6 +1341,9 @@ def _transcode_single(
             trim_silence=opts.trim_silence,
             silence_threshold=opts.silence_threshold,
             silence_min_duration=opts.silence_min_duration,
+            stabilize=opts.stabilize,
+            stabilize_strength=opts.stabilize_strength,
+            stabilize_crop=opts.stabilize_crop,
         )
         clip_info = _collect_clip_info(video_file)
         return TranscodeResult(
@@ -1410,6 +1463,9 @@ def _transcode_sequential(
                 trim_silence=opts.trim_silence,
                 silence_threshold=opts.silence_threshold,
                 silence_min_duration=opts.silence_min_duration,
+                stabilize=opts.stabilize,
+                stabilize_strength=opts.stabilize_strength,
+                stabilize_crop=opts.stabilize_crop,
                 progress_info_callback=on_progress_info,
             )
             clip_info = _collect_clip_info(video_file)
@@ -1591,7 +1647,18 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         trim_silence=validated_args.trim_silence,
         silence_threshold=validated_args.silence_threshold,
         silence_min_duration=validated_args.silence_min_duration,
+        stabilize=validated_args.stabilize,
+        stabilize_strength=validated_args.stabilize_strength,
+        stabilize_crop=validated_args.stabilize_crop,
     )
+
+    if validated_args.stabilize:
+        logger.info(
+            "영상 안정화 활성화 (vidstab 2-pass, strength=%s, crop=%s) "
+            "— 트랜스코딩 시간이 증가합니다",
+            validated_args.stabilize_strength,
+            validated_args.stabilize_crop,
+        )
 
     parallel = validated_args.parallel
     if parallel > 1:
@@ -2691,6 +2758,12 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     print(f"Normalize audio: {validated_args.normalize_audio}")
     print(f"Group sequences: {validated_args.group_sequences}")
     print(f"Fade duration: {validated_args.fade_duration}")
+    if validated_args.stabilize:
+        strength = validated_args.stabilize_strength
+        crop = validated_args.stabilize_crop
+        print(f"Stabilize: enabled (strength={strength}, crop={crop})")
+    else:
+        print("Stabilize: disabled")
     if validated_args.thumbnail:
         print(f"Thumbnail: enabled (quality={validated_args.thumbnail_quality})")
         if validated_args.thumbnail_timestamps:

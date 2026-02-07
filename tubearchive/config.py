@@ -43,6 +43,9 @@ ENV_BGM_VOLUME = "TUBEARCHIVE_BGM_VOLUME"
 ENV_BGM_LOOP = "TUBEARCHIVE_BGM_LOOP"
 ENV_ARCHIVE_POLICY = "TUBEARCHIVE_ARCHIVE_POLICY"
 ENV_ARCHIVE_DESTINATION = "TUBEARCHIVE_ARCHIVE_DESTINATION"
+ENV_STABILIZE = "TUBEARCHIVE_STABILIZE"
+ENV_STABILIZE_STRENGTH = "TUBEARCHIVE_STABILIZE_STRENGTH"
+ENV_STABILIZE_CROP = "TUBEARCHIVE_STABILIZE_CROP"
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,9 @@ class GeneralConfig:
     trim_silence: bool | None = None
     silence_threshold: str | None = None
     silence_min_duration: float | None = None
+    stabilize: bool | None = None
+    stabilize_strength: str | None = None
+    stabilize_crop: str | None = None
 
 
 @dataclass(frozen=True)
@@ -192,6 +198,18 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
     elif raw_silence_dur is not None:
         _warn_type(f"{section}.silence_min_duration", "float", raw_silence_dur)
 
+    # stabilize_strength: 허용값 검증
+    stabilize_strength = _parse_str(data, "stabilize_strength", section)
+    if stabilize_strength is not None and stabilize_strength not in ("light", "medium", "heavy"):
+        logger.warning("config: general.stabilize_strength 값 오류: %r", stabilize_strength)
+        stabilize_strength = None
+
+    # stabilize_crop: 허용값 검증
+    stabilize_crop = _parse_str(data, "stabilize_crop", section)
+    if stabilize_crop is not None and stabilize_crop not in ("crop", "expand"):
+        logger.warning("config: general.stabilize_crop 값 오류: %r", stabilize_crop)
+        stabilize_crop = None
+
     return GeneralConfig(
         output_dir=_parse_str(data, "output_dir", section),
         parallel=_parse_int(data, "parallel", section),
@@ -204,6 +222,9 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
         trim_silence=_parse_bool(data, "trim_silence", section),
         silence_threshold=_parse_str(data, "silence_threshold", section),
         silence_min_duration=silence_min_duration,
+        stabilize=_parse_bool(data, "stabilize", section),
+        stabilize_strength=stabilize_strength,
+        stabilize_crop=stabilize_crop,
     )
 
 
@@ -408,6 +429,14 @@ def apply_config_to_env(config: AppConfig) -> None:
     if config.youtube.playlist:
         mappings.append((ENV_YOUTUBE_PLAYLIST, ",".join(config.youtube.playlist)))
 
+    # stabilize
+    if config.general.stabilize is not None:
+        mappings.append((ENV_STABILIZE, str(config.general.stabilize).lower()))
+    if config.general.stabilize_strength is not None:
+        mappings.append((ENV_STABILIZE_STRENGTH, config.general.stabilize_strength))
+    if config.general.stabilize_crop is not None:
+        mappings.append((ENV_STABILIZE_CROP, config.general.stabilize_crop))
+
     # archive policy
     if config.archive.policy is not None:
         mappings.append((ENV_ARCHIVE_POLICY, config.archive.policy))
@@ -440,6 +469,9 @@ def generate_default_config() -> str:
 # trim_silence = false                      # 무음 구간 제거 (TUBEARCHIVE_TRIM_SILENCE)
 # silence_threshold = "-30dB"               # 무음 기준 데시벨 (TUBEARCHIVE_SILENCE_THRESHOLD)
 # silence_min_duration = 2.0                # 최소 무음 길이(초, TUBEARCHIVE_SILENCE_MIN_DURATION)
+# stabilize = false                         # 영상 안정화 (TUBEARCHIVE_STABILIZE)
+# stabilize_strength = "medium"             # light/medium/heavy (TUBEARCHIVE_STABILIZE_STRENGTH)
+# stabilize_crop = "crop"                   # crop/expand (TUBEARCHIVE_STABILIZE_CROP)
 
 [bgm]
 # bgm_path = "~/Music/bgm.mp3"              # 배경음악 파일 경로 (TUBEARCHIVE_BGM_PATH)
@@ -660,3 +692,40 @@ def get_default_bgm_volume() -> float | None:
 def get_default_bgm_loop() -> bool:
     """환경변수 ``TUBEARCHIVE_BGM_LOOP`` 에서 BGM 루프 재생 여부를 가져온다."""
     return _get_env_bool(ENV_BGM_LOOP)
+
+
+def get_default_stabilize() -> bool:
+    """환경변수 ``TUBEARCHIVE_STABILIZE`` 에서 영상 안정화 활성화 여부를 가져온다."""
+    return _get_env_bool(ENV_STABILIZE)
+
+
+def get_default_stabilize_strength() -> str | None:
+    """환경변수 ``TUBEARCHIVE_STABILIZE_STRENGTH`` 에서 안정화 강도를 가져온다.
+
+    Returns:
+        ``light`` / ``medium`` / ``heavy`` 또는 None (미설정·유효하지 않은 값).
+    """
+    env_val = os.environ.get(ENV_STABILIZE_STRENGTH)
+    if not env_val:
+        return None
+    normalized = env_val.strip().lower()
+    if normalized in {"light", "medium", "heavy"}:
+        return normalized
+    logger.warning("%s=%s is not a valid strength", ENV_STABILIZE_STRENGTH, env_val)
+    return None
+
+
+def get_default_stabilize_crop() -> str | None:
+    """환경변수 ``TUBEARCHIVE_STABILIZE_CROP`` 에서 안정화 크롭 모드를 가져온다.
+
+    Returns:
+        ``crop`` / ``expand`` 또는 None (미설정·유효하지 않은 값).
+    """
+    env_val = os.environ.get(ENV_STABILIZE_CROP)
+    if not env_val:
+        return None
+    normalized = env_val.strip().lower()
+    if normalized in {"crop", "expand"}:
+        return normalized
+    logger.warning("%s=%s is not a valid crop mode", ENV_STABILIZE_CROP, env_val)
+    return None
