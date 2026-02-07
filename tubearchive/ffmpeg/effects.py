@@ -19,6 +19,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import NamedTuple
 
 # HDR 색공간 식별자 (FFmpeg color_transfer 값)
@@ -54,6 +55,9 @@ TIMELAPSE_MAX_SPEED = 60
 """타임랩스 최대 배속."""
 ATEMPO_MAX = 2.0
 """FFmpeg atempo 필터 최대 배속 (단일 필터 제약)."""
+
+# LUT 지원 확장자
+LUT_SUPPORTED_EXTENSIONS = {".cube", ".3dl"}
 
 
 class StabilizeStrength(Enum):
@@ -113,6 +117,34 @@ _VIDSTAB_CROP: dict[StabilizeCrop, str] = {
     StabilizeCrop.CROP: "keep",
     StabilizeCrop.EXPAND: "black",
 }
+
+
+def create_lut_filter(lut_path: str) -> str:
+    """
+    LUT(Look-Up Table) 적용 필터 생성.
+
+    .cube 또는 .3dl 형식의 LUT 파일을 FFmpeg lut3d 필터로 적용한다.
+
+    Args:
+        lut_path: LUT 파일 경로
+
+    Returns:
+        FFmpeg lut3d 필터 문자열
+
+    Raises:
+        FileNotFoundError: 파일이 존재하지 않는 경우
+        ValueError: 지원하지 않는 확장자인 경우
+    """
+    path = Path(lut_path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"LUT file not found: {lut_path}")
+
+    ext = path.suffix.lower()
+    if ext not in LUT_SUPPORTED_EXTENSIONS:
+        supported = ", ".join(sorted(LUT_SUPPORTED_EXTENSIONS))
+        raise ValueError(f"Unsupported LUT format: {ext} (supported: {supported})")
+
+    return f"lut3d=file='{path}'"
 
 
 def create_hdr_to_sdr_filter(color_transfer: str | None) -> str:
@@ -679,14 +711,24 @@ def _build_portrait_video_filter(
     hdr_filter: str,
     fade_filters: str,
     stabilize_filter: str = "",
+    lut_filter: str = "",
+    lut_before_hdr: bool = False,
 ) -> str:
-    """세로 영상용 filter_complex 문자열 생성 (stabilize → HDR → split → blur → overlay)."""
+    """세로 영상용 filter_complex 문자열 생성.
+
+    기본: stabilize → HDR → split → blur → overlay → LUT → fade
+    before: stabilize → LUT → HDR → split → blur → overlay → fade
+    """
     fg_height = target_height
     fg_width = int(source_width * (fg_height / source_height))
 
-    # 입력: (안정화) → (HDR 변환) → split
-    # 안정화를 가장 먼저 적용하여 이후 처리가 안정된 프레임 위에서 수행되도록 함
-    split_input = ",".join(filter(None, [stabilize_filter, hdr_filter, "split=2[bg][fg]"]))
+    # 입력 체인: 안정화 → (LUT before) → HDR → (LUT after 아님) → split
+    if lut_before_hdr and lut_filter:
+        split_input = ",".join(
+            filter(None, [stabilize_filter, lut_filter, hdr_filter, "split=2[bg][fg]"])
+        )
+    else:
+        split_input = ",".join(filter(None, [stabilize_filter, hdr_filter, "split=2[bg][fg]"]))
 
     # 배경: 스케일 → crop → blur
     bg_chain = (
@@ -698,9 +740,12 @@ def _build_portrait_video_filter(
     # 전경: 높이에 맞춰 스케일
     fg_chain = f"[fg]scale={fg_width}:{fg_height}[fg_scaled]"
 
-    # 합성: 중앙 오버레이 + (fade)
+    # 합성: 중앙 오버레이 + (LUT after) + (fade)
     overlay = "[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2"
-    merge_chain = ",".join(filter(None, [overlay, fade_filters]))
+    if not lut_before_hdr and lut_filter:
+        merge_chain = ",".join(filter(None, [overlay, lut_filter, fade_filters]))
+    else:
+        merge_chain = ",".join(filter(None, [overlay, fade_filters]))
 
     return f"[0:v]{split_input};{bg_chain};{fg_chain};{merge_chain}[v_out]"
 
@@ -711,15 +756,25 @@ def _build_landscape_video_filter(
     hdr_filter: str,
     fade_filters: str,
     stabilize_filter: str = "",
+    lut_filter: str = "",
+    lut_before_hdr: bool = False,
 ) -> str:
-    """가로 영상용 -vf 필터 문자열 생성 (stabilize → HDR → scale → pad → fade)."""
+    """가로 영상용 -vf 필터 문자열 생성.
+
+    기본: stabilize → HDR → scale+pad → LUT → fade
+    before: stabilize → LUT → HDR → scale+pad → fade
+    """
     scale_pad = (
         f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
         f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2"
     )
 
-    # 안정화 → HDR 변환을 먼저 적용하여 이후 처리가 안정된 BT.709에서 수행되도록 함
-    parts = [p for p in [stabilize_filter, hdr_filter, scale_pad, fade_filters] if p]
+    if lut_before_hdr and lut_filter:
+        chain = [stabilize_filter, lut_filter, hdr_filter, scale_pad, fade_filters]
+    else:
+        lut_part = lut_filter if lut_filter else ""
+        chain = [stabilize_filter, hdr_filter, scale_pad, lut_part, fade_filters]
+    parts = [p for p in chain if p]
     return f"[0:v]{','.join(parts)}[v_out]"
 
 
@@ -740,12 +795,19 @@ def create_combined_filter(
     denoise_level: str = "medium",
     silence_remove: str = "",
     loudnorm_analysis: LoudnormAnalysis | None = None,
+    lut_path: str | None = None,
+    lut_before_hdr: bool = False,
 ) -> tuple[str, str]:
     """영상·오디오 필터를 결합하여 최종 FFmpeg ``-filter_complex`` 문자열을 생성한다.
 
     **비디오 필터 체인 흐름**::
 
-        입력 → [HDR→SDR] → [세로: split→blur+overlay / 가로: scale] → [fade] → [stabilize] → 출력
+        입력 → [stabilize] → [HDR→SDR] → [세로: split→blur+overlay / 가로: scale+pad]
+        → [LUT] → [fade] → 출력
+
+    ``lut_before_hdr=True`` 일 때::
+
+        입력 → [stabilize] → [LUT] → [HDR→SDR] → [...] → [fade] → 출력
 
     **오디오 필터 체인 흐름** (``create_audio_filter_chain`` 참조)::
 
@@ -766,7 +828,10 @@ def create_combined_filter(
         stabilize_filter: vidstabtransform 필터 문자열 (빈 문자열이면 미적용)
         denoise: 오디오 노이즈 제거 활성화 여부
         denoise_level: 노이즈 제거 강도 (light/medium/heavy)
+        silence_remove: 무음 구간 제거 필터 문자열
         loudnorm_analysis: EBU R128 loudnorm 분석 결과 (None이면 미적용)
+        lut_path: LUT 파일 경로 (None이면 미적용)
+        lut_before_hdr: LUT를 HDR 변환 앞에 적용할지 여부
 
     Returns:
         (video_filter, audio_filter) 튜플
@@ -779,6 +844,11 @@ def create_combined_filter(
         effective_fade_out,
     )
     hdr_filter = create_hdr_to_sdr_filter(color_transfer)
+
+    # LUT 필터 생성
+    lut_filter_str = ""
+    if lut_path:
+        lut_filter_str = create_lut_filter(lut_path)
 
     fade_filters = ""
     if effective_fade_in > 0:
@@ -797,6 +867,8 @@ def create_combined_filter(
             hdr_filter,
             fade_filters,
             stabilize_filter,
+            lut_filter=lut_filter_str,
+            lut_before_hdr=lut_before_hdr,
         )
     else:
         video_filter = _build_landscape_video_filter(
@@ -805,6 +877,8 @@ def create_combined_filter(
             hdr_filter,
             fade_filters,
             stabilize_filter,
+            lut_filter=lut_filter_str,
+            lut_before_hdr=lut_before_hdr,
         )
 
     audio_filter = create_audio_filter_chain(

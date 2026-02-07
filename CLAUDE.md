@@ -56,6 +56,11 @@ uv run tubearchive --timelapse 10x ~/Videos/                      # 10배속 타
 uv run tubearchive --timelapse 30x --timelapse-audio ~/Videos/    # 오디오 유지 (atempo 가속)
 uv run tubearchive --timelapse 5x --timelapse-resolution 1080p ~/Videos/  # 해상도 변환
 
+# LUT 컬러 그레이딩
+uv run tubearchive --lut ~/LUTs/nikon_rec709.cube ~/Videos/       # LUT 직접 지정
+uv run tubearchive --auto-lut ~/Videos/                           # 기기별 자동 LUT 매칭
+uv run tubearchive --lut ~/LUTs/nlog.cube --lut-before-hdr ~/Videos/  # HDR 변환 전 적용
+
 # 썸네일
 uv run tubearchive --thumbnail ~/Videos/            # 기본 지점(10%, 33%, 50%) 썸네일
 uv run tubearchive --thumbnail --thumbnail-at 00:01:30 ~/Videos/  # 특정 시점
@@ -126,6 +131,14 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 # policy = "keep"                           # keep/move/delete (TUBEARCHIVE_ARCHIVE_POLICY)
 # destination = "~/Videos/archive"          # move 정책 시 이동 경로 (TUBEARCHIVE_ARCHIVE_DESTINATION)
 
+[color_grading]
+# auto_lut = true                           # 기기별 자동 LUT 매칭 (TUBEARCHIVE_AUTO_LUT)
+
+[color_grading.device_luts]
+# nikon = "~/LUTs/nikon_nlog_to_rec709.cube"
+# gopro = "~/LUTs/gopro_flat_to_rec709.cube"
+# iphone = "~/LUTs/apple_log_to_rec709.cube"
+
 [youtube]
 # client_secrets = "~/.tubearchive/client_secrets.json"
 # token = "~/.tubearchive/youtube_token.json"
@@ -141,8 +154,8 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 ### 파이프라인 흐름 (cli.py:run_pipeline)
 ```
 scan_videos() → group_sequences() → reorder_with_groups()
-  → TranscodeOptions 생성
-  → Transcoder.transcode_video() (순차 또는 병렬)
+  → TranscodeOptions 생성 (LUT 옵션 포함)
+  → Transcoder.transcode_video() (순차 또는 병렬, auto-lut 매칭 + lut3d 필터)
     → [_run_vidstab_analysis()]  ← 영상 안정화 1st pass (--stabilize 시)
   → Merger.merge()
   → [_apply_bgm_mixing()]  ← BGM 믹싱 (--bgm 옵션 시)
@@ -201,6 +214,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - Resume: `ResumeManager`가 진행률 추적, 재시작 시 이어서 처리
 - Loudnorm: `_run_loudnorm_analysis()` → 1st pass 분석 → 2nd pass 적용 (normalize_audio=True일 때)
 - Vidstab: `_run_vidstab_analysis()` → 1st pass detect → 2nd pass transform (stabilize=True일 때, 실패 시 graceful skip)
+- Auto-LUT: `_resolve_auto_lut()` — 기기 모델 부분 문자열 매칭 → 가장 긴 키워드 우선 → LUT 파일 경로 반환
 
 **ffmpeg/executor.py**: FFmpeg 명령 실행 및 진행률 추적
 - `FFmpegExecutor`: 명령 빌드(`build_*`) 및 실행(`run`, `run_analysis`) 오케스트레이터
@@ -231,6 +245,9 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - Timelapse: `setpts=PTS/{speed}` 비디오 배속, `atempo` 체인 오디오 가속 (0.5~2.0 범위 자동 분할)
   - `create_timelapse_video_filter()`, `create_timelapse_audio_filter()`
   - 상수: `TIMELAPSE_MIN_SPEED=2`, `TIMELAPSE_MAX_SPEED=60`, `ATEMPO_MAX=2.0`
+- LUT 컬러 그레이딩: `create_lut_filter()` — .cube/.3dl 파일 → `lut3d=file=<경로>` 필터
+  - `LUT_SUPPORTED_EXTENSIONS = {".cube", ".3dl"}`
+  - 필터 체인 위치: 기본(after) HDR→scale→**LUT**→fade / before: stab→**LUT**→HDR→scale→fade
 
 **ffmpeg/thumbnail.py**: 썸네일 추출
 - 병합 영상에서 지정 시점(기본: 10%, 33%, 50%) JPEG 썸네일 생성
@@ -252,6 +269,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `BGMConfig`: bgm_path, bgm_volume, bgm_loop
 - `ArchiveConfig`: policy (keep/move/delete), destination
 - `YouTubeConfig`: client_secrets, token, playlist, upload_chunk_mb, upload_privacy
+- `ColorGradingConfig`: auto_lut, device_luts (기기 키워드→LUT 경로 매핑)
 - `load_config()`: `~/.tubearchive/config.toml` 파싱 (에러 시 빈 config)
 - `apply_config_to_env()`: 미설정 환경변수에만 config 값 주입
 - `generate_default_config()`: 주석 포함 기본 템플릿 생성
@@ -337,6 +355,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 | `TUBEARCHIVE_YOUTUBE_TOKEN` | 토큰 파일 경로 | `~/.tubearchive/youtube_token.json` |
 | `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID | - |
 | `TUBEARCHIVE_UPLOAD_CHUNK_MB` | 업로드 청크 MB (1-256) | 32 |
+| `TUBEARCHIVE_AUTO_LUT` | 기기별 자동 LUT 매칭 (true/false) | false |
 
 ### 테스트 구조
 ```

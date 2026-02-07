@@ -46,6 +46,7 @@ ENV_ARCHIVE_DESTINATION = "TUBEARCHIVE_ARCHIVE_DESTINATION"
 ENV_STABILIZE = "TUBEARCHIVE_STABILIZE"
 ENV_STABILIZE_STRENGTH = "TUBEARCHIVE_STABILIZE_STRENGTH"
 ENV_STABILIZE_CROP = "TUBEARCHIVE_STABILIZE_CROP"
+ENV_AUTO_LUT = "TUBEARCHIVE_AUTO_LUT"
 
 
 @dataclass(frozen=True)
@@ -112,13 +113,30 @@ class ArchiveConfig:
 
 
 @dataclass(frozen=True)
+class ColorGradingConfig:
+    """``config.toml`` 의 ``[color_grading]`` 섹션.
+
+    LUT(Look-Up Table) 기반 컬러 그레이딩 설정을 관리한다.
+    """
+
+    auto_lut: bool | None = None
+    """기기 모델명 기반 자동 LUT 적용 여부."""
+    device_luts: dict[str, str] = field(default_factory=dict)
+    """기기 키워드 → LUT 파일 경로 매핑."""
+
+
+@dataclass(frozen=True)
 class AppConfig:
-    """애플리케이션 전체 설정 (``[general]`` + ``[bgm]`` + ``[youtube]`` + ``[archive]`` 통합)."""
+    """애플리케이션 전체 설정.
+
+    [general] + [bgm] + [youtube] + [archive] + [color_grading] 통합.
+    """
 
     general: GeneralConfig = field(default_factory=GeneralConfig)
     bgm: BGMConfig = field(default_factory=BGMConfig)
     youtube: YouTubeConfig = field(default_factory=YouTubeConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
+    color_grading: ColorGradingConfig = field(default_factory=ColorGradingConfig)
 
 
 def _warn_type(field_name: str, expected: str, value: object) -> None:
@@ -320,6 +338,30 @@ def _parse_archive(data: dict[str, object]) -> ArchiveConfig:
     )
 
 
+def _parse_color_grading(data: dict[str, object]) -> ColorGradingConfig:
+    """[color_grading] 섹션 파싱. 타입 오류 시 해당 필드 무시."""
+    section = "color_grading"
+
+    auto_lut = _parse_bool(data, "auto_lut", section)
+
+    # device_luts: 중첩 테이블 {키워드: LUT 경로}
+    device_luts: dict[str, str] = {}
+    raw_device_luts = data.get("device_luts")
+    if isinstance(raw_device_luts, dict):
+        for key, value in raw_device_luts.items():
+            if isinstance(value, str):
+                device_luts[key] = value
+            else:
+                _warn_type(f"{section}.device_luts.{key}", "str", value)
+    elif raw_device_luts is not None:
+        _warn_type(f"{section}.device_luts", "table", raw_device_luts)
+
+    return ColorGradingConfig(
+        auto_lut=auto_lut,
+        device_luts=device_luts,
+    )
+
+
 def load_config(path: Path | None = None) -> AppConfig:
     """
     TOML 설정 파일 로드.
@@ -349,6 +391,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     bgm_data = raw.get("bgm", {})
     youtube_data = raw.get("youtube", {})
     archive_data = raw.get("archive", {})
+    color_grading_data = raw.get("color_grading", {})
 
     if isinstance(general_data, dict):
         general = _parse_general(general_data)
@@ -390,7 +433,23 @@ def load_config(path: Path | None = None) -> AppConfig:
             )
         archive = ArchiveConfig()
 
-    return AppConfig(general=general, bgm=bgm, youtube=youtube, archive=archive)
+    if isinstance(color_grading_data, dict):
+        color_grading = _parse_color_grading(color_grading_data)
+    else:
+        if color_grading_data:
+            logger.warning(
+                "config: [color_grading] 섹션이 테이블이 아닙니다 (got %s)",
+                type(color_grading_data).__name__,
+            )
+        color_grading = ColorGradingConfig()
+
+    return AppConfig(
+        general=general,
+        bgm=bgm,
+        youtube=youtube,
+        archive=archive,
+        color_grading=color_grading,
+    )
 
 
 def apply_config_to_env(config: AppConfig) -> None:
@@ -456,6 +515,10 @@ def apply_config_to_env(config: AppConfig) -> None:
     if config.archive.destination is not None:
         mappings.append((ENV_ARCHIVE_DESTINATION, config.archive.destination))
 
+    # color grading
+    if config.color_grading.auto_lut is not None:
+        mappings.append((ENV_AUTO_LUT, str(config.color_grading.auto_lut).lower()))
+
     for env_key, value in mappings:
         if value is not None and env_key not in os.environ:
             os.environ[env_key] = value
@@ -501,6 +564,12 @@ def generate_default_config() -> str:
 [archive]
 # policy = "keep"                           # keep/move/delete (TUBEARCHIVE_ARCHIVE_POLICY)
 # destination = "~/Videos/archive"          # move 시 이동 경로 (TUBEARCHIVE_ARCHIVE_DESTINATION)
+
+[color_grading]
+# auto_lut = false                          # 기기별 자동 LUT 적용 (TUBEARCHIVE_AUTO_LUT)
+# [color_grading.device_luts]
+# nikon = "~/LUTs/nikon_nlog_to_rec709.cube"
+# gopro = "~/LUTs/gopro_flat_to_rec709.cube"
 """
 
 
@@ -742,3 +811,8 @@ def get_default_stabilize_crop() -> str | None:
         return normalized
     logger.warning("%s=%s is not a valid crop mode", ENV_STABILIZE_CROP, env_val)
     return None
+
+
+def get_default_auto_lut() -> bool:
+    """환경변수 ``TUBEARCHIVE_AUTO_LUT`` 에서 자동 LUT 적용 여부를 가져온다."""
+    return _get_env_bool(ENV_AUTO_LUT)

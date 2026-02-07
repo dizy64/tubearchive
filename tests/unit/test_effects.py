@@ -1,5 +1,7 @@
 """FFmpeg 효과 테스트."""
 
+from pathlib import Path
+
 import pytest
 
 from tubearchive.ffmpeg.effects import (
@@ -966,3 +968,120 @@ class TestTimelapseAudioFilter:
 
         with pytest.raises(ValueError, match="must be between"):
             create_timelapse_audio_filter(speed=61)
+
+
+class TestCombinedFilterWithLut:
+    """LUT 필터 통합 테스트."""
+
+    def test_landscape_lut_default_position(self, tmp_path: Path) -> None:
+        """가로 영상: LUT 기본 위치 (HDR 뒤, fade 앞)."""
+        lut_file = tmp_path / "test.cube"
+        lut_file.write_text("LUT data\n")
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            lut_path=str(lut_file),
+        )
+        assert "lut3d=" in video_filter
+        # LUT는 scale+pad 뒤에 위치
+        parts = video_filter.split(",")
+        lut_idx = next(i for i, p in enumerate(parts) if "lut3d" in p)
+        pad_idx = next(i for i, p in enumerate(parts) if "pad=" in p)
+        assert lut_idx > pad_idx
+
+    def test_landscape_lut_before_hdr(self, tmp_path: Path) -> None:
+        """가로 영상: LUT before HDR 위치."""
+        lut_file = tmp_path / "test.cube"
+        lut_file.write_text("LUT data\n")
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            color_transfer="arib-std-b67",
+            lut_path=str(lut_file),
+            lut_before_hdr=True,
+        )
+        assert "lut3d=" in video_filter
+        assert "colorspace=" in video_filter
+        # LUT가 HDR 변환 앞에 위치
+        lut_pos = video_filter.index("lut3d=")
+        hdr_pos = video_filter.index("colorspace=")
+        assert lut_pos < hdr_pos
+
+    def test_portrait_lut_default_position(self, tmp_path: Path) -> None:
+        """세로 영상: LUT 기본 위치 (overlay 뒤, fade 앞)."""
+        lut_file = tmp_path / "test.cube"
+        lut_file.write_text("LUT data\n")
+        video_filter, _ = create_combined_filter(
+            source_width=1080,
+            source_height=1920,
+            total_duration=60.0,
+            is_portrait=True,
+            lut_path=str(lut_file),
+        )
+        assert "lut3d=" in video_filter
+        assert "overlay" in video_filter
+
+    def test_portrait_lut_before_hdr(self, tmp_path: Path) -> None:
+        """세로 영상: LUT before HDR 위치."""
+        lut_file = tmp_path / "test.cube"
+        lut_file.write_text("LUT data\n")
+        video_filter, _ = create_combined_filter(
+            source_width=1080,
+            source_height=1920,
+            total_duration=60.0,
+            is_portrait=True,
+            color_transfer="arib-std-b67",
+            lut_path=str(lut_file),
+            lut_before_hdr=True,
+        )
+        assert "lut3d=" in video_filter
+        assert "colorspace=" in video_filter
+        # LUT가 HDR 변환 앞에 위치
+        lut_pos = video_filter.index("lut3d=")
+        hdr_pos = video_filter.index("colorspace=")
+        assert lut_pos < hdr_pos
+
+    def test_no_lut_when_none(self) -> None:
+        """lut_path=None일 때 LUT 필터 미포함."""
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            lut_path=None,
+        )
+        assert "lut3d=" not in video_filter
+
+    def test_lut_with_sdr_source(self, tmp_path: Path) -> None:
+        """SDR 소스에 LUT 적용."""
+        lut_file = tmp_path / "test.cube"
+        lut_file.write_text("LUT data\n")
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            color_transfer="bt709",
+            lut_path=str(lut_file),
+        )
+        assert "lut3d=" in video_filter
+        assert "colorspace=" not in video_filter
+
+    def test_lut_with_stabilize(self, tmp_path: Path) -> None:
+        """안정화 + LUT 조합."""
+        lut_file = tmp_path / "test.cube"
+        lut_file.write_text("LUT data\n")
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            stabilize_filter="vidstabtransform=input=/tmp/t.trf:smoothing=15:crop=keep",
+            lut_path=str(lut_file),
+        )
+        assert "lut3d=" in video_filter
+        assert "vidstabtransform=" in video_filter

@@ -50,6 +50,7 @@ from tubearchive.config import (
     ENV_OUTPUT_DIR,
     ENV_PARALLEL,
     ENV_YOUTUBE_PLAYLIST,
+    get_default_auto_lut,
     get_default_bgm_loop,
     get_default_bgm_path,
     get_default_bgm_volume,
@@ -89,7 +90,7 @@ from tubearchive.database.repository import (
     VideoRepository,
 )
 from tubearchive.database.schema import init_database
-from tubearchive.ffmpeg.effects import SilenceSegment
+from tubearchive.ffmpeg.effects import LUT_SUPPORTED_EXTENSIONS, SilenceSegment
 from tubearchive.models.video import FadeConfig, VideoFile
 from tubearchive.utils import truncate_path
 from tubearchive.utils.progress import MultiProgressBar, ProgressInfo, format_size
@@ -282,6 +283,10 @@ class ValidatedArgs:
     stabilize_strength: str = "medium"
     stabilize_crop: str = "crop"
     project: str | None = None
+    lut_path: Path | None = None
+    auto_lut: bool = False
+    lut_before_hdr: bool = False
+    device_luts: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -300,6 +305,10 @@ class TranscodeOptions:
         trim_silence: 무음 구간 제거 여부
         silence_threshold: 무음 기준 데시벨
         silence_min_duration: 최소 무음 길이 (초)
+        lut_path: LUT 파일 경로 (직접 지정, auto_lut보다 우선)
+        auto_lut: 기기 모델 기반 자동 LUT 매칭 활성화
+        lut_before_hdr: LUT를 HDR→SDR 변환 전에 적용
+        device_luts: 기기 키워드 → LUT 파일 경로 매핑
     """
 
     denoise: bool = False
@@ -313,6 +322,10 @@ class TranscodeOptions:
     stabilize: bool = False
     stabilize_strength: str = "medium"
     stabilize_crop: str = "crop"
+    lut_path: str | None = None
+    auto_lut: bool = False
+    lut_before_hdr: bool = False
+    device_luts: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -718,6 +731,35 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="RES",
         help="타임랩스 출력 해상도 (예: 1080p, 4k, 1920x1080, 기본: 원본 유지)",
     )
+
+    # LUT 컬러 그레이딩 옵션
+    parser.add_argument(
+        "--lut",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="LUT 파일 경로 (.cube, .3dl) — 트랜스코딩 시 lut3d 필터 적용",
+    )
+
+    parser.add_argument(
+        "--auto-lut",
+        action="store_true",
+        default=None,
+        help="기기 모델 기반 자동 LUT 매칭 (config.toml [color_grading.device_luts] 참조)",
+    )
+
+    parser.add_argument(
+        "--no-auto-lut",
+        action="store_true",
+        help="자동 LUT 매칭 비활성화 (환경변수/config 설정 무시)",
+    )
+
+    parser.add_argument(
+        "--lut-before-hdr",
+        action="store_true",
+        help="LUT를 HDR→SDR 변환 전에 적용 (기본: HDR 변환 후 적용)",
+    )
+
     parser.add_argument(
         "--status",
         nargs="?",
@@ -1012,6 +1054,32 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
 
     timelapse_audio: bool = getattr(args, "timelapse_audio", False)
     timelapse_resolution: str | None = getattr(args, "timelapse_resolution", None)
+
+    # LUT 옵션 검증 (CLI 인자 > 환경변수 > config > 기본값)
+    lut_path_arg = getattr(args, "lut", None)
+    lut_path: Path | None = None
+    if lut_path_arg:
+        lut_path = Path(lut_path_arg).expanduser().resolve()
+        if not lut_path.is_file():
+            raise FileNotFoundError(f"LUT file not found: {lut_path_arg}")
+        ext = lut_path.suffix.lower()
+        if ext not in LUT_SUPPORTED_EXTENSIONS:
+            raise ValueError(
+                f"Unsupported LUT format: {ext} "
+                f"(supported: {', '.join(sorted(LUT_SUPPORTED_EXTENSIONS))})"
+            )
+
+    auto_lut_flag = getattr(args, "auto_lut", None)
+    no_auto_lut_flag = getattr(args, "no_auto_lut", False)
+    if no_auto_lut_flag:
+        auto_lut = False
+    elif auto_lut_flag:
+        auto_lut = True
+    else:
+        auto_lut = get_default_auto_lut()
+
+    lut_before_hdr: bool = getattr(args, "lut_before_hdr", False)
+
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -1051,6 +1119,9 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         stabilize_strength=resolved_stabilize_strength,
         stabilize_crop=resolved_stabilize_crop,
         project=getattr(args, "project", None),
+        lut_path=lut_path,
+        auto_lut=auto_lut,
+        lut_before_hdr=lut_before_hdr,
     )
 
 
@@ -1385,6 +1456,10 @@ def _transcode_single(
             stabilize=opts.stabilize,
             stabilize_strength=opts.stabilize_strength,
             stabilize_crop=opts.stabilize_crop,
+            lut_path=opts.lut_path,
+            auto_lut=opts.auto_lut,
+            lut_before_hdr=opts.lut_before_hdr,
+            device_luts=opts.device_luts,
         )
         clip_info = _collect_clip_info(video_file)
         return TranscodeResult(
@@ -1507,6 +1582,10 @@ def _transcode_sequential(
                 stabilize=opts.stabilize,
                 stabilize_strength=opts.stabilize_strength,
                 stabilize_crop=opts.stabilize_crop,
+                lut_path=opts.lut_path,
+                auto_lut=opts.auto_lut,
+                lut_before_hdr=opts.lut_before_hdr,
+                device_luts=opts.device_luts,
                 progress_info_callback=on_progress_info,
             )
             clip_info = _collect_clip_info(video_file)
@@ -1691,6 +1770,10 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         stabilize=validated_args.stabilize,
         stabilize_strength=validated_args.stabilize_strength,
         stabilize_crop=validated_args.stabilize_crop,
+        lut_path=str(validated_args.lut_path) if validated_args.lut_path else None,
+        auto_lut=validated_args.auto_lut,
+        lut_before_hdr=validated_args.lut_before_hdr,
+        device_luts=validated_args.device_luts,
     )
 
     if validated_args.stabilize:
@@ -3215,6 +3298,10 @@ def main() -> None:
             return
 
         validated_args = validate_args(args)
+
+        # config의 device_luts를 validated_args에 주입
+        if validated_args.device_luts is None and config.color_grading.device_luts:
+            validated_args.device_luts = config.color_grading.device_luts
 
         if validated_args.dry_run:
             _cmd_dry_run(validated_args)
