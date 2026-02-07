@@ -35,10 +35,20 @@ uv run tubearchive --dry-run ~/Videos/
 uv run tubearchive --normalize-audio ~/Videos/      # EBU R128 loudnorm 2-pass
 uv run tubearchive --denoise ~/Videos/              # 오디오 노이즈 제거
 
+# BGM 믹싱
+uv run tubearchive --bgm ~/Music/bgm.mp3 ~/Videos/                        # BGM 믹싱
+uv run tubearchive --bgm ~/Music/bgm.mp3 --bgm-volume 0.3 ~/Videos/      # 볼륨 조절 (0.0~1.0)
+uv run tubearchive --bgm ~/Music/bgm.mp3 --bgm-loop ~/Videos/            # BGM 루프 재생
+
 # 무음 구간 감지 및 제거
 uv run tubearchive --detect-silence ~/Videos/                    # 무음 구간 감지만
 uv run tubearchive --trim-silence ~/Videos/                      # 시작/끝 무음 자동 제거
 uv run tubearchive --trim-silence --silence-threshold -35dB ~/Videos/  # 커스텀 설정
+
+# 타임랩스
+uv run tubearchive --timelapse 10x ~/Videos/                      # 10배속 타임랩스 생성
+uv run tubearchive --timelapse 30x --timelapse-audio ~/Videos/    # 오디오 유지 (atempo 가속)
+uv run tubearchive --timelapse 5x --timelapse-resolution 1080p ~/Videos/  # 해상도 변환
 
 # 썸네일
 uv run tubearchive --thumbnail ~/Videos/            # 기본 지점(10%, 33%, 50%) 썸네일
@@ -54,6 +64,10 @@ uv run tubearchive --upload ~/Videos/               # 병합 후 업로드
 uv run tubearchive --upload-only video.mp4          # 파일만 업로드
 # 분할 + 업로드: --upload와 --split-duration/--split-size 조합 시
 # 분할 파일별 챕터 리매핑 + "(Part N/M)" 제목으로 순차 업로드
+
+# 원본 파일 아카이브
+uv run tubearchive --archive-originals ~/Videos/archive ~/Videos/  # 원본 파일을 지정 경로로 이동
+uv run tubearchive --archive-force ~/Videos/                       # delete 정책 시 확인 프롬프트 우회
 
 # 작업 현황
 uv run tubearchive --status                         # 작업 현황 조회
@@ -83,6 +97,15 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 # group_sequences = true                    # 연속 파일 시퀀스 그룹핑 (TUBEARCHIVE_GROUP_SEQUENCES)
 # fade_duration = 0.5                       # 기본 페이드 시간 (초, TUBEARCHIVE_FADE_DURATION)
 
+[bgm]
+# bgm_path = "~/Music/bgm.mp3"             # 기본 BGM 파일 경로 (TUBEARCHIVE_BGM_PATH)
+# bgm_volume = 0.2                          # 상대 볼륨 0.0~1.0 (TUBEARCHIVE_BGM_VOLUME)
+# bgm_loop = false                          # 루프 재생 여부 (TUBEARCHIVE_BGM_LOOP)
+
+[archive]
+# policy = "keep"                           # keep/move/delete (TUBEARCHIVE_ARCHIVE_POLICY)
+# destination = "~/Videos/archive"          # move 정책 시 이동 경로 (TUBEARCHIVE_ARCHIVE_DESTINATION)
+
 [youtube]
 # client_secrets = "~/.tubearchive/client_secrets.json"
 # token = "~/.tubearchive/youtube_token.json"
@@ -101,8 +124,11 @@ scan_videos() → group_sequences() → reorder_with_groups()
   → TranscodeOptions 생성
   → Transcoder.transcode_video() (순차 또는 병렬)
   → Merger.merge()
+  → [_apply_bgm_mixing()]  ← BGM 믹싱 (--bgm 옵션 시)
+  → [TimelapseGenerator.generate()]
   → save_merge_job_to_db() + save_summary()
   → [VideoSplitter.split_video()] (--split-duration/--split-size)
+  → [_archive_originals()]
   → [upload_to_youtube()]
 ```
 
@@ -116,6 +142,9 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `ClipInfo`: NamedTuple (name, duration, device, shot_time) — 클립 메타데이터
 - `_upload_split_files()`: 분할 파일 순차 YouTube 업로드 (챕터 리매핑 + Part N/M 제목)
 - `_upload_after_pipeline()`: 업로드 라우터 — split_jobs DB에 분할 파일이 있으면 순차 업로드, 없으면 단일 업로드
+- `_apply_bgm_mixing()`: 병합 영상에 BGM 믹싱 (ffprobe 길이 확인 → create_bgm_filter → ffmpeg)
+- `_get_media_duration()`: ffprobe로 미디어 길이 조회 헬퍼
+- `_has_audio_stream()`: ffprobe로 오디오 스트림 존재 확인 헬퍼
 - `database_session()`: DB 연결 자동 정리 context manager
 - `truncate_path()`: 긴 경로 말줄임 유틸리티
 
@@ -134,6 +163,14 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `probe_duration()`: ffprobe로 분할 파일의 실제 길이(초) 조회 (키프레임 기준 분할이라 요청 시간과 다를 수 있음)
 - `probe_bitrate()`: ffprobe로 영상 비트레이트(bps) 조회 (크기 기준 분할 시 segment_time 추정에 사용)
 
+**core/timelapse.py**: 타임랩스 생성 엔진
+- `TimelapseGenerator`: 배속 조절 타임랩스 영상 생성 (2x ~ 60x)
+- `generate()`: setpts 기반 비디오 배속, atempo 체인 오디오 가속, 해상도 변환
+- `_parse_resolution()`: 프리셋(4k/1080p/720p) 또는 WIDTHxHEIGHT 형식 파싱
+- `RESOLUTION_PRESETS`: 해상도 프리셋 매핑
+- 비디오 코덱: libx264 (호환성 우선), CRF 23, yuv420p
+- 오디오: keep_audio=False면 제거(-an), True면 atempo 체인으로 가속 + AAC 128k
+
 **core/transcoder.py**: 트랜스코딩 엔진
 - `detect_metadata()` → 프로파일 선택 → FFmpeg 실행
 - VideoToolbox 실패 시 `_transcode_with_fallback()` (libx265)
@@ -150,6 +187,10 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - Loudnorm: EBU R128 타겟 상수 (`LOUDNORM_TARGET_I=-14.0`, `TP=-1.5`, `LRA=11.0`)
   - `create_loudnorm_analysis_filter()` (1st pass) → `parse_loudnorm_stats()` → `create_loudnorm_filter()` (2nd pass)
 - `create_audio_filter_chain()`: denoise → silence_remove → fade → loudnorm 오디오 필터 체인 통합
+- BGM 믹싱: `create_bgm_filter()` — aloop(무한루프)+atrim / atrim+afade / volume → amix 필터 생성
+- Timelapse: `setpts=PTS/{speed}` 비디오 배속, `atempo` 체인 오디오 가속 (0.5~2.0 범위 자동 분할)
+  - `create_timelapse_video_filter()`, `create_timelapse_audio_filter()`
+  - 상수: `TIMELAPSE_MIN_SPEED=2`, `TIMELAPSE_MAX_SPEED=60`, `ATEMPO_MAX=2.0`
 
 **ffmpeg/thumbnail.py**: 썸네일 추출
 - 병합 영상에서 지정 시점(기본: 10%, 33%, 50%) JPEG 썸네일 생성
@@ -160,8 +201,16 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `PROFILE_HDR_HLG/PQ`: BT.2020 (현재 미사용, SDR 통일)
 - 모든 프로파일: `p010le`, `29.97fps`, `50Mbps`
 
+**core/archiver.py**: 원본 파일 아카이브 관리
+- `ArchivePolicy`: 아카이브 정책 열거형 (KEEP/MOVE/DELETE)
+- `ArchiveStats`: 아카이브 결과 통계 (dataclass)
+- `Archiver`: 정책에 따라 원본 파일 이동/삭제, `ArchiveHistoryRepository`를 통해 이력 기록
+- 확인 프롬프트는 CLI 계층(`_prompt_archive_delete_confirmation`)에서 처리
+
 **config.py**: TOML 설정 파일 관리
 - `GeneralConfig`: output_dir, parallel, db_path, denoise, denoise_level, normalize_audio, group_sequences, fade_duration
+- `BGMConfig`: bgm_path, bgm_volume, bgm_loop
+- `ArchiveConfig`: policy (keep/move/delete), destination
 - `YouTubeConfig`: client_secrets, token, playlist, upload_chunk_mb, upload_privacy
 - `load_config()`: `~/.tubearchive/config.toml` 파싱 (에러 시 빈 config)
 - `apply_config_to_env()`: 미설정 환경변수에만 config 값 주입
@@ -188,8 +237,9 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `transcoding_jobs`: 작업 상태 (pending→processing→completed/failed)
 - `merge_jobs`: 병합 이력, YouTube 챕터 정보, `youtube_id` 저장
 - `split_jobs`: 영상 분할 이력 (merge_job FK, 분할 기준/값, 출력 파일 목록, `youtube_ids` JSON 배열, `error_message`)
+- `archive_history`: 원본 파일 아카이브(이동/삭제) 이력
 - DB 위치: `~/.tubearchive/tubearchive.db` (또는 `TUBEARCHIVE_DB_PATH`)
-- Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `SplitJobRepository`
+- Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `SplitJobRepository`, `ArchiveHistoryRepository`
 - **DB 접근 규칙**: cli.py에서 직접 SQL을 실행하지 않고 반드시 Repository 메서드를 사용
 - DB 연결은 `database_session()` context manager로 자동 정리
 
@@ -219,6 +269,11 @@ scan_videos() → group_sequences() → reorder_with_groups()
 | `TUBEARCHIVE_TRIM_SILENCE` | 무음 구간 제거 (true/false) | false |
 | `TUBEARCHIVE_SILENCE_THRESHOLD` | 무음 기준 데시벨 | -30dB |
 | `TUBEARCHIVE_SILENCE_MIN_DURATION` | 최소 무음 길이(초) | 2.0 |
+| `TUBEARCHIVE_BGM_PATH` | 기본 BGM 파일 경로 | - |
+| `TUBEARCHIVE_BGM_VOLUME` | BGM 상대 볼륨 (0.0~1.0) | 0.2 |
+| `TUBEARCHIVE_BGM_LOOP` | BGM 루프 재생 (true/false) | false |
+| `TUBEARCHIVE_ARCHIVE_POLICY` | 아카이브 정책 (keep/move/delete) | keep |
+| `TUBEARCHIVE_ARCHIVE_DESTINATION` | move 정책 시 이동 경로 | - |
 | `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
 | `TUBEARCHIVE_YOUTUBE_TOKEN` | 토큰 파일 경로 | `~/.tubearchive/youtube_token.json` |
 | `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID | - |

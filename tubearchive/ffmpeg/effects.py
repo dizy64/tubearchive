@@ -10,6 +10,7 @@
     - **무음 구간 감지/제거**: silencedetect, silenceremove 필터
     - **라우드니스 정규화**: EBU R128 loudnorm 2-pass
     - **영상 안정화**: vidstab detect + transform
+    - **타임랩스**: setpts 기반 배속 조절 (2x ~ 60x)
 """
 
 from __future__ import annotations
@@ -44,6 +45,14 @@ LOUDNORM_TARGET_LRA = 11.0
 
 # 세로 영상 배경 블러 반경
 PORTRAIT_BLUR_RADIUS = 20
+
+# 타임랩스 배속 범위
+TIMELAPSE_MIN_SPEED = 2
+"""타임랩스 최소 배속."""
+TIMELAPSE_MAX_SPEED = 60
+"""타임랩스 최대 배속."""
+ATEMPO_MAX = 2.0
+"""FFmpeg atempo 필터 최대 배속 (단일 필터 제약)."""
 
 
 class StabilizeStrength(Enum):
@@ -441,6 +450,73 @@ def parse_silence_segments(ffmpeg_output: str) -> list[SilenceSegment]:
     return segments
 
 
+def create_bgm_filter(
+    bgm_duration: float,
+    video_duration: float,
+    bgm_volume: float = 0.2,
+    bgm_loop: bool = False,
+    fade_out_duration: float = 3.0,
+    has_audio: bool = True,
+) -> str:
+    """
+    배경음악(BGM) 믹싱 필터 생성.
+
+    Args:
+        bgm_duration: BGM 파일의 길이 (초, > 0)
+        video_duration: 영상 파일의 길이 (초, > 0)
+        bgm_volume: BGM 상대 볼륨 (0.0~1.0, 기본: 0.2)
+        bgm_loop: BGM 루프 재생 여부 (기본: False)
+        fade_out_duration: 자동 페이드 아웃 시간 (초, 기본: 3.0)
+        has_audio: 영상에 오디오 트랙이 있는지 여부 (기본: True)
+
+    Returns:
+        filter_complex 문자열 (BGM 입력은 [1:a], 원본 오디오는 [0:a])
+
+    Raises:
+        ValueError: bgm_duration 또는 video_duration이 0 이하인 경우
+
+    Examples:
+        BGM 길이 < 영상: 루프 재생
+        BGM 길이 > 영상: 마지막 3초 페이드 아웃
+        BGM 길이 = 영상: 그대로 믹싱
+    """
+    if bgm_duration <= 0:
+        raise ValueError(f"BGM duration must be > 0, got: {bgm_duration}")
+    if video_duration <= 0:
+        raise ValueError(f"Video duration must be > 0, got: {video_duration}")
+
+    bgm_filters: list[str] = []
+
+    # BGM 길이가 영상보다 짧고 루프가 활성화된 경우
+    # loop=-1 (무한 루프) + atrim으로 정확한 길이 보장
+    if bgm_duration < video_duration and bgm_loop:
+        bgm_filters.append("aloop=loop=-1:size=2000000000")
+        bgm_filters.append(f"atrim=end={video_duration}")
+
+    # BGM 길이가 영상보다 긴 경우: 페이드 아웃
+    elif bgm_duration > video_duration:
+        bgm_filters.append(f"atrim=end={video_duration}")
+        # 짧은 영상: fade_out_duration을 video_duration에 맞춤
+        effective_fade = min(fade_out_duration, video_duration)
+        fade_start = video_duration - effective_fade
+        if effective_fade > 0:
+            bgm_filters.append(f"afade=t=out:st={fade_start}:d={effective_fade}")
+
+    # 볼륨 조절
+    bgm_filters.append(f"volume={bgm_volume}")
+
+    bgm_chain = ",".join(bgm_filters)
+
+    if not has_audio:
+        # 오디오 트랙 없는 영상: BGM만 단독 출력
+        return f"[1:a]{bgm_chain}[a_out]"
+
+    # amix로 원본 오디오와 BGM 믹싱
+    # weights: 원본=1, BGM=bgm_volume (amix 정규화 상쇄)
+    amix = f"amix=inputs=2:duration=first:dropout_transition=0:weights=1 {bgm_volume}"
+    return f"[1:a]{bgm_chain}[bgm_out];[0:a][bgm_out]{amix}[a_out]"
+
+
 def create_audio_filter_chain(
     total_duration: float,
     fade_duration: float = 0.5,
@@ -520,6 +596,65 @@ def create_vidstab_transform_filter(
     params = _VIDSTAB_PARAMS[strength]
     crop_value = _VIDSTAB_CROP[crop]
     return f"vidstabtransform=input={trf_path}:smoothing={params['smoothing']}:crop={crop_value}"
+
+
+def create_timelapse_video_filter(speed: int) -> str:
+    """
+    타임랩스 비디오 필터 생성 (setpts 방식).
+
+    프레임 타임스탬프를 조정하여 재생 속도를 변경합니다.
+    예: 10배속 → setpts=PTS/10
+
+    Args:
+        speed: 배속 (2-60 범위)
+
+    Returns:
+        FFmpeg -vf 필터 문자열
+
+    Raises:
+        ValueError: speed가 범위를 벗어난 경우
+    """
+    if speed < TIMELAPSE_MIN_SPEED or speed > TIMELAPSE_MAX_SPEED:
+        raise ValueError(
+            f"Speed must be between {TIMELAPSE_MIN_SPEED} and {TIMELAPSE_MAX_SPEED}, got {speed}"
+        )
+    return f"setpts=PTS/{speed}"
+
+
+def create_timelapse_audio_filter(speed: int) -> str:
+    """
+    타임랩스 오디오 필터 생성 (atempo 체인).
+
+    FFmpeg atempo 필터는 0.5-2.0 범위만 지원하므로,
+    높은 배속은 여러 atempo를 체인으로 연결하여 구현합니다.
+    예: 10배속 → atempo=2.0,atempo=2.0,atempo=2.5
+
+    Args:
+        speed: 배속 (2-60 범위)
+
+    Returns:
+        FFmpeg -af 필터 문자열
+
+    Raises:
+        ValueError: speed가 범위를 벗어난 경우
+    """
+    if speed < TIMELAPSE_MIN_SPEED or speed > TIMELAPSE_MAX_SPEED:
+        raise ValueError(
+            f"Speed must be between {TIMELAPSE_MIN_SPEED} and {TIMELAPSE_MAX_SPEED}, got {speed}"
+        )
+
+    # atempo는 0.5-2.0 범위만 지원, 체인으로 높은 배속 구현
+    filters: list[str] = []
+    remaining = float(speed)
+
+    while remaining > ATEMPO_MAX:
+        filters.append(f"atempo={ATEMPO_MAX}")
+        remaining /= ATEMPO_MAX
+
+    if remaining > 1.0:
+        filters.append(f"atempo={remaining:.1f}")
+
+    return ",".join(filters)
 
 
 def _build_portrait_video_filter(

@@ -48,6 +48,9 @@ from tubearchive.config import (
     ENV_OUTPUT_DIR,
     ENV_PARALLEL,
     ENV_YOUTUBE_PLAYLIST,
+    get_default_bgm_loop,
+    get_default_bgm_path,
+    get_default_bgm_volume,
     get_default_denoise,
     get_default_denoise_level,
     get_default_fade_duration,
@@ -256,12 +259,20 @@ class ValidatedArgs:
     trim_silence: bool = False
     silence_threshold: str = "-30dB"
     silence_min_duration: float = 2.0
+    bgm_path: Path | None = None
+    bgm_volume: float = 0.2
+    bgm_loop: bool = False
     exclude_patterns: list[str] | None = None
     include_only_patterns: list[str] | None = None
     sort_key: str = "time"
     reorder: bool = False
     split_duration: str | None = None
     split_size: str | None = None
+    archive_originals: Path | None = None
+    archive_force: bool = False
+    timelapse_speed: int | None = None
+    timelapse_audio: bool = False
+    timelapse_resolution: str | None = None
 
 
 @dataclass(frozen=True)
@@ -477,6 +488,28 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--bgm",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="배경음악 파일 경로 (MP3, AAC, WAV 등)",
+    )
+
+    parser.add_argument(
+        "--bgm-volume",
+        type=float,
+        default=None,
+        metavar="0.0-1.0",
+        help="배경음악 상대 볼륨 (0.0~1.0, 기본: 0.2)",
+    )
+
+    parser.add_argument(
+        "--bgm-loop",
+        action="store_true",
+        help="BGM 길이 < 영상 길이일 때 루프 재생",
+    )
+
+    parser.add_argument(
         "--detect-silence",
         action="store_true",
         help="무음 구간 감지 및 목록 출력 (제거하지 않음)",
@@ -629,6 +662,28 @@ def create_parser() -> argparse.ArgumentParser:
         help="파일 크기 기준 분할 (예: 10G, 256M), YouTube 256GB 제한 대응",
     )
 
+    # 타임랩스 옵션
+    parser.add_argument(
+        "--timelapse",
+        type=str,
+        default=None,
+        metavar="SPEED",
+        help="타임랩스 배속 (예: 10x, 범위: 2x-60x)",
+    )
+
+    parser.add_argument(
+        "--timelapse-audio",
+        action="store_true",
+        help="타임랩스에서 오디오 가속 (기본: 오디오 제거)",
+    )
+
+    parser.add_argument(
+        "--timelapse-resolution",
+        type=str,
+        default=None,
+        metavar="RES",
+        help="타임랩스 출력 해상도 (예: 1080p, 4k, 1920x1080, 기본: 원본 유지)",
+    )
     parser.add_argument(
         "--status",
         nargs="?",
@@ -670,6 +725,21 @@ def create_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="NAME",
         help="메타데이터 검색 시 기기 필터 (예: GoPro)",
+    )
+
+    # 아카이브 옵션
+    parser.add_argument(
+        "--archive-originals",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="트랜스코딩 완료 후 원본 파일을 지정 경로로 이동",
+    )
+
+    parser.add_argument(
+        "--archive-force",
+        action="store_true",
+        help="원본 파일 삭제(delete 정책) 시 확인 프롬프트 우회",
     )
 
     output_format_group = parser.add_mutually_exclusive_group()
@@ -794,6 +864,30 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     if silence_min_duration <= 0:
         raise ValueError(f"Silence duration must be > 0, got: {silence_min_duration}")
 
+    # BGM 옵션 검증 (CLI 인자 > 환경 변수 > 기본값)
+    bgm_path_arg = getattr(args, "bgm", None)
+    bgm_path: Path | None = None
+    if bgm_path_arg:
+        bgm_path = Path(bgm_path_arg).expanduser()
+        if not bgm_path.is_file():
+            raise FileNotFoundError(f"BGM file not found: {bgm_path_arg}")
+    else:
+        # 환경변수/설정파일에서 기본값
+        bgm_path = get_default_bgm_path()
+
+    bgm_volume_arg = getattr(args, "bgm_volume", None)
+    if bgm_volume_arg is not None:
+        if not (0.0 <= bgm_volume_arg <= 1.0):
+            raise ValueError(f"BGM volume must be in range [0.0, 1.0], got: {bgm_volume_arg}")
+        bgm_volume = bgm_volume_arg
+    else:
+        # 환경변수/설정파일에서 기본값, 없으면 0.2
+        env_bgm_volume = get_default_bgm_volume()
+        bgm_volume = env_bgm_volume if env_bgm_volume is not None else 0.2
+
+    bgm_loop_arg = getattr(args, "bgm_loop", False)
+    bgm_loop = bgm_loop_arg or get_default_bgm_loop()
+
     exclude_patterns: list[str] | None = getattr(args, "exclude", None)
     include_only_patterns: list[str] | None = getattr(args, "include_only", None)
     sort_key_str: str = getattr(args, "sort", None) or "time"
@@ -803,6 +897,34 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     split_duration: str | None = getattr(args, "split_duration", None)
     split_size: str | None = getattr(args, "split_size", None)
 
+    # 아카이브 옵션
+    archive_originals_arg = getattr(args, "archive_originals", None)
+    archive_originals: Path | None = None
+    if archive_originals_arg:
+        archive_originals = Path(archive_originals_arg).expanduser().resolve()
+        # 디렉토리가 존재하지 않으면 생성 예정이므로 검증 생략
+
+    archive_force_flag: bool = getattr(args, "archive_force", False)
+
+    # 타임랩스 옵션 검증
+    timelapse_speed: int | None = None
+    if hasattr(args, "timelapse") and args.timelapse:
+        timelapse_str = args.timelapse.lower().rstrip("x")
+        try:
+            timelapse_speed = int(timelapse_str)
+        except ValueError:
+            raise ValueError(f"Invalid timelapse speed format: {args.timelapse}") from None
+
+        from tubearchive.ffmpeg.effects import TIMELAPSE_MAX_SPEED, TIMELAPSE_MIN_SPEED
+
+        if timelapse_speed < TIMELAPSE_MIN_SPEED or timelapse_speed > TIMELAPSE_MAX_SPEED:
+            raise ValueError(
+                f"Timelapse speed must be between {TIMELAPSE_MIN_SPEED}x and "
+                f"{TIMELAPSE_MAX_SPEED}x, got {timelapse_speed}x"
+            )
+
+    timelapse_audio: bool = getattr(args, "timelapse_audio", False)
+    timelapse_resolution: str | None = getattr(args, "timelapse_resolution", None)
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -824,12 +946,20 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         trim_silence=trim_silence,
         silence_threshold=silence_threshold,
         silence_min_duration=silence_min_duration,
+        bgm_path=bgm_path,
+        bgm_volume=bgm_volume,
+        bgm_loop=bgm_loop,
         exclude_patterns=exclude_patterns,
         include_only_patterns=include_only_patterns,
         sort_key=sort_key_str,
         reorder=reorder_flag,
         split_duration=split_duration,
         split_size=split_size,
+        archive_originals=archive_originals,
+        archive_force=archive_force_flag,
+        timelapse_speed=timelapse_speed,
+        timelapse_audio=timelapse_audio,
+        timelapse_resolution=timelapse_resolution,
     )
 
 
@@ -871,6 +1001,157 @@ def get_output_filename(targets: list[Path]) -> str:
         name = "output"
 
     return f"{name}.mp4"
+
+
+def _get_media_duration(media_path: Path) -> float:
+    """ffprobe를 사용하여 미디어 파일의 길이를 초 단위로 반환한다.
+
+    Args:
+        media_path: 미디어 파일 경로
+
+    Returns:
+        길이 (초)
+
+    Raises:
+        RuntimeError: ffprobe 실행 실패 또는 길이 파싱 실패
+    """
+    try:
+        probe_result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(media_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        info = json.loads(probe_result.stdout)
+        return float(info["format"]["duration"])
+    except (subprocess.CalledProcessError, KeyError, ValueError) as e:
+        raise RuntimeError(f"Failed to probe duration: {media_path} - {e}") from e
+
+
+def _has_audio_stream(media_path: Path) -> bool:
+    """ffprobe를 사용하여 미디어 파일에 오디오 스트림이 있는지 확인한다.
+
+    Args:
+        media_path: 미디어 파일 경로
+
+    Returns:
+        오디오 스트림 존재 여부
+    """
+    try:
+        probe_result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                "-select_streams",
+                "a",
+                str(media_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        info = json.loads(probe_result.stdout)
+        streams = info.get("streams", [])
+        return len(streams) > 0
+    except (subprocess.CalledProcessError, ValueError):
+        return False
+
+
+def _apply_bgm_mixing(
+    video_path: Path,
+    bgm_path: Path,
+    bgm_volume: float,
+    bgm_loop: bool,
+    output_path: Path,
+) -> Path:
+    """병합된 영상에 BGM을 믹싱한다.
+
+    ffprobe로 영상/BGM 길이와 오디오 스트림 존재 여부를 확인한 뒤
+    :func:`~tubearchive.ffmpeg.effects.create_bgm_filter` 로 필터를 생성하고
+    ffmpeg로 오디오만 재인코딩한다 (영상은 ``-c:v copy``).
+
+    Args:
+        video_path: 병합된 영상 파일 경로
+        bgm_path: BGM 파일 경로
+        bgm_volume: BGM 상대 볼륨 (0.0~1.0)
+        bgm_loop: BGM 루프 재생 여부
+        output_path: 출력 파일 경로
+
+    Returns:
+        BGM이 믹싱된 최종 파일 경로
+
+    Raises:
+        RuntimeError: FFmpeg 실행 실패
+    """
+    from tubearchive.ffmpeg.effects import create_bgm_filter
+
+    logger.info(f"Applying BGM mixing: {bgm_path.name}")
+
+    video_duration = _get_media_duration(video_path)
+    bgm_duration = _get_media_duration(bgm_path)
+    has_audio = _has_audio_stream(video_path)
+
+    logger.info(
+        f"Video duration: {video_duration:.2f}s, BGM duration: {bgm_duration:.2f}s, "
+        f"has_audio: {has_audio}"
+    )
+
+    bgm_filter = create_bgm_filter(
+        bgm_duration=bgm_duration,
+        video_duration=video_duration,
+        bgm_volume=bgm_volume,
+        bgm_loop=bgm_loop,
+        has_audio=has_audio,
+    )
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(video_path),
+        "-i",
+        str(bgm_path),
+        "-filter_complex",
+        bgm_filter,
+        "-map",
+        "0:v",
+        "-map",
+        "[a_out]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "320k",
+        str(output_path),
+    ]
+
+    logger.info(f"Running BGM mixing: {' '.join(cmd)}")
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        logger.error(f"BGM mixing failed: {result.stderr}")
+        raise RuntimeError(f"BGM mixing failed: {result.stderr}")
+
+    logger.info(f"BGM mixing completed: {output_path}")
+    return output_path
 
 
 def handle_single_file_upload(
@@ -1329,6 +1610,21 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     )
     logger.info(f"Final output: {final_path}")
 
+    # 3.5 BGM 믹싱 (옵션)
+    if validated_args.bgm_path:
+        logger.info("Applying BGM mixing...")
+        temp_bgm_output = temp_dir / f"bgm_mixed_{final_path.name}"
+        bgm_mixed_path = _apply_bgm_mixing(
+            video_path=final_path,
+            bgm_path=validated_args.bgm_path,
+            bgm_volume=validated_args.bgm_volume,
+            bgm_loop=validated_args.bgm_loop,
+            output_path=temp_bgm_output,
+        )
+        # 원본을 BGM 믹싱된 파일로 대체
+        shutil.move(str(bgm_mixed_path), str(final_path))
+        logger.info(f"BGM mixing applied: {final_path}")
+
     # 4. DB 저장 및 Summary 생성
     video_ids = [r.video_id for r in results]
     video_clips = [r.clip_info for r in results]
@@ -1397,14 +1693,111 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
             logger.warning(f"Failed to split video: {e}")
             print(f"\n⚠️  영상 분할 실패: {e}")
 
+    # 4.7 타임랩스 생성 (비필수)
+    timelapse_path: Path | None = None
+    if validated_args.timelapse_speed:
+        timelapse_path = _generate_timelapse(final_path, validated_args)
+        if timelapse_path:
+            print(f"\n⏩ 타임랩스 ({validated_args.timelapse_speed}x) 생성:")
+            print(f"  - {timelapse_path}")
     # 5. 임시 파일 정리
     if not validated_args.keep_temp:
         _cleanup_temp(temp_dir, results, final_path, video_ids)
+
+    # 5.5 원본 파일 아카이빙 (CLI 옵션 또는 config 정책)
+    video_paths_for_archive = [
+        (r.video_id, vf.path) for r, vf in zip(results, video_files, strict=True)
+    ]
+    _archive_originals(video_paths_for_archive, validated_args)
 
     # 6. Summary 출력
     _print_summary(summary)
 
     return final_path
+
+
+def _archive_originals(
+    video_paths: list[tuple[int, Path]],
+    validated_args: ValidatedArgs,
+) -> None:
+    """원본 파일들을 정책에 따라 아카이빙한다.
+
+    CLI 옵션(``--archive-originals``) 또는 설정 파일(``[archive]``)의
+    정책을 읽어 원본 파일을 이동/삭제/유지한다.
+
+    우선순위: CLI ``--archive-originals`` > config ``[archive].policy``
+
+    Args:
+        video_paths: (video_id, original_path) 튜플 리스트
+        validated_args: 검증된 CLI 인자
+    """
+    from tubearchive.config import get_default_archive_destination, get_default_archive_policy
+    from tubearchive.core.archiver import ArchivePolicy, Archiver
+
+    if not video_paths:
+        logger.warning("아카이빙할 원본 파일이 없습니다.")
+        return
+
+    # 정책 결정: CLI 옵션 > config > 기본값(KEEP)
+    if validated_args.archive_originals:
+        policy = ArchivePolicy.MOVE
+        destination: Path | None = validated_args.archive_originals
+    else:
+        policy_str = get_default_archive_policy()
+        policy = ArchivePolicy(policy_str)
+        destination = get_default_archive_destination()
+
+    # KEEP 정책이면 아무것도 하지 않음
+    if policy == ArchivePolicy.KEEP:
+        logger.debug("아카이브 정책이 KEEP입니다. 원본 파일 유지.")
+        return
+
+    # MOVE 정책인데 destination이 없으면 경고
+    if policy == ArchivePolicy.MOVE and not destination:
+        logger.warning("MOVE 정책이 설정되었으나 destination이 없습니다. 원본 파일 유지.")
+        return
+
+    # DELETE 정책 시 확인 프롬프트 (core 모듈이 아닌 CLI 계층에서 처리)
+    if (
+        policy == ArchivePolicy.DELETE
+        and not validated_args.archive_force
+        and not _prompt_archive_delete_confirmation(len(video_paths))
+    ):
+        logger.info("사용자가 삭제를 취소했습니다.")
+        return
+
+    logger.info("원본 파일 아카이빙 시작 (정책: %s)...", policy.value)
+
+    with database_session() as conn:
+        from tubearchive.database.repository import ArchiveHistoryRepository
+
+        archive_repo = ArchiveHistoryRepository(conn)
+        archiver = Archiver(
+            repo=archive_repo,
+            policy=policy,
+            destination=destination,
+        )
+        stats = archiver.archive_files(video_paths)
+
+    if policy == ArchivePolicy.MOVE:
+        logger.info("아카이빙 완료: 이동 %d, 실패 %d", stats.moved, stats.failed)
+    elif policy == ArchivePolicy.DELETE:
+        logger.info("아카이빙 완료: 삭제 %d, 실패 %d", stats.deleted, stats.failed)
+
+
+def _prompt_archive_delete_confirmation(file_count: int) -> bool:
+    """원본 파일 삭제 확인 프롬프트를 표시한다.
+
+    Args:
+        file_count: 삭제 대상 파일 개수
+
+    Returns:
+        True: 삭제 승인, False: 취소
+    """
+    print(f"\n⚠️  {file_count}개의 원본 파일을 영구 삭제하려고 합니다.")
+    print("이 작업은 되돌릴 수 없습니다.")
+    response = input("계속하시겠습니까? (y/N): ").strip().lower()
+    return response in {"y", "yes"}
 
 
 def _detect_silence_only(
@@ -1484,6 +1877,47 @@ def _generate_thumbnails(
     except Exception:
         logger.warning("Failed to generate thumbnails", exc_info=True)
         return []
+
+
+def _generate_timelapse(
+    video_path: Path,
+    validated_args: ValidatedArgs,
+) -> Path | None:
+    """병합 영상에서 타임랩스 생성.
+
+    실패 시 경고만 남기고 None 반환 (파이프라인 중단 없음).
+
+    Args:
+        video_path: 입력 병합 영상 경로
+        validated_args: 검증된 CLI 인자
+
+    Returns:
+        타임랩스 파일 경로 (실패 시 None)
+    """
+    from tubearchive.core.timelapse import TimelapseGenerator
+
+    if validated_args.timelapse_speed is None:
+        return None
+
+    # 출력 경로 생성
+    stem = video_path.stem
+    suffix = video_path.suffix
+    output_dir = validated_args.output_dir or video_path.parent
+    output_path = output_dir / f"{stem}_timelapse_{validated_args.timelapse_speed}x{suffix}"
+
+    try:
+        logger.info(f"Generating {validated_args.timelapse_speed}x timelapse: {output_path.name}")
+        generator = TimelapseGenerator()
+        return generator.generate(
+            input_path=video_path,
+            output_path=output_path,
+            speed=validated_args.timelapse_speed,
+            keep_audio=validated_args.timelapse_audio,
+            resolution=validated_args.timelapse_resolution,
+        )
+    except Exception:
+        logger.warning("Failed to generate timelapse", exc_info=True)
+        return None
 
 
 def _mark_transcoding_jobs_merged(video_ids: list[int]) -> None:
@@ -2263,6 +2697,10 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
             print(f"  timestamps: {validated_args.thumbnail_timestamps}")
         else:
             print("  timestamps: auto (10%, 33%, 50%)")
+    if validated_args.bgm_path:
+        print(f"BGM: {validated_args.bgm_path}")
+        print(f"  volume: {validated_args.bgm_volume}")
+        print(f"  loop: {validated_args.bgm_loop}")
     print("=" * 30)
 
 
