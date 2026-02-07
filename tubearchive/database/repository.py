@@ -103,6 +103,41 @@ class VideoRepository:
         cursor = self.conn.execute("SELECT COUNT(*) as cnt FROM videos")
         return int(cursor.fetchone()["cnt"])
 
+    def get_stats(self, period: str | None = None) -> dict[str, object]:
+        """영상 통계를 집계한다.
+
+        Args:
+            period: 기간 필터 (LIKE 패턴, 예: ``'2026-01'``). None이면 전체.
+
+        Returns:
+            ``total``, ``total_duration``, ``devices`` 키를 가진 딕셔너리.
+        """
+        where = ""
+        params: list[str] = []
+        if period:
+            where = "WHERE creation_time LIKE ?"
+            params.append(f"{period}%")
+
+        row = self.conn.execute(
+            "SELECT COUNT(*) as cnt, COALESCE(SUM(duration_seconds), 0) as dur"
+            f" FROM videos {where}",
+            params,
+        ).fetchone()
+
+        device_rows = self.conn.execute(
+            f"""SELECT COALESCE(device_model, '미상') as device, COUNT(*) as cnt
+                FROM videos {where}
+                GROUP BY COALESCE(device_model, '미상')
+                ORDER BY cnt DESC""",
+            params,
+        ).fetchall()
+
+        return {
+            "total": int(row["cnt"]),
+            "total_duration": float(row["dur"]),
+            "devices": [(r["device"], int(r["cnt"])) for r in device_rows],
+        }
+
     def delete_by_ids(self, video_ids: list[int]) -> int:
         """여러 영상을 ID 목록으로 일괄 삭제한다.
 
@@ -323,6 +358,56 @@ class TranscodingJobRepository:
         self.conn.commit()
         return cursor.rowcount
 
+    def get_stats(self, period: str | None = None) -> dict[str, object]:
+        """트랜스코딩 작업 통계를 집계한다.
+
+        Args:
+            period: 기간 필터 (LIKE 패턴). None이면 전체.
+
+        Returns:
+            ``status_counts``, ``avg_encoding_speed`` 키를 가진 딕셔너리.
+        """
+        where = ""
+        params: list[str] = []
+        if period:
+            where = "WHERE tj.created_at LIKE ?"
+            params.append(f"{period}%")
+
+        status_rows = self.conn.execute(
+            f"""SELECT tj.status, COUNT(*) as cnt
+                FROM transcoding_jobs tj {where}
+                GROUP BY tj.status""",
+            params,
+        ).fetchall()
+        status_counts = {r["status"]: int(r["cnt"]) for r in status_rows}
+
+        speed_where = (
+            "WHERE tj.started_at IS NOT NULL"
+            " AND tj.completed_at IS NOT NULL"
+            " AND v.duration_seconds > 0"
+        )
+        speed_params: list[str] = []
+        if period:
+            speed_where += " AND tj.created_at LIKE ?"
+            speed_params.append(f"{period}%")
+
+        speed_row = self.conn.execute(
+            f"""SELECT AVG(
+                    v.duration_seconds /
+                    MAX((julianday(tj.completed_at) - julianday(tj.started_at)) * 86400, 0.001)
+                ) as avg_speed
+                FROM transcoding_jobs tj
+                JOIN videos v ON tj.video_id = v.id
+                {speed_where}""",
+            speed_params,
+        ).fetchone()
+        avg_speed = float(speed_row["avg_speed"]) if speed_row["avg_speed"] else None
+
+        return {
+            "status_counts": status_counts,
+            "avg_encoding_speed": avg_speed,
+        }
+
     def _row_to_job(self, row: sqlite3.Row) -> TranscodingJob:
         """Row를 TranscodingJob으로 변환."""
         return TranscodingJob(
@@ -499,6 +584,49 @@ class MergeJobRepository:
             "SELECT COUNT(*) as cnt FROM merge_jobs WHERE youtube_id IS NOT NULL"
         )
         return int(cursor.fetchone()["cnt"])
+
+    def get_stats(self, period: str | None = None) -> dict[str, object]:
+        """병합 작업 통계를 집계한다.
+
+        Args:
+            period: 기간 필터 (LIKE 패턴). None이면 전체.
+
+        Returns:
+            ``total``, ``completed``, ``failed``, ``uploaded``,
+            ``total_size_bytes``, ``total_duration`` 키를 가진 딕셔너리.
+        """
+        where = ""
+        params: list[str] = []
+        if period:
+            where = "WHERE created_at LIKE ?"
+            params.append(f"{period}%")
+
+        row = self.conn.execute(
+            f"""SELECT
+                    COUNT(*) as total,
+                    COALESCE(SUM(
+                        CASE WHEN status = 'completed' THEN 1 ELSE 0 END
+                    ), 0) as completed,
+                    COALESCE(SUM(
+                        CASE WHEN status = 'failed' THEN 1 ELSE 0 END
+                    ), 0) as failed,
+                    COALESCE(SUM(
+                        CASE WHEN youtube_id IS NOT NULL THEN 1 ELSE 0 END
+                    ), 0) as uploaded,
+                    COALESCE(SUM(total_size_bytes), 0) as total_size,
+                    COALESCE(SUM(total_duration_seconds), 0) as total_dur
+                FROM merge_jobs {where}""",
+            params,
+        ).fetchone()
+
+        return {
+            "total": int(row["total"]),
+            "completed": int(row["completed"]),
+            "failed": int(row["failed"]),
+            "uploaded": int(row["uploaded"]),
+            "total_size_bytes": int(row["total_size"]),
+            "total_duration": float(row["total_dur"]),
+        }
 
     def delete(self, job_id: int) -> None:
         """병합 작업 삭제."""
@@ -746,3 +874,33 @@ class ArchiveHistoryRepository:
             (operation,),
         )
         return int(cursor.fetchone()["cnt"])
+
+    def get_stats(self, period: str | None = None) -> dict[str, int]:
+        """아카이브 작업 통계를 집계한다.
+
+        Args:
+            period: 기간 필터 (LIKE 패턴). None이면 전체.
+
+        Returns:
+            ``moved``, ``deleted`` 키를 가진 딕셔너리.
+        """
+        where = ""
+        params: list[str] = []
+        if period:
+            where = "WHERE archived_at LIKE ?"
+            params.append(f"{period}%")
+
+        rows = self.conn.execute(
+            f"""SELECT operation, COUNT(*) as cnt
+                FROM archive_history {where}
+                GROUP BY operation""",
+            params,
+        ).fetchall()
+
+        result = {"moved": 0, "deleted": 0}
+        for r in rows:
+            if r["operation"] == "move":
+                result["moved"] = int(r["cnt"])
+            elif r["operation"] == "delete":
+                result["deleted"] = int(r["cnt"])
+        return result
