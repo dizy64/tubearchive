@@ -258,6 +258,8 @@ class ValidatedArgs:
     include_only_patterns: list[str] | None = None
     sort_key: str = "time"
     reorder: bool = False
+    split_duration: str | None = None
+    split_size: str | None = None
 
 
 @dataclass(frozen=True)
@@ -608,6 +610,23 @@ def create_parser() -> argparse.ArgumentParser:
         help="썸네일 JPEG 품질 (1-31, 낮을수록 고품질, 기본: 2)",
     )
 
+    # 영상 분할 옵션
+    parser.add_argument(
+        "--split-duration",
+        type=str,
+        default=None,
+        metavar="DURATION",
+        help="시간 기준 분할 (예: 1h, 30m, 1h30m), YouTube 12시간 제한 대응",
+    )
+
+    parser.add_argument(
+        "--split-size",
+        type=str,
+        default=None,
+        metavar="SIZE",
+        help="파일 크기 기준 분할 (예: 10G, 256M), YouTube 256GB 제한 대응",
+    )
+
     parser.add_argument(
         "--status",
         nargs="?",
@@ -778,6 +797,10 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     sort_key_str: str = getattr(args, "sort", None) or "time"
     reorder_flag: bool = getattr(args, "reorder", False)
 
+    # 영상 분할 옵션
+    split_duration: str | None = getattr(args, "split_duration", None)
+    split_size: str | None = getattr(args, "split_size", None)
+
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -803,6 +826,8 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         include_only_patterns=include_only_patterns,
         sort_key=sort_key_str,
         reorder=reorder_flag,
+        split_duration=split_duration,
+        split_size=split_size,
     )
 
 
@@ -1320,6 +1345,38 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
             print(f"\n🖼️  썸네일 {len(thumbnail_paths)}장 생성:")
             for tp in thumbnail_paths:
                 print(f"  - {tp}")
+
+    # 4.6 영상 분할 (비필수)
+    if validated_args.split_duration or validated_args.split_size:
+        from tubearchive.core.splitter import SplitOptions, VideoSplitter
+
+        splitter = VideoSplitter()
+        split_opts = SplitOptions(
+            duration=(
+                splitter.parse_duration(validated_args.split_duration)
+                if validated_args.split_duration
+                else None
+            ),
+            size=(
+                splitter.parse_size(validated_args.split_size)
+                if validated_args.split_size
+                else None
+            ),
+        )
+
+        split_output_dir = final_path.parent
+        logger.info("Splitting video...")
+        try:
+            split_files = splitter.split_video(final_path, split_output_dir, split_opts)
+            if split_files:
+                print(f"\n✂️  영상 {len(split_files)}개로 분할:")
+                for sf in split_files:
+                    file_size = sf.stat().st_size if sf.exists() else 0
+                    size_str = format_size(file_size)
+                    print(f"  - {sf.name} ({size_str})")
+        except Exception as e:
+            logger.warning(f"Failed to split video: {e}")
+            print(f"\n⚠️  영상 분할 실패: {e}")
 
     # 5. 임시 파일 정리
     if not validated_args.keep_temp:
