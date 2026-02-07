@@ -807,3 +807,67 @@ class TestClipInfo:
         info = ClipInfo(name="a.mp4", duration=1.0, device=None, shot_time=None)
         with pytest.raises(AttributeError):
             info.name = "b.mp4"  # type: ignore[misc]
+
+
+class TestSaveMergeJobToDb:
+    """save_merge_job_to_db 반환값 테스트."""
+
+    @patch("tubearchive.cli.database_session")
+    def test_returns_summary_and_merge_job_id(
+        self,
+        mock_db_session: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """summary와 merge_job_id를 tuple로 반환한다."""
+        from tubearchive.cli import save_merge_job_to_db
+
+        output_file = tmp_path / "output.mp4"
+        output_file.write_bytes(b"\x00" * 100)
+
+        mock_conn = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.create.return_value = 42
+        mock_db_session.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_db_session.return_value.__exit__ = MagicMock(return_value=False)
+
+        clips = [
+            ClipInfo(name="a.mp4", duration=10.0, device="Nikon", shot_time="10:00"),
+        ]
+
+        with (
+            patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo),
+            patch(
+                "tubearchive.utils.summary_generator.generate_clip_summary",
+                return_value="## Summary",
+            ),
+            patch(
+                "tubearchive.utils.summary_generator.generate_youtube_description",
+                return_value="desc",
+            ),
+        ):
+            result = save_merge_job_to_db(output_file, clips, [tmp_path], [1])
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        summary, merge_job_id = result
+        assert summary == "## Summary"
+        assert merge_job_id == 42
+
+    @patch("tubearchive.cli.database_session")
+    def test_returns_none_tuple_on_failure(
+        self,
+        mock_db_session: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """DB 저장 실패 시 (None, None)을 반환한다."""
+        from tubearchive.cli import save_merge_job_to_db
+
+        mock_db_session.return_value.__enter__ = MagicMock(side_effect=Exception("DB error"))
+        mock_db_session.return_value.__exit__ = MagicMock(return_value=False)
+
+        clips = [
+            ClipInfo(name="a.mp4", duration=10.0, device=None, shot_time=None),
+        ]
+
+        result = save_merge_job_to_db(tmp_path / "out.mp4", clips, [tmp_path], [1])
+        assert result == (None, None)

@@ -1330,7 +1330,7 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     # 4. DB 저장 및 Summary 생성
     video_ids = [r.video_id for r in results]
     video_clips = [r.clip_info for r in results]
-    summary = save_merge_job_to_db(
+    summary, merge_job_id = save_merge_job_to_db(
         final_path,
         video_clips,
         validated_args.targets,
@@ -1365,6 +1365,8 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         )
 
         split_output_dir = final_path.parent
+        split_criterion = "duration" if split_opts.duration else "size"
+        split_value = validated_args.split_duration or validated_args.split_size or ""
         logger.info("Splitting video...")
         try:
             split_files = splitter.split_video(final_path, split_output_dir, split_opts)
@@ -1374,6 +1376,25 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
                     file_size = sf.stat().st_size if sf.exists() else 0
                     size_str = format_size(file_size)
                     print(f"  - {sf.name} ({size_str})")
+
+                # DB에 split job 저장
+                if merge_job_id is not None:
+                    try:
+                        with database_session() as conn:
+                            from tubearchive.database.repository import (
+                                SplitJobRepository,
+                            )
+
+                            split_repo = SplitJobRepository(conn)
+                            split_repo.create(
+                                merge_job_id=merge_job_id,
+                                split_criterion=split_criterion,
+                                split_value=split_value,
+                                output_files=split_files,
+                            )
+                        logger.debug("Split job saved to database")
+                    except Exception as e:
+                        logger.warning(f"Failed to save split job to DB: {e}")
         except Exception as e:
             logger.warning(f"Failed to split video: {e}")
             print(f"\n⚠️  영상 분할 실패: {e}")
@@ -1486,7 +1507,7 @@ def save_merge_job_to_db(
     targets: list[Path],
     video_ids: list[int],
     groups: list[FileSequenceGroup] | None = None,
-) -> str | None:
+) -> tuple[str | None, int | None]:
     """병합 작업 정보를 DB에 저장 (타임라인 및 Summary 포함).
 
     Args:
@@ -1497,7 +1518,7 @@ def save_merge_job_to_db(
         groups: 시퀀스 그룹 목록 (Summary 생성용)
 
     Returns:
-        콘솔 출력용 Summary 마크다운 (실패 시 None)
+        (콘솔 출력용 Summary 마크다운, merge_job_id) 튜플. 실패 시 (None, None).
     """
     from tubearchive.utils.summary_generator import (
         generate_clip_summary,
@@ -1544,7 +1565,7 @@ def save_merge_job_to_db(
             # YouTube 설명용 (타임스탬프 + 촬영기기)
             youtube_description = generate_youtube_description(video_clips, groups=groups)
 
-            repo.create(
+            merge_job_id = repo.create(
                 output_path=output_path,
                 video_ids=video_ids,
                 title=title,
@@ -1556,11 +1577,11 @@ def save_merge_job_to_db(
             )
 
         logger.debug("Merge job saved to database with summary")
-        return console_summary
+        return console_summary, merge_job_id
 
     except Exception as e:
         logger.warning(f"Failed to save merge job to DB: {e}")
-        return None
+        return None, None
 
 
 def upload_to_youtube(
