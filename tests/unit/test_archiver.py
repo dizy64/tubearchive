@@ -5,15 +5,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tubearchive.core.archiver import ArchivePolicy, Archiver
+from tubearchive.core.archiver import ArchivePolicy, Archiver, ArchiveStats
 
 
 @pytest.fixture
-def mock_conn():
-    """Mock SQLite 연결 객체."""
-    conn = MagicMock()
-    conn.execute.return_value = MagicMock(lastrowid=1)
-    return conn
+def mock_repo():
+    """Mock ArchiveHistoryRepository."""
+    return MagicMock()
 
 
 @pytest.fixture
@@ -27,31 +25,33 @@ def temp_files(tmp_path: Path):
     return files
 
 
-def test_archiver_init_keep_policy(mock_conn):
+# --- 초기화 테스트 ---
+
+
+def test_archiver_init_keep_policy(mock_repo):
     """KEEP 정책으로 Archiver 초기화."""
     archiver = Archiver(
-        conn=mock_conn,
+        repo=mock_repo,
         policy=ArchivePolicy.KEEP,
     )
     assert archiver.policy == ArchivePolicy.KEEP
     assert archiver.destination is None
-    assert archiver.force is False
 
 
-def test_archiver_init_move_policy_requires_destination(mock_conn):
+def test_archiver_init_move_policy_requires_destination(mock_repo):
     """MOVE 정책은 destination 필수."""
     with pytest.raises(ValueError, match="destination 경로를 지정"):
         Archiver(
-            conn=mock_conn,
+            repo=mock_repo,
             policy=ArchivePolicy.MOVE,
             destination=None,
         )
 
 
-def test_archiver_init_move_policy_with_destination(mock_conn, tmp_path: Path):
+def test_archiver_init_move_policy_with_destination(mock_repo, tmp_path: Path):
     """MOVE 정책 + destination 정상 초기화."""
     archiver = Archiver(
-        conn=mock_conn,
+        repo=mock_repo,
         policy=ArchivePolicy.MOVE,
         destination=tmp_path / "archive",
     )
@@ -59,31 +59,38 @@ def test_archiver_init_move_policy_with_destination(mock_conn, tmp_path: Path):
     assert archiver.destination == tmp_path / "archive"
 
 
-def test_archive_files_keep_policy(mock_conn, temp_files: list[Path]):
+# --- archive_files 정책별 동작 테스트 ---
+
+
+def test_archive_files_keep_policy(mock_repo, temp_files: list[Path]):
     """KEEP 정책: 파일 유지, 아무것도 안 함."""
     archiver = Archiver(
-        conn=mock_conn,
+        repo=mock_repo,
         policy=ArchivePolicy.KEEP,
     )
 
     video_paths = [(i + 1, path) for i, path in enumerate(temp_files)]
     stats = archiver.archive_files(video_paths)
 
-    assert stats["kept"] == 3
-    assert stats["moved"] == 0
-    assert stats["deleted"] == 0
-    assert stats["failed"] == 0
+    assert isinstance(stats, ArchiveStats)
+    assert stats.kept == 3
+    assert stats.moved == 0
+    assert stats.deleted == 0
+    assert stats.failed == 0
 
     # 모든 파일이 여전히 존재
     for path in temp_files:
         assert path.exists()
 
+    # Repository 호출 없음
+    mock_repo.insert_history.assert_not_called()
 
-def test_archive_files_move_policy(mock_conn, temp_files: list[Path], tmp_path: Path):
+
+def test_archive_files_move_policy(mock_repo, temp_files: list[Path], tmp_path: Path):
     """MOVE 정책: 파일 이동."""
     destination = tmp_path / "archive"
     archiver = Archiver(
-        conn=mock_conn,
+        repo=mock_repo,
         policy=ArchivePolicy.MOVE,
         destination=destination,
     )
@@ -91,9 +98,9 @@ def test_archive_files_move_policy(mock_conn, temp_files: list[Path], tmp_path: 
     video_paths = [(i + 1, path) for i, path in enumerate(temp_files)]
     stats = archiver.archive_files(video_paths)
 
-    assert stats["moved"] == 3
-    assert stats["deleted"] == 0
-    assert stats["failed"] == 0
+    assert stats.moved == 3
+    assert stats.deleted == 0
+    assert stats.failed == 0
 
     # 원본 파일 삭제됨
     for path in temp_files:
@@ -104,73 +111,35 @@ def test_archive_files_move_policy(mock_conn, temp_files: list[Path], tmp_path: 
         moved_path = destination / path.name
         assert moved_path.exists()
 
+    # Repository에 이력 기록됨
+    assert mock_repo.insert_history.call_count == 3
 
-def test_archive_files_delete_policy_without_force(mock_conn, temp_files: list[Path], monkeypatch):
-    """DELETE 정책: force 없이 확인 프롬프트 거부."""
+
+def test_archive_files_delete_policy(mock_repo, temp_files: list[Path]):
+    """DELETE 정책: 파일 삭제 (확인 프롬프트는 CLI 계층에서 처리)."""
     archiver = Archiver(
-        conn=mock_conn,
+        repo=mock_repo,
         policy=ArchivePolicy.DELETE,
-        force=False,
-    )
-
-    # 사용자 입력 'n' (거부)
-    monkeypatch.setattr("builtins.input", lambda _: "n")
-
-    video_paths = [(i + 1, path) for i, path in enumerate(temp_files)]
-    stats = archiver.archive_files(video_paths)
-
-    assert stats["kept"] == 3
-    assert stats["deleted"] == 0
-
-    # 모든 파일 유지
-    for path in temp_files:
-        assert path.exists()
-
-
-def test_archive_files_delete_policy_with_force(mock_conn, temp_files: list[Path]):
-    """DELETE 정책: force 플래그로 확인 우회."""
-    archiver = Archiver(
-        conn=mock_conn,
-        policy=ArchivePolicy.DELETE,
-        force=True,
     )
 
     video_paths = [(i + 1, path) for i, path in enumerate(temp_files)]
     stats = archiver.archive_files(video_paths)
 
-    assert stats["deleted"] == 3
-    assert stats["failed"] == 0
+    assert stats.deleted == 3
+    assert stats.failed == 0
 
     # 모든 파일 삭제됨
     for path in temp_files:
         assert not path.exists()
 
-
-def test_archive_files_delete_policy_with_confirmation(
-    mock_conn, temp_files: list[Path], monkeypatch
-):
-    """DELETE 정책: 확인 프롬프트 승인."""
-    archiver = Archiver(
-        conn=mock_conn,
-        policy=ArchivePolicy.DELETE,
-        force=False,
-    )
-
-    # 사용자 입력 'y' (승인)
-    monkeypatch.setattr("builtins.input", lambda _: "y")
-
-    video_paths = [(i + 1, path) for i, path in enumerate(temp_files)]
-    stats = archiver.archive_files(video_paths)
-
-    assert stats["deleted"] == 3
-    assert stats["failed"] == 0
-
-    # 모든 파일 삭제됨
-    for path in temp_files:
-        assert not path.exists()
+    # Repository에 이력 기록됨
+    assert mock_repo.insert_history.call_count == 3
 
 
-def test_move_file_creates_destination_dir(mock_conn, tmp_path: Path):
+# --- _move_file 테스트 ---
+
+
+def test_move_file_creates_destination_dir(mock_repo, tmp_path: Path):
     """이동 시 destination 디렉토리 자동 생성."""
     source = tmp_path / "source" / "video.mp4"
     source.parent.mkdir()
@@ -178,7 +147,7 @@ def test_move_file_creates_destination_dir(mock_conn, tmp_path: Path):
 
     destination_dir = tmp_path / "archive" / "subdir"
     archiver = Archiver(
-        conn=mock_conn,
+        repo=mock_repo,
         policy=ArchivePolicy.MOVE,
         destination=destination_dir,
     )
@@ -190,18 +159,19 @@ def test_move_file_creates_destination_dir(mock_conn, tmp_path: Path):
     assert result == destination_dir / "video.mp4"
 
 
-def test_move_file_handles_name_collision(mock_conn, tmp_path: Path):
+def test_move_file_handles_name_collision(mock_repo, tmp_path: Path):
     """동일 파일명 충돌 시 번호 추가."""
-    source1 = tmp_path / "source" / "video.mp4"
+    source1 = tmp_path / "source1" / "video.mp4"
     source1.parent.mkdir()
     source1.write_text("content1")
 
-    source2 = tmp_path / "source" / "video.mp4"
+    source2 = tmp_path / "source2" / "video.mp4"
+    source2.parent.mkdir()
     source2.write_text("content2")
 
     destination_dir = tmp_path / "archive"
     archiver = Archiver(
-        conn=mock_conn,
+        repo=mock_repo,
         policy=ArchivePolicy.MOVE,
         destination=destination_dir,
     )
@@ -210,63 +180,103 @@ def test_move_file_handles_name_collision(mock_conn, tmp_path: Path):
     result1 = archiver._move_file(source1)
     assert result1 == destination_dir / "video.mp4"
 
-    # 두 번째 이동 (동일 이름)
-    source2.write_text("content2")  # 다시 생성
+    # 두 번째 이동 (동일 파일명 → 충돌 처리)
     result2 = archiver._move_file(source2)
     assert result2 == destination_dir / "video_1.mp4"
 
 
-def test_record_history_called_on_move(mock_conn, tmp_path: Path):
-    """MOVE 작업 시 DB 이력 기록 호출."""
+# --- Repository 이력 기록 테스트 ---
+
+
+def test_record_history_called_on_move(mock_repo, tmp_path: Path):
+    """MOVE 작업 시 Repository를 통해 이력 기록."""
     source = tmp_path / "video.mp4"
     source.write_text("content")
 
     destination_dir = tmp_path / "archive"
     archiver = Archiver(
-        conn=mock_conn,
+        repo=mock_repo,
         policy=ArchivePolicy.MOVE,
         destination=destination_dir,
     )
 
     archiver.archive_files([(1, source)])
 
-    # execute 호출 확인
-    mock_conn.execute.assert_called()
-    call_args = mock_conn.execute.call_args[0]
-    assert "INSERT INTO archive_history" in call_args[0]
+    mock_repo.insert_history.assert_called_once()
+    call_args = mock_repo.insert_history.call_args
+    assert call_args[0][0] == 1  # video_id
+    assert call_args[0][1] == "move"  # operation
 
 
-def test_record_history_called_on_delete(mock_conn, tmp_path: Path):
-    """DELETE 작업 시 DB 이력 기록 호출."""
+def test_record_history_called_on_delete(mock_repo, tmp_path: Path):
+    """DELETE 작업 시 Repository를 통해 이력 기록."""
     source = tmp_path / "video.mp4"
     source.write_text("content")
 
     archiver = Archiver(
-        conn=mock_conn,
+        repo=mock_repo,
         policy=ArchivePolicy.DELETE,
-        force=True,
     )
 
     archiver.archive_files([(1, source)])
 
-    # execute 호출 확인
-    mock_conn.execute.assert_called()
-    call_args = mock_conn.execute.call_args[0]
-    assert "INSERT INTO archive_history" in call_args[0]
+    mock_repo.insert_history.assert_called_once()
+    call_args = mock_repo.insert_history.call_args
+    assert call_args[0][0] == 1  # video_id
+    assert call_args[0][1] == "delete"  # operation
+    assert call_args[0][3] is None  # destination_path
 
 
-def test_archive_files_handles_missing_file(mock_conn, tmp_path: Path):
-    """존재하지 않는 파일 삭제 시도: 경고만 출력, 실패 안 함."""
+# --- 에지 케이스 ---
+
+
+def test_archive_files_handles_missing_file(mock_repo, tmp_path: Path):
+    """존재하지 않는 파일 삭제 시도: 경고만 출력, 삭제 카운트 미반영."""
     non_existent = tmp_path / "non_existent.mp4"
 
     archiver = Archiver(
-        conn=mock_conn,
+        repo=mock_repo,
         policy=ArchivePolicy.DELETE,
-        force=True,
     )
 
     stats = archiver.archive_files([(1, non_existent)])
 
-    # 실패가 아니라 성공으로 처리 (존재하지 않으면 경고만)
-    assert stats["deleted"] == 1
-    assert stats["failed"] == 0
+    # 존재하지 않는 파일은 삭제 카운트에서 제외
+    assert stats.deleted == 0
+    assert stats.failed == 0
+
+    # DB 이력도 기록하지 않음
+    mock_repo.insert_history.assert_not_called()
+
+
+def test_archive_files_empty_list(mock_repo):
+    """빈 리스트: 아무 작업 없이 빈 통계 반환."""
+    archiver = Archiver(
+        repo=mock_repo,
+        policy=ArchivePolicy.DELETE,
+    )
+
+    stats = archiver.archive_files([])
+
+    assert stats.deleted == 0
+    assert stats.failed == 0
+    mock_repo.insert_history.assert_not_called()
+
+
+def test_archive_files_move_failure_increments_failed(mock_repo, tmp_path: Path):
+    """MOVE 실패 시 failed 카운트 증가."""
+    # 존재하지 않는 파일 이동 시도
+    non_existent = tmp_path / "non_existent.mp4"
+
+    destination_dir = tmp_path / "archive"
+    archiver = Archiver(
+        repo=mock_repo,
+        policy=ArchivePolicy.MOVE,
+        destination=destination_dir,
+    )
+
+    stats = archiver.archive_files([(1, non_existent)])
+
+    assert stats.moved == 0
+    assert stats.failed == 1
+    mock_repo.insert_history.assert_not_called()

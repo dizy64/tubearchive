@@ -259,7 +259,7 @@ class ValidatedArgs:
     sort_key: str = "time"
     reorder: bool = False
     archive_originals: Path | None = None
-    force: bool = False
+    archive_force: bool = False
 
 
 @dataclass(frozen=True)
@@ -663,9 +663,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--force",
+        "--archive-force",
         action="store_true",
-        help="원본 파일 삭제 시 확인 프롬프트 우회",
+        help="원본 파일 삭제(delete 정책) 시 확인 프롬프트 우회",
     )
 
     output_format_group = parser.add_mutually_exclusive_group()
@@ -802,7 +802,7 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         archive_originals = Path(archive_originals_arg).expanduser().resolve()
         # 디렉토리가 존재하지 않으면 생성 예정이므로 검증 생략
 
-    force_flag: bool = getattr(args, "force", False)
+    archive_force_flag: bool = getattr(args, "archive_force", False)
 
     return ValidatedArgs(
         targets=targets,
@@ -830,7 +830,7 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         sort_key=sort_key_str,
         reorder=reorder_flag,
         archive_originals=archive_originals,
-        force=force_flag,
+        archive_force=archive_force_flag,
     )
 
 
@@ -1353,9 +1353,11 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     if not validated_args.keep_temp:
         _cleanup_temp(temp_dir, results, final_path, video_ids)
 
-    # 5.5 원본 파일 아카이빙
-    if validated_args.archive_originals:
-        _archive_originals(video_files, validated_args)
+    # 5.5 원본 파일 아카이빙 (CLI 옵션 또는 config 정책)
+    video_paths_for_archive = [
+        (r.video_id, vf.path) for r, vf in zip(results, video_files, strict=True)
+    ]
+    _archive_originals(video_paths_for_archive, validated_args)
 
     # 6. Summary 출력
     _print_summary(summary)
@@ -1364,21 +1366,28 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
 
 
 def _archive_originals(
-    video_files: list[VideoFile],
+    video_paths: list[tuple[int, Path]],
     validated_args: ValidatedArgs,
 ) -> None:
     """원본 파일들을 정책에 따라 아카이빙한다.
 
-    CLI 옵션 또는 설정 파일의 정책을 읽어 원본 파일을 이동/삭제/유지한다.
+    CLI 옵션(``--archive-originals``) 또는 설정 파일(``[archive]``)의
+    정책을 읽어 원본 파일을 이동/삭제/유지한다.
+
+    우선순위: CLI ``--archive-originals`` > config ``[archive].policy``
 
     Args:
-        video_files: 원본 영상 파일 목록
+        video_paths: (video_id, original_path) 튜플 리스트
         validated_args: 검증된 CLI 인자
     """
     from tubearchive.config import get_default_archive_destination, get_default_archive_policy
     from tubearchive.core.archiver import ArchivePolicy, Archiver
 
-    # CLI 옵션 우선, 없으면 설정 파일
+    if not video_paths:
+        logger.warning("아카이빙할 원본 파일이 없습니다.")
+        return
+
+    # 정책 결정: CLI 옵션 > config > 기본값(KEEP)
     if validated_args.archive_originals:
         policy = ArchivePolicy.MOVE
         destination: Path | None = validated_args.archive_originals
@@ -1397,45 +1406,47 @@ def _archive_originals(
         logger.warning("MOVE 정책이 설정되었으나 destination이 없습니다. 원본 파일 유지.")
         return
 
-    logger.info("원본 파일 아카이빙 시작 (정책: %s)...", policy.value)
-
-    # DB에서 video_id 조회
-    video_paths: list[tuple[int, Path]] = []
-    with database_session() as conn:
-        from tubearchive.database.repository import VideoRepository
-
-        repo = VideoRepository(conn)
-        for video_file in video_files:
-            row = repo.get_by_path(video_file.path)
-            if row:
-                video_paths.append((row["id"], Path(row["original_path"])))
-
-    if not video_paths:
-        logger.warning("아카이빙할 원본 파일이 없습니다.")
+    # DELETE 정책 시 확인 프롬프트 (core 모듈이 아닌 CLI 계층에서 처리)
+    if (
+        policy == ArchivePolicy.DELETE
+        and not validated_args.archive_force
+        and not _prompt_archive_delete_confirmation(len(video_paths))
+    ):
+        logger.info("사용자가 삭제를 취소했습니다.")
         return
 
-    # Archiver 생성 및 실행
+    logger.info("원본 파일 아카이빙 시작 (정책: %s)...", policy.value)
+
     with database_session() as conn:
+        from tubearchive.database.repository import ArchiveHistoryRepository
+
+        archive_repo = ArchiveHistoryRepository(conn)
         archiver = Archiver(
-            conn=conn,
+            repo=archive_repo,
             policy=policy,
             destination=destination,
-            force=validated_args.force,
         )
         stats = archiver.archive_files(video_paths)
 
     if policy == ArchivePolicy.MOVE:
-        logger.info(
-            "아카이빙 완료: 이동 %d, 실패 %d",
-            stats["moved"],
-            stats["failed"],
-        )
+        logger.info("아카이빙 완료: 이동 %d, 실패 %d", stats.moved, stats.failed)
     elif policy == ArchivePolicy.DELETE:
-        logger.info(
-            "아카이빙 완료: 삭제 %d, 실패 %d",
-            stats["deleted"],
-            stats["failed"],
-        )
+        logger.info("아카이빙 완료: 삭제 %d, 실패 %d", stats.deleted, stats.failed)
+
+
+def _prompt_archive_delete_confirmation(file_count: int) -> bool:
+    """원본 파일 삭제 확인 프롬프트를 표시한다.
+
+    Args:
+        file_count: 삭제 대상 파일 개수
+
+    Returns:
+        True: 삭제 승인, False: 취소
+    """
+    print(f"\n⚠️  {file_count}개의 원본 파일을 영구 삭제하려고 합니다.")
+    print("이 작업은 되돌릴 수 없습니다.")
+    response = input("계속하시겠습니까? (y/N): ").strip().lower()
+    return response in {"y", "yes"}
 
 
 def _detect_silence_only(

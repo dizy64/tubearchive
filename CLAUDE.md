@@ -49,6 +49,10 @@ uv run tubearchive --setup-youtube                  # 인증 상태 확인
 uv run tubearchive --upload ~/Videos/               # 병합 후 업로드
 uv run tubearchive --upload-only video.mp4          # 파일만 업로드
 
+# 원본 파일 아카이브
+uv run tubearchive --archive-originals ~/Videos/archive ~/Videos/  # 원본 파일을 지정 경로로 이동
+uv run tubearchive --archive-force ~/Videos/                       # delete 정책 시 확인 프롬프트 우회
+
 # 작업 현황
 uv run tubearchive --status                         # 작업 현황 조회
 uv run tubearchive --status-detail 1                # 특정 작업 상세 조회
@@ -77,6 +81,10 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 # group_sequences = true                    # 연속 파일 시퀀스 그룹핑 (TUBEARCHIVE_GROUP_SEQUENCES)
 # fade_duration = 0.5                       # 기본 페이드 시간 (초, TUBEARCHIVE_FADE_DURATION)
 
+[archive]
+# policy = "keep"                           # keep/move/delete (TUBEARCHIVE_ARCHIVE_POLICY)
+# destination = "~/Videos/archive"          # move 정책 시 이동 경로 (TUBEARCHIVE_ARCHIVE_DESTINATION)
+
 [youtube]
 # client_secrets = "~/.tubearchive/client_secrets.json"
 # token = "~/.tubearchive/youtube_token.json"
@@ -96,6 +104,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
   → Transcoder.transcode_video() (순차 또는 병렬)
   → Merger.merge()
   → save_merge_job_to_db() + save_summary()
+  → [_archive_originals()]
   → [upload_to_youtube()]
 ```
 
@@ -142,8 +151,15 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `PROFILE_HDR_HLG/PQ`: BT.2020 (현재 미사용, SDR 통일)
 - 모든 프로파일: `p010le`, `29.97fps`, `50Mbps`
 
+**core/archiver.py**: 원본 파일 아카이브 관리
+- `ArchivePolicy`: 아카이브 정책 열거형 (KEEP/MOVE/DELETE)
+- `ArchiveStats`: 아카이브 결과 통계 (dataclass)
+- `Archiver`: 정책에 따라 원본 파일 이동/삭제, `ArchiveHistoryRepository`를 통해 이력 기록
+- 확인 프롬프트는 CLI 계층(`_prompt_archive_delete_confirmation`)에서 처리
+
 **config.py**: TOML 설정 파일 관리
 - `GeneralConfig`: output_dir, parallel, db_path, denoise, denoise_level, normalize_audio, group_sequences, fade_duration
+- `ArchiveConfig`: policy (keep/move/delete), destination
 - `YouTubeConfig`: client_secrets, token, playlist, upload_chunk_mb, upload_privacy
 - `load_config()`: `~/.tubearchive/config.toml` 파싱 (에러 시 빈 config)
 - `apply_config_to_env()`: 미설정 환경변수에만 config 값 주입
@@ -162,8 +178,9 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `videos`: 원본 영상 메타데이터
 - `transcoding_jobs`: 작업 상태 (pending→processing→completed/failed)
 - `merge_jobs`: 병합 이력, YouTube 챕터 정보, `youtube_id` 저장
+- `archive_history`: 원본 파일 아카이브(이동/삭제) 이력
 - DB 위치: `~/.tubearchive/tubearchive.db` (또는 `TUBEARCHIVE_DB_PATH`)
-- Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`
+- Repository 클래스: `VideoRepository`, `TranscodingJobRepository`, `MergeJobRepository`, `ArchiveHistoryRepository`
 - **DB 접근 규칙**: cli.py에서 직접 SQL을 실행하지 않고 반드시 Repository 메서드를 사용
 - DB 연결은 `database_session()` context manager로 자동 정리
 
@@ -193,6 +210,8 @@ scan_videos() → group_sequences() → reorder_with_groups()
 | `TUBEARCHIVE_TRIM_SILENCE` | 무음 구간 제거 (true/false) | false |
 | `TUBEARCHIVE_SILENCE_THRESHOLD` | 무음 기준 데시벨 | -30dB |
 | `TUBEARCHIVE_SILENCE_MIN_DURATION` | 최소 무음 길이(초) | 2.0 |
+| `TUBEARCHIVE_ARCHIVE_POLICY` | 아카이브 정책 (keep/move/delete) | keep |
+| `TUBEARCHIVE_ARCHIVE_DESTINATION` | move 정책 시 이동 경로 | - |
 | `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
 | `TUBEARCHIVE_YOUTUBE_TOKEN` | 토큰 파일 경로 | `~/.tubearchive/youtube_token.json` |
 | `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID | - |
