@@ -1,12 +1,13 @@
 """데이터베이스 CRUD 리포지토리.
 
-SQLite DB 위의 영상·트랜스코딩·병합·분할 작업 정보를 조회·생성·수정·삭제한다.
+SQLite DB 위의 영상·트랜스코딩·병합·분할·프로젝트 작업 정보를 조회·생성·수정·삭제한다.
 
 리포지토리 클래스:
     - :class:`VideoRepository`: 원본 영상 메타데이터
     - :class:`TranscodingJobRepository`: 트랜스코딩 작업 상태·진행률
     - :class:`MergeJobRepository`: 병합 작업 이력·YouTube 업로드 정보
     - :class:`SplitJobRepository`: 영상 분할 작업 이력
+    - :class:`ProjectRepository`: 프로젝트 관리 (다대다 merge_job 관계)
 """
 
 import json
@@ -15,7 +16,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from tubearchive.models.job import JobStatus, MergeJob, SplitJob, TranscodingJob
+from tubearchive.models.job import JobStatus, MergeJob, Project, SplitJob, TranscodingJob
 from tubearchive.models.video import VideoFile, VideoMetadata
 
 logger = logging.getLogger(__name__)
@@ -746,3 +747,243 @@ class ArchiveHistoryRepository:
             (operation,),
         )
         return int(cursor.fetchone()["cnt"])
+
+
+class ProjectRepository:
+    """``projects`` 및 ``project_merge_jobs`` 테이블 CRUD 저장소.
+
+    프로젝트 생성·조회·수정·삭제와 프로젝트-merge_job 다대다 관계를 관리한다.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        """초기화."""
+        self.conn = conn
+
+    def create(
+        self,
+        name: str,
+        description: str | None = None,
+    ) -> int:
+        """프로젝트 생성.
+
+        Args:
+            name: 프로젝트 이름 (UNIQUE)
+            description: 프로젝트 설명
+
+        Returns:
+            생성된 project_id
+        """
+        now = datetime.now().isoformat()
+        cursor = self.conn.execute(
+            """INSERT INTO projects (name, description, created_at, updated_at)
+               VALUES (?, ?, ?, ?)""",
+            (name, description, now, now),
+        )
+        self.conn.commit()
+        return cursor.lastrowid or 0
+
+    def get_by_id(self, project_id: int) -> Project | None:
+        """ID로 프로젝트 조회."""
+        cursor = self.conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_project(row)
+
+    def get_by_name(self, name: str) -> Project | None:
+        """이름으로 프로젝트 조회."""
+        cursor = self.conn.execute("SELECT * FROM projects WHERE name = ?", (name,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_project(row)
+
+    def get_all(self) -> list[Project]:
+        """모든 프로젝트 조회 (최신순)."""
+        cursor = self.conn.execute("SELECT * FROM projects ORDER BY updated_at DESC")
+        return [self._row_to_project(row) for row in cursor.fetchall()]
+
+    def update_description(self, project_id: int, description: str) -> None:
+        """프로젝트 설명 업데이트."""
+        now = datetime.now().isoformat()
+        self.conn.execute(
+            "UPDATE projects SET description = ?, updated_at = ? WHERE id = ?",
+            (description, now, project_id),
+        )
+        self.conn.commit()
+
+    def update_playlist_id(self, project_id: int, playlist_id: str) -> None:
+        """프로젝트에 YouTube 플레이리스트 ID 저장."""
+        now = datetime.now().isoformat()
+        self.conn.execute(
+            "UPDATE projects SET playlist_id = ?, updated_at = ? WHERE id = ?",
+            (playlist_id, now, project_id),
+        )
+        self.conn.commit()
+
+    def delete(self, project_id: int) -> None:
+        """프로젝트 삭제 (CASCADE로 project_merge_jobs도 삭제)."""
+        self.conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        self.conn.commit()
+
+    def add_merge_job(self, project_id: int, merge_job_id: int) -> None:
+        """프로젝트에 merge_job 연결.
+
+        이미 연결된 경우 무시한다 (REPLACE).
+
+        Args:
+            project_id: 프로젝트 ID
+            merge_job_id: merge_job ID
+        """
+        self.conn.execute(
+            "INSERT OR IGNORE INTO project_merge_jobs (project_id, merge_job_id) VALUES (?, ?)",
+            (project_id, merge_job_id),
+        )
+        self.conn.commit()
+        self._refresh_date_range(project_id)
+
+    def remove_merge_job(self, project_id: int, merge_job_id: int) -> None:
+        """프로젝트에서 merge_job 연결 해제."""
+        self.conn.execute(
+            "DELETE FROM project_merge_jobs WHERE project_id = ? AND merge_job_id = ?",
+            (project_id, merge_job_id),
+        )
+        self.conn.commit()
+        self._refresh_date_range(project_id)
+
+    def get_merge_job_ids(self, project_id: int) -> list[int]:
+        """프로젝트에 연결된 merge_job ID 목록 조회."""
+        cursor = self.conn.execute(
+            "SELECT merge_job_id FROM project_merge_jobs"
+            " WHERE project_id = ? ORDER BY merge_job_id",
+            (project_id,),
+        )
+        return [row["merge_job_id"] for row in cursor.fetchall()]
+
+    def get_merge_jobs(self, project_id: int) -> list[MergeJob]:
+        """프로젝트에 연결된 merge_job 목록 조회 (날짜순)."""
+        cursor = self.conn.execute(
+            """SELECT m.* FROM merge_jobs m
+               JOIN project_merge_jobs pmj ON m.id = pmj.merge_job_id
+               WHERE pmj.project_id = ?
+               ORDER BY m.date, m.created_at""",
+            (project_id,),
+        )
+        repo = MergeJobRepository(self.conn)
+        return [repo._row_to_job(row) for row in cursor.fetchall()]
+
+    def get_project_ids_for_merge_job(self, merge_job_id: int) -> list[int]:
+        """특정 merge_job이 속한 프로젝트 ID 목록 조회."""
+        cursor = self.conn.execute(
+            "SELECT project_id FROM project_merge_jobs WHERE merge_job_id = ?",
+            (merge_job_id,),
+        )
+        return [row["project_id"] for row in cursor.fetchall()]
+
+    def get_detail(self, project_id: int) -> dict[str, object] | None:
+        """프로젝트 상세 정보 조회.
+
+        포함된 영상 목록, 총 시간, 업로드 상태 등을 집계하여 반환한다.
+
+        Args:
+            project_id: 프로젝트 ID
+
+        Returns:
+            상세 정보 딕셔너리 또는 프로젝트 미존재 시 None.
+            키: project, merge_jobs, total_duration_seconds, total_size_bytes,
+                uploaded_count, total_count, date_groups
+        """
+        project = self.get_by_id(project_id)
+        if project is None:
+            return None
+
+        merge_jobs = self.get_merge_jobs(project_id)
+
+        total_duration = 0.0
+        total_size = 0
+        uploaded_count = 0
+        date_groups: dict[str, list[MergeJob]] = {}
+
+        for job in merge_jobs:
+            if job.total_duration_seconds:
+                total_duration += job.total_duration_seconds
+            if job.total_size_bytes:
+                total_size += job.total_size_bytes
+            if job.youtube_id:
+                uploaded_count += 1
+            # 날짜별 그룹핑
+            date_key = job.date or "날짜 미상"
+            date_groups.setdefault(date_key, []).append(job)
+
+        return {
+            "project": project,
+            "merge_jobs": merge_jobs,
+            "total_duration_seconds": total_duration,
+            "total_size_bytes": total_size,
+            "uploaded_count": uploaded_count,
+            "total_count": len(merge_jobs),
+            "date_groups": date_groups,
+        }
+
+    def count_all(self) -> int:
+        """전체 프로젝트 수를 반환한다."""
+        cursor = self.conn.execute("SELECT COUNT(*) as cnt FROM projects")
+        return int(cursor.fetchone()["cnt"])
+
+    def get_or_create(self, name: str, description: str | None = None) -> Project:
+        """이름으로 프로젝트를 조회하거나 없으면 생성한다.
+
+        Args:
+            name: 프로젝트 이름
+            description: 프로젝트 설명 (신규 생성 시에만 적용)
+
+        Returns:
+            기존 또는 새로 생성된 Project
+        """
+        existing = self.get_by_name(name)
+        if existing is not None:
+            return existing
+        project_id = self.create(name, description)
+        project = self.get_by_id(project_id)
+        if project is None:
+            msg = f"Failed to retrieve newly created project (id={project_id})"
+            raise RuntimeError(msg)
+        return project
+
+    def _refresh_date_range(self, project_id: int) -> None:
+        """프로젝트의 날짜 범위를 연결된 merge_jobs에서 재계산."""
+        cursor = self.conn.execute(
+            """SELECT MIN(m.date) as min_date, MAX(m.date) as max_date
+               FROM merge_jobs m
+               JOIN project_merge_jobs pmj ON m.id = pmj.merge_job_id
+               WHERE pmj.project_id = ? AND m.date IS NOT NULL""",
+            (project_id,),
+        )
+        row = cursor.fetchone()
+        now = datetime.now().isoformat()
+        if row and row["min_date"]:
+            self.conn.execute(
+                "UPDATE projects SET date_range_start = ?, date_range_end = ?,"
+                " updated_at = ? WHERE id = ?",
+                (row["min_date"], row["max_date"], now, project_id),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE projects SET date_range_start = NULL,"
+                " date_range_end = NULL, updated_at = ? WHERE id = ?",
+                (now, project_id),
+            )
+        self.conn.commit()
+
+    def _row_to_project(self, row: sqlite3.Row) -> Project:
+        """Row를 Project로 변환."""
+        return Project(
+            id=row["id"],
+            name=row["name"],
+            description=row["description"],
+            date_range_start=row["date_range_start"],
+            date_range_end=row["date_range_end"],
+            playlist_id=row["playlist_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )

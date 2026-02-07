@@ -273,6 +273,7 @@ class ValidatedArgs:
     timelapse_speed: int | None = None
     timelapse_audio: bool = False
     timelapse_resolution: str | None = None
+    project: str | None = None
 
 
 @dataclass(frozen=True)
@@ -727,6 +728,29 @@ def create_parser() -> argparse.ArgumentParser:
         help="메타데이터 검색 시 기기 필터 (예: GoPro)",
     )
 
+    # 프로젝트 옵션
+    parser.add_argument(
+        "--project",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help='프로젝트에 병합 결과 연결 (없으면 자동 생성, 예: "제주도 여행")',
+    )
+
+    parser.add_argument(
+        "--project-list",
+        action="store_true",
+        help="프로젝트 목록 조회",
+    )
+
+    parser.add_argument(
+        "--project-detail",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="프로젝트 상세 조회 (프로젝트 ID)",
+    )
+
     # 아카이브 옵션
     parser.add_argument(
         "--archive-originals",
@@ -960,6 +984,7 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         timelapse_speed=timelapse_speed,
         timelapse_audio=timelapse_audio,
         timelapse_resolution=timelapse_resolution,
+        project=getattr(args, "project", None),
     )
 
 
@@ -1636,6 +1661,10 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         groups=groups,
     )
 
+    # 4.1 프로젝트 연결 (--project 옵션 시)
+    if validated_args.project and merge_job_id is not None:
+        _link_merge_job_to_project(validated_args.project, merge_job_id)
+
     # 4.5 썸네일 생성 (비필수)
     if validated_args.thumbnail:
         thumbnail_paths = _generate_thumbnails(final_path, validated_args)
@@ -2014,6 +2043,32 @@ def save_merge_job_to_db(
     except Exception as e:
         logger.warning(f"Failed to save merge job to DB: {e}")
         return None, None
+
+
+def _link_merge_job_to_project(project_name: str, merge_job_id: int) -> None:
+    """병합 결과를 프로젝트에 연결한다.
+
+    프로젝트가 없으면 자동 생성하고, merge_job을 연결한다.
+    날짜 범위도 자동으로 갱신된다.
+
+    Args:
+        project_name: 프로젝트 이름
+        merge_job_id: merge_job ID
+    """
+    from tubearchive.database.repository import ProjectRepository
+
+    try:
+        with database_session() as conn:
+            repo = ProjectRepository(conn)
+            project = repo.get_or_create(project_name)
+            if project.id is None:
+                logger.warning("Project created but has no ID")
+                return
+            repo.add_merge_job(project.id, merge_job_id)
+            logger.info(f"Merge job {merge_job_id} linked to project '{project_name}'")
+            print(f"\n📁 프로젝트 '{project_name}'에 병합 결과 연결됨")
+    except Exception as e:
+        logger.warning(f"Failed to link merge job to project: {e}")
 
 
 def upload_to_youtube(
@@ -2795,6 +2850,70 @@ def _upload_split_files(
             continue
 
 
+def _get_or_create_project_playlist(
+    project_name: str,
+    merge_job_id: int,
+    privacy: str = "unlisted",
+) -> str | None:
+    """프로젝트 전용 YouTube 플레이리스트를 조회하거나 생성한다.
+
+    DB에 저장된 playlist_id가 있으면 그대로 사용하고,
+    없으면 YouTube에 새 플레이리스트를 생성하여 DB에 저장한다.
+
+    Args:
+        project_name: 프로젝트 이름
+        merge_job_id: merge_job ID (프로젝트 조회용)
+        privacy: 플레이리스트 공개 설정
+
+    Returns:
+        플레이리스트 ID 또는 실패 시 None
+    """
+    from tubearchive.database.repository import ProjectRepository
+
+    try:
+        with database_session() as conn:
+            repo = ProjectRepository(conn)
+            project_ids = repo.get_project_ids_for_merge_job(merge_job_id)
+            if not project_ids:
+                return None
+
+            project = repo.get_by_id(project_ids[0])
+            if project is None:
+                return None
+
+            # 이미 플레이리스트가 있으면 재사용
+            if project.playlist_id:
+                logger.info(f"Reusing project playlist: {project.playlist_id}")
+                return project.playlist_id
+
+        # 새 플레이리스트 생성
+        from tubearchive.youtube.auth import get_authenticated_service
+        from tubearchive.youtube.playlist import create_playlist
+
+        service = get_authenticated_service()
+        playlist_id = create_playlist(
+            service,
+            title=project_name,
+            description=f"TubeArchive 프로젝트: {project_name}",
+            privacy=privacy,
+        )
+
+        # DB에 저장
+        with database_session() as conn:
+            repo = ProjectRepository(conn)
+            if project.id is None:
+                logger.warning("Project has no ID, cannot save playlist")
+                return None
+            repo.update_playlist_id(project.id, playlist_id)
+
+        print(f"  📋 프로젝트 플레이리스트 생성됨: {project_name}")
+        return playlist_id
+
+    except Exception as e:
+        logger.warning(f"Failed to get/create project playlist: {e}")
+        return None
+
+
 def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
     """파이프라인 완료 후 YouTube 업로드를 수행한다.
 
@@ -2824,6 +2943,15 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
         logger.warning(f"Failed to get merge job: {e}")
 
     playlist_ids = resolve_playlist_ids(args.playlist)
+
+    # 프로젝트 플레이리스트 자동 생성/사용
+    project_name = getattr(args, "project", None)
+    if project_name and merge_job_id is not None:
+        project_playlist_id = _get_or_create_project_playlist(
+            project_name, merge_job_id, privacy=args.upload_privacy
+        )
+        if project_playlist_id and project_playlist_id not in playlist_ids:
+            playlist_ids.append(project_playlist_id)
 
     # 분할 파일 확인
     split_files: list[Path] = []
@@ -2937,6 +3065,20 @@ def main() -> None:
         # --reset-upload 옵션 처리 (업로드 기록 초기화)
         if args.reset_upload is not None:
             cmd_reset_upload(args.reset_upload)
+            return
+
+        # --project-list 옵션 처리 (프로젝트 목록 조회)
+        if args.project_list:
+            from tubearchive.commands.project import cmd_project_list
+
+            cmd_project_list(output_json=args.json)
+            return
+
+        # --project-detail 옵션 처리 (프로젝트 상세 조회)
+        if args.project_detail is not None:
+            from tubearchive.commands.project import cmd_project_detail
+
+            cmd_project_detail(args.project_detail, output_json=args.json)
             return
 
         # --status-detail 옵션 처리 (작업 상세 조회)
