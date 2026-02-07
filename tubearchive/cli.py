@@ -48,6 +48,9 @@ from tubearchive.config import (
     ENV_OUTPUT_DIR,
     ENV_PARALLEL,
     ENV_YOUTUBE_PLAYLIST,
+    get_default_bgm_loop,
+    get_default_bgm_path,
+    get_default_bgm_volume,
     get_default_denoise,
     get_default_denoise_level,
     get_default_fade_duration,
@@ -254,6 +257,9 @@ class ValidatedArgs:
     trim_silence: bool = False
     silence_threshold: str = "-30dB"
     silence_min_duration: float = 2.0
+    bgm_path: Path | None = None
+    bgm_volume: float = 0.2
+    bgm_loop: bool = False
     exclude_patterns: list[str] | None = None
     include_only_patterns: list[str] | None = None
     sort_key: str = "time"
@@ -281,6 +287,9 @@ class TranscodeOptions:
         trim_silence: 무음 구간 제거 여부
         silence_threshold: 무음 기준 데시벨
         silence_min_duration: 최소 무음 길이 (초)
+        bgm_path: 배경음악 파일 경로
+        bgm_volume: 배경음악 상대 볼륨 (0.0~1.0)
+        bgm_loop: BGM 루프 재생 여부
     """
 
     denoise: bool = False
@@ -291,6 +300,9 @@ class TranscodeOptions:
     trim_silence: bool = False
     silence_threshold: str = "-30dB"
     silence_min_duration: float = 2.0
+    bgm_path: Path | None = None
+    bgm_volume: float = 0.2
+    bgm_loop: bool = False
 
 
 @dataclass(frozen=True)
@@ -475,6 +487,28 @@ def create_parser() -> argparse.ArgumentParser:
         "--normalize-audio",
         action="store_true",
         help="EBU R128 오디오 라우드니스 정규화 활성화 (loudnorm 2-pass)",
+    )
+
+    parser.add_argument(
+        "--bgm",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="배경음악 파일 경로 (MP3, AAC, WAV 등)",
+    )
+
+    parser.add_argument(
+        "--bgm-volume",
+        type=float,
+        default=None,
+        metavar="0.0-1.0",
+        help="배경음악 상대 볼륨 (0.0~1.0, 기본: 0.2)",
+    )
+
+    parser.add_argument(
+        "--bgm-loop",
+        action="store_true",
+        help="BGM 길이 < 영상 길이일 때 루프 재생",
     )
 
     parser.add_argument(
@@ -816,6 +850,29 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     if silence_min_duration <= 0:
         raise ValueError(f"Silence duration must be > 0, got: {silence_min_duration}")
 
+    # BGM 옵션 검증 (CLI 인자 > 환경 변수 > 기본값)
+    bgm_path_arg = getattr(args, "bgm", None)
+    bgm_path: Path | None = None
+    if bgm_path_arg:
+        bgm_path = Path(bgm_path_arg).expanduser()
+        if not bgm_path.is_file():
+            raise FileNotFoundError(f"BGM file not found: {bgm_path_arg}")
+    else:
+        # 환경변수/설정파일에서 기본값
+        bgm_path = get_default_bgm_path()
+
+    bgm_volume_arg = getattr(args, "bgm_volume", None)
+    if bgm_volume_arg is not None:
+        if not (0.0 <= bgm_volume_arg <= 1.0):
+            raise ValueError(f"BGM volume must be in range [0.0, 1.0], got: {bgm_volume_arg}")
+        bgm_volume = bgm_volume_arg
+    else:
+        # 환경변수/설정파일에서 기본값, 없으면 0.2
+        bgm_volume = get_default_bgm_volume() or 0.2
+
+    bgm_loop_arg = getattr(args, "bgm_loop", False)
+    bgm_loop = bgm_loop_arg or get_default_bgm_loop()
+
     exclude_patterns: list[str] | None = getattr(args, "exclude", None)
     include_only_patterns: list[str] | None = getattr(args, "include_only", None)
     sort_key_str: str = getattr(args, "sort", None) or "time"
@@ -871,6 +928,9 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         trim_silence=trim_silence,
         silence_threshold=silence_threshold,
         silence_min_duration=silence_min_duration,
+        bgm_path=bgm_path,
+        bgm_volume=bgm_volume,
+        bgm_loop=bgm_loop,
         exclude_patterns=exclude_patterns,
         include_only_patterns=include_only_patterns,
         sort_key=sort_key_str,
@@ -921,6 +981,124 @@ def get_output_filename(targets: list[Path]) -> str:
         name = "output"
 
     return f"{name}.mp4"
+
+
+def _apply_bgm_mixing(
+    video_path: Path,
+    bgm_path: Path,
+    bgm_volume: float,
+    bgm_loop: bool,
+    output_path: Path,
+) -> Path:
+    """
+    병합된 영상에 BGM 믹싱 적용.
+
+    Args:
+        video_path: 병합된 영상 파일 경로
+        bgm_path: BGM 파일 경로
+        bgm_volume: BGM 상대 볼륨 (0.0~1.0)
+        bgm_loop: BGM 루프 재생 여부
+        output_path: 출력 파일 경로
+
+    Returns:
+        BGM이 믹싱된 최종 파일 경로
+
+    Raises:
+        RuntimeError: FFmpeg 실행 실패
+    """
+    from tubearchive.ffmpeg.effects import create_bgm_filter
+
+    logger.info(f"Applying BGM mixing: {bgm_path.name}")
+
+    # 1. 영상 길이 확인
+    try:
+        probe_result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(video_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        video_info = json.loads(probe_result.stdout)
+        video_duration = float(video_info["format"]["duration"])
+    except (subprocess.CalledProcessError, KeyError, ValueError) as e:
+        raise RuntimeError(f"Failed to probe video duration: {e}") from e
+
+    # 2. BGM 길이 확인
+    try:
+        probe_result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(bgm_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        bgm_info = json.loads(probe_result.stdout)
+        bgm_duration = float(bgm_info["format"]["duration"])
+    except (subprocess.CalledProcessError, KeyError, ValueError) as e:
+        raise RuntimeError(f"Failed to probe BGM duration: {e}") from e
+
+    logger.info(f"Video duration: {video_duration:.2f}s, BGM duration: {bgm_duration:.2f}s")
+
+    # 3. BGM 필터 생성
+    bgm_filter = create_bgm_filter(
+        bgm_duration=bgm_duration,
+        video_duration=video_duration,
+        bgm_volume=bgm_volume,
+        bgm_loop=bgm_loop,
+    )
+
+    # 4. FFmpeg 명령어 빌드 및 실행
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(video_path),
+        "-i",
+        str(bgm_path),
+        "-filter_complex",
+        bgm_filter,
+        "-map",
+        "0:v",  # 원본 영상 스트림
+        "-map",
+        "[a_out]",  # 필터링된 오디오
+        "-c:v",
+        "copy",  # 영상 재인코딩 없음
+        "-c:a",
+        "aac",
+        "-b:a",
+        "320k",
+        str(output_path),
+    ]
+
+    logger.info(f"Running BGM mixing: {' '.join(cmd)}")
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        logger.error(f"BGM mixing failed: {result.stderr}")
+        raise RuntimeError(f"BGM mixing failed: {result.stderr}")
+
+    logger.info(f"BGM mixing completed: {output_path}")
+    return output_path
 
 
 def handle_single_file_upload(
@@ -1360,6 +1538,9 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         trim_silence=validated_args.trim_silence,
         silence_threshold=validated_args.silence_threshold,
         silence_min_duration=validated_args.silence_min_duration,
+        bgm_path=validated_args.bgm_path,
+        bgm_volume=validated_args.bgm_volume,
+        bgm_loop=validated_args.bgm_loop,
     )
 
     parallel = validated_args.parallel
@@ -1378,6 +1559,21 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         output_path,
     )
     logger.info(f"Final output: {final_path}")
+
+    # 3.5 BGM 믹싱 (옵션)
+    if validated_args.bgm_path:
+        logger.info("Applying BGM mixing...")
+        temp_bgm_output = temp_dir / f"bgm_mixed_{final_path.name}"
+        bgm_mixed_path = _apply_bgm_mixing(
+            video_path=final_path,
+            bgm_path=validated_args.bgm_path,
+            bgm_volume=validated_args.bgm_volume,
+            bgm_loop=validated_args.bgm_loop,
+            output_path=temp_bgm_output,
+        )
+        # 원본을 BGM 믹싱된 파일로 대체
+        shutil.move(str(bgm_mixed_path), str(final_path))
+        logger.info(f"BGM mixing applied: {final_path}")
 
     # 4. DB 저장 및 Summary 생성
     video_ids = [r.video_id for r in results]
