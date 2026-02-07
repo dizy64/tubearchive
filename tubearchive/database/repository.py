@@ -526,3 +526,102 @@ class MergeJobRepository:
             clips_info_json=row["clips_info_json"],
             summary_markdown=row["summary_markdown"],
         )
+
+
+class ArchiveHistoryRepository:
+    """``archive_history`` 테이블 CRUD 저장소.
+
+    원본 파일의 이동/삭제 이력을 조회·기록한다.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        """초기화."""
+        self.conn = conn
+
+    def insert_history(
+        self,
+        video_id: int,
+        operation: str,
+        original_path: Path,
+        destination_path: Path | None = None,
+    ) -> int:
+        """아카이브 이력 삽입.
+
+        Args:
+            video_id: 영상 ID
+            operation: 작업 타입 (move/delete)
+            original_path: 원본 경로
+            destination_path: 이동 경로 (delete 시 None)
+
+        Returns:
+            삽입된 archive_history ID
+        """
+        cursor = self.conn.execute(
+            """
+            INSERT INTO archive_history (video_id, operation, original_path, destination_path)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                video_id,
+                operation,
+                str(original_path),
+                str(destination_path) if destination_path else None,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid or 0
+
+    def get_history_by_video(self, video_id: int) -> list[sqlite3.Row]:
+        """특정 영상의 아카이브 이력 조회.
+
+        Args:
+            video_id: 영상 ID
+
+        Returns:
+            아카이브 이력 Row 목록
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT * FROM archive_history
+            WHERE video_id = ?
+            ORDER BY archived_at DESC
+            """,
+            (video_id,),
+        )
+        return cursor.fetchall()
+
+    def get_all_history(self, limit: int = 100) -> list[sqlite3.Row]:
+        """전체 아카이브 이력 조회.
+
+        Args:
+            limit: 최대 조회 건수 (기본 100)
+
+        Returns:
+            아카이브 이력 Row 목록
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT ah.*, v.original_path as video_original_path
+            FROM archive_history ah
+            LEFT JOIN videos v ON ah.video_id = v.id
+            ORDER BY ah.archived_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return cursor.fetchall()
+
+    def count_by_operation(self, operation: str) -> int:
+        """특정 작업 타입의 이력 개수 조회.
+
+        Args:
+            operation: 작업 타입 (move/delete)
+
+        Returns:
+            이력 개수
+        """
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) as cnt FROM archive_history WHERE operation = ?",
+            (operation,),
+        )
+        return int(cursor.fetchone()["cnt"])

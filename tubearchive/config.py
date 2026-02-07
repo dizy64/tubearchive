@@ -38,6 +38,8 @@ ENV_FADE_DURATION = "TUBEARCHIVE_FADE_DURATION"
 ENV_TRIM_SILENCE = "TUBEARCHIVE_TRIM_SILENCE"
 ENV_SILENCE_THRESHOLD = "TUBEARCHIVE_SILENCE_THRESHOLD"
 ENV_SILENCE_MIN_DURATION = "TUBEARCHIVE_SILENCE_MIN_DURATION"
+ENV_ARCHIVE_POLICY = "TUBEARCHIVE_ARCHIVE_POLICY"
+ENV_ARCHIVE_DESTINATION = "TUBEARCHIVE_ARCHIVE_DESTINATION"
 
 
 @dataclass(frozen=True)
@@ -75,11 +77,23 @@ class YouTubeConfig:
 
 
 @dataclass(frozen=True)
+class ArchiveConfig:
+    """``config.toml`` 의 ``[archive]`` 섹션.
+
+    트랜스코딩 완료 후 원본 파일 관리 정책을 정의한다.
+    """
+
+    policy: str | None = None  # keep/move/delete
+    destination: str | None = None  # move 시 이동 경로
+
+
+@dataclass(frozen=True)
 class AppConfig:
-    """애플리케이션 전체 설정 (``[general]`` + ``[youtube]`` 통합)."""
+    """애플리케이션 전체 설정 (``[general]`` + ``[youtube]`` + ``[archive]`` 통합)."""
 
     general: GeneralConfig = field(default_factory=GeneralConfig)
     youtube: YouTubeConfig = field(default_factory=YouTubeConfig)
+    archive: ArchiveConfig = field(default_factory=ArchiveConfig)
 
 
 def _warn_type(field_name: str, expected: str, value: object) -> None:
@@ -212,6 +226,25 @@ def _parse_youtube(data: dict[str, object]) -> YouTubeConfig:
     )
 
 
+def _parse_archive(data: dict[str, object]) -> ArchiveConfig:
+    """[archive] 섹션 파싱. 타입 오류 시 해당 필드 무시."""
+    section = "archive"
+
+    # policy: 허용값 검증
+    policy = _parse_str(data, "policy", section)
+    if policy is not None and policy not in ("keep", "move", "delete"):
+        logger.warning("config: archive.policy 값 오류: %r", policy)
+        policy = None
+
+    # destination: 문자열 (move 정책 시 필수)
+    destination = _parse_str(data, "destination", section)
+
+    return ArchiveConfig(
+        policy=policy,
+        destination=destination,
+    )
+
+
 def load_config(path: Path | None = None) -> AppConfig:
     """
     TOML 설정 파일 로드.
@@ -239,6 +272,7 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     general_data = raw.get("general", {})
     youtube_data = raw.get("youtube", {})
+    archive_data = raw.get("archive", {})
 
     if isinstance(general_data, dict):
         general = _parse_general(general_data)
@@ -260,7 +294,17 @@ def load_config(path: Path | None = None) -> AppConfig:
             )
         youtube = YouTubeConfig()
 
-    return AppConfig(general=general, youtube=youtube)
+    if isinstance(archive_data, dict):
+        archive = _parse_archive(archive_data)
+    else:
+        if archive_data:
+            logger.warning(
+                "config: [archive] 섹션이 테이블이 아닙니다 (got %s)",
+                type(archive_data).__name__,
+            )
+        archive = ArchiveConfig()
+
+    return AppConfig(general=general, youtube=youtube, archive=archive)
 
 
 def apply_config_to_env(config: AppConfig) -> None:
@@ -304,6 +348,12 @@ def apply_config_to_env(config: AppConfig) -> None:
     if config.youtube.playlist:
         mappings.append((ENV_YOUTUBE_PLAYLIST, ",".join(config.youtube.playlist)))
 
+    # archive policy
+    if config.archive.policy is not None:
+        mappings.append((ENV_ARCHIVE_POLICY, config.archive.policy))
+    if config.archive.destination is not None:
+        mappings.append((ENV_ARCHIVE_DESTINATION, config.archive.destination))
+
     for env_key, value in mappings:
         if value is not None and env_key not in os.environ:
             os.environ[env_key] = value
@@ -337,6 +387,10 @@ def generate_default_config() -> str:
 # playlist = ["PLxxxxxxxx"]
 # upload_chunk_mb = 32                      # 1-256 (TUBEARCHIVE_UPLOAD_CHUNK_MB)
 # upload_privacy = "unlisted"               # public/unlisted/private
+
+[archive]
+# policy = "keep"                           # keep/move/delete (TUBEARCHIVE_ARCHIVE_POLICY)
+# destination = "~/Videos/archive"          # move 시 이동 경로 (TUBEARCHIVE_ARCHIVE_DESTINATION)
 """
 
 
@@ -466,3 +520,32 @@ def get_default_fade_duration() -> float:
         logger.warning("%s=%s must be >= 0, using 0.5", ENV_FADE_DURATION, env_val)
         return 0.5
     return val
+
+
+def get_default_archive_policy() -> str:
+    """환경변수 ``TUBEARCHIVE_ARCHIVE_POLICY`` 에서 아카이브 정책을 가져온다.
+
+    Returns:
+        ``keep`` / ``move`` / ``delete`` (기본값: ``keep``).
+    """
+    env_policy = os.environ.get(ENV_ARCHIVE_POLICY)
+    if not env_policy:
+        return "keep"
+    normalized = env_policy.strip().lower()
+    if normalized in {"keep", "move", "delete"}:
+        return normalized
+    logger.warning("%s=%s is not a valid policy", ENV_ARCHIVE_POLICY, env_policy)
+    return "keep"
+
+
+def get_default_archive_destination() -> Path | None:
+    """환경변수 ``TUBEARCHIVE_ARCHIVE_DESTINATION`` 에서 아카이브 경로를 가져온다.
+
+    Returns:
+        유효한 디렉토리 경로 또는 None.
+    """
+    env_dest = os.environ.get(ENV_ARCHIVE_DESTINATION)
+    if env_dest:
+        path = Path(env_dest).expanduser()
+        return path
+    return None
