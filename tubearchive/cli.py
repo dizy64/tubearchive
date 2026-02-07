@@ -258,6 +258,8 @@ class ValidatedArgs:
     include_only_patterns: list[str] | None = None
     sort_key: str = "time"
     reorder: bool = False
+    archive_originals: Path | None = None
+    force: bool = False
 
 
 @dataclass(frozen=True)
@@ -651,6 +653,21 @@ def create_parser() -> argparse.ArgumentParser:
         help="메타데이터 검색 시 기기 필터 (예: GoPro)",
     )
 
+    # 아카이브 옵션
+    parser.add_argument(
+        "--archive-originals",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="트랜스코딩 완료 후 원본 파일을 지정 경로로 이동",
+    )
+
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="원본 파일 삭제 시 확인 프롬프트 우회",
+    )
+
     output_format_group = parser.add_mutually_exclusive_group()
     output_format_group.add_argument(
         "--json",
@@ -778,6 +795,15 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
     sort_key_str: str = getattr(args, "sort", None) or "time"
     reorder_flag: bool = getattr(args, "reorder", False)
 
+    # 아카이브 옵션
+    archive_originals_arg = getattr(args, "archive_originals", None)
+    archive_originals: Path | None = None
+    if archive_originals_arg:
+        archive_originals = Path(archive_originals_arg).expanduser().resolve()
+        # 디렉토리가 존재하지 않으면 생성 예정이므로 검증 생략
+
+    force_flag: bool = getattr(args, "force", False)
+
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -803,6 +829,8 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         include_only_patterns=include_only_patterns,
         sort_key=sort_key_str,
         reorder=reorder_flag,
+        archive_originals=archive_originals,
+        force=force_flag,
     )
 
 
@@ -1325,10 +1353,89 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
     if not validated_args.keep_temp:
         _cleanup_temp(temp_dir, results, final_path, video_ids)
 
+    # 5.5 원본 파일 아카이빙
+    if validated_args.archive_originals:
+        _archive_originals(video_files, validated_args)
+
     # 6. Summary 출력
     _print_summary(summary)
 
     return final_path
+
+
+def _archive_originals(
+    video_files: list[VideoFile],
+    validated_args: ValidatedArgs,
+) -> None:
+    """원본 파일들을 정책에 따라 아카이빙한다.
+
+    CLI 옵션 또는 설정 파일의 정책을 읽어 원본 파일을 이동/삭제/유지한다.
+
+    Args:
+        video_files: 원본 영상 파일 목록
+        validated_args: 검증된 CLI 인자
+    """
+    from tubearchive.config import get_default_archive_destination, get_default_archive_policy
+    from tubearchive.core.archiver import ArchivePolicy, Archiver
+
+    # CLI 옵션 우선, 없으면 설정 파일
+    if validated_args.archive_originals:
+        policy = ArchivePolicy.MOVE
+        destination: Path | None = validated_args.archive_originals
+    else:
+        policy_str = get_default_archive_policy()
+        policy = ArchivePolicy(policy_str)
+        destination = get_default_archive_destination()
+
+    # KEEP 정책이면 아무것도 하지 않음
+    if policy == ArchivePolicy.KEEP:
+        logger.debug("아카이브 정책이 KEEP입니다. 원본 파일 유지.")
+        return
+
+    # MOVE 정책인데 destination이 없으면 경고
+    if policy == ArchivePolicy.MOVE and not destination:
+        logger.warning("MOVE 정책이 설정되었으나 destination이 없습니다. 원본 파일 유지.")
+        return
+
+    logger.info("원본 파일 아카이빙 시작 (정책: %s)...", policy.value)
+
+    # DB에서 video_id 조회
+    video_paths: list[tuple[int, Path]] = []
+    with database_session() as conn:
+        from tubearchive.database.repository import VideoRepository
+
+        repo = VideoRepository(conn)
+        for video_file in video_files:
+            row = repo.get_by_path(video_file.path)
+            if row:
+                video_paths.append((row["id"], Path(row["original_path"])))
+
+    if not video_paths:
+        logger.warning("아카이빙할 원본 파일이 없습니다.")
+        return
+
+    # Archiver 생성 및 실행
+    with database_session() as conn:
+        archiver = Archiver(
+            conn=conn,
+            policy=policy,
+            destination=destination,
+            force=validated_args.force,
+        )
+        stats = archiver.archive_files(video_paths)
+
+    if policy == ArchivePolicy.MOVE:
+        logger.info(
+            "아카이빙 완료: 이동 %d, 실패 %d",
+            stats["moved"],
+            stats["failed"],
+        )
+    elif policy == ArchivePolicy.DELETE:
+        logger.info(
+            "아카이빙 완료: 삭제 %d, 실패 %d",
+            stats["deleted"],
+            stats["failed"],
+        )
 
 
 def _detect_silence_only(
