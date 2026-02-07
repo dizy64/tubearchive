@@ -3,6 +3,7 @@
 from datetime import datetime
 from pathlib import Path
 
+from tubearchive.cli import ClipInfo
 from tubearchive.core.grouper import FileSequenceGroup
 from tubearchive.models.video import VideoFile
 from tubearchive.utils.summary_generator import (
@@ -11,7 +12,9 @@ from tubearchive.utils.summary_generator import (
     format_timestamp,
     generate_chapters,
     generate_single_file_description,
+    generate_split_youtube_description,
     generate_summary_markdown,
+    remap_chapters_for_splits,
 )
 
 
@@ -295,3 +298,152 @@ class TestGenerateSingleFileDescription:
 
         assert "GoPro Hero 13" in result
         assert "Shot at" not in result
+
+
+class TestRemapChaptersForSplits:
+    """remap_chapters_for_splits 단위 테스트."""
+
+    def test_two_parts_no_spanning(self) -> None:
+        """클립이 분할 경계를 걸치지 않는 경우."""
+        # A(120s) + B(180s) = 300s, split at 120s
+        clips = [("A.mp4", 120.0), ("B.mp4", 180.0)]
+        split_durations = [120.0, 180.0]
+
+        result = remap_chapters_for_splits(clips, split_durations)
+
+        assert len(result) == 2
+        # Part 1: only A at 0:00
+        assert result[0] == [("0:00", "A")]
+        # Part 2: only B at 0:00
+        assert result[1] == [("0:00", "B")]
+
+    def test_clip_spanning_boundary(self) -> None:
+        """클립이 분할 경계를 걸치는 경우 양쪽 파트에 포함."""
+        # A(120s) + B(180s) + C(200s) = 500s
+        # Split at 200s and 300s → Part1(0-200), Part2(200-500)
+        clips = [("A.mp4", 120.0), ("B.mp4", 180.0), ("C.mp4", 200.0)]
+        split_durations = [200.0, 300.0]
+
+        result = remap_chapters_for_splits(clips, split_durations)
+
+        assert len(result) == 2
+        # Part 1: A at 0:00, B at 2:00
+        assert result[0] == [("0:00", "A"), ("2:00", "B")]
+        # Part 2: B continues at 0:00, C at 1:40
+        assert result[1] == [("0:00", "B"), ("1:40", "C")]
+
+    def test_clip_exactly_at_boundary(self) -> None:
+        """클립 끝이 정확히 분할 지점과 일치."""
+        clips = [("A.mp4", 200.0), ("B.mp4", 200.0)]
+        split_durations = [200.0, 200.0]
+
+        result = remap_chapters_for_splits(clips, split_durations)
+
+        assert len(result) == 2
+        assert result[0] == [("0:00", "A")]
+        assert result[1] == [("0:00", "B")]
+
+    def test_single_split(self) -> None:
+        """분할 없는 경우 (1파트)."""
+        clips = [("A.mp4", 60.0), ("B.mp4", 30.0)]
+        split_durations = [90.0]
+
+        result = remap_chapters_for_splits(clips, split_durations)
+
+        assert len(result) == 1
+        assert result[0] == [("0:00", "A"), ("1:00", "B")]
+
+    def test_three_parts(self) -> None:
+        """3개로 분할되는 경우."""
+        # 60 + 60 + 60 = 180, split into 3x60
+        clips = [("A.mp4", 60.0), ("B.mp4", 60.0), ("C.mp4", 60.0)]
+        split_durations = [60.0, 60.0, 60.0]
+
+        result = remap_chapters_for_splits(clips, split_durations)
+
+        assert len(result) == 3
+        assert result[0] == [("0:00", "A")]
+        assert result[1] == [("0:00", "B")]
+        assert result[2] == [("0:00", "C")]
+
+    def test_empty_clips(self) -> None:
+        """빈 클립 리스트."""
+        result = remap_chapters_for_splits([], [60.0])
+        assert result == [[]]
+
+    def test_many_clips_in_one_part(self) -> None:
+        """여러 클립이 하나의 파트에 포함."""
+        clips = [("A.mp4", 10.0), ("B.mp4", 20.0), ("C.mp4", 30.0)]
+        split_durations = [60.0]
+
+        result = remap_chapters_for_splits(clips, split_durations)
+
+        assert len(result) == 1
+        assert result[0] == [("0:00", "A"), ("0:10", "B"), ("0:30", "C")]
+
+    def test_keyframe_drift(self) -> None:
+        """분할 파일 길이 합계가 원본과 미세하게 다른 경우."""
+        # 원본: A(120) + B(120) = 240, 실제 분할: 121 + 119 (키프레임 오차)
+        clips = [("A.mp4", 120.0), ("B.mp4", 120.0)]
+        split_durations = [121.0, 119.0]
+
+        result = remap_chapters_for_splits(clips, split_durations)
+
+        assert len(result) == 2
+        # Part 1: A starts at 0, B starts at 120 < 121 (within part)
+        assert result[0] == [("0:00", "A"), ("2:00", "B")]
+        # Part 2: B continues at 0:00
+        assert result[1] == [("0:00", "B")]
+
+
+class TestGenerateSplitYoutubeDescription:
+    """generate_split_youtube_description 단위 테스트."""
+
+    def test_normal_part(self) -> None:
+        """일반 파트의 설명 생성."""
+        clips = [
+            ClipInfo(name="A.mp4", duration=120.0, device="Nikon", shot_time="10:00"),
+            ClipInfo(name="B.mp4", duration=180.0, device="GoPro", shot_time="10:02"),
+        ]
+        split_durations = [120.0, 180.0]
+
+        result = generate_split_youtube_description(clips, split_durations, part_index=0)
+
+        assert "0:00 A" in result
+
+    def test_includes_device_info(self) -> None:
+        """촬영 기기 정보가 포함된다."""
+        clips = [
+            ClipInfo(name="A.mp4", duration=60.0, device="Nikon Z6III", shot_time=None),
+            ClipInfo(name="B.mp4", duration=60.0, device="GoPro", shot_time=None),
+        ]
+        split_durations = [120.0]
+
+        result = generate_split_youtube_description(clips, split_durations, part_index=0)
+
+        assert "Nikon Z6III" in result
+        assert "GoPro" in result
+
+    def test_second_part(self) -> None:
+        """두 번째 파트의 설명."""
+        clips = [
+            ClipInfo(name="A.mp4", duration=120.0, device=None, shot_time=None),
+            ClipInfo(name="B.mp4", duration=180.0, device=None, shot_time=None),
+        ]
+        split_durations = [120.0, 180.0]
+
+        result = generate_split_youtube_description(clips, split_durations, part_index=1)
+
+        assert "0:00 B" in result
+
+    def test_empty_part(self) -> None:
+        """해당 파트에 클립이 없는 경우 빈 문자열."""
+        clips = [
+            ClipInfo(name="A.mp4", duration=60.0, device=None, shot_time=None),
+        ]
+        split_durations = [60.0, 60.0]
+
+        result = generate_split_youtube_description(clips, split_durations, part_index=1)
+
+        # 빈 파트이므로 타임스탬프 줄 없음
+        assert result == "" or "0:00" not in result.split("\n")[0]

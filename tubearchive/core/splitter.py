@@ -4,6 +4,7 @@
 ffmpeg segment muxer를 활용하여 재인코딩 없이 키프레임 기준 분할.
 """
 
+import json
 import logging
 import re
 import subprocess
@@ -11,6 +12,39 @@ from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def probe_duration(file_path: Path) -> float:
+    """ffprobe로 영상 길이(초)를 조회한다.
+
+    분할된 파일의 실제 길이를 확인하는 용도. segment muxer는 키프레임 기준으로
+    분할하므로 요청 시간과 실제 길이가 다를 수 있다.
+
+    Args:
+        file_path: 영상 파일 경로
+
+    Returns:
+        초 단위 영상 길이. 실패 시 0.0.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(file_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        data = json.loads(result.stdout)
+        return float(data.get("format", {}).get("duration", 0))
+    except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError):
+        return 0.0
 
 
 @dataclass

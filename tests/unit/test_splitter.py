@@ -1,12 +1,14 @@
 """영상 분할 모듈 테스트."""
 
+import json
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.core.splitter import SplitOptions, VideoSplitter
+from tubearchive.core.splitter import SplitOptions, VideoSplitter, probe_duration
 
 
 class TestSplitOptions:
@@ -316,3 +318,40 @@ class TestVideoSplitterIntegration:
 
             with pytest.raises(NotADirectoryError, match="Output directory not found"):
                 self.splitter.split_video(input_path, output_dir, options)
+
+
+class TestProbeDuration:
+    """probe_duration 단위 테스트."""
+
+    @patch("tubearchive.core.splitter.subprocess.run")
+    def test_returns_duration_on_success(self, mock_run: MagicMock) -> None:
+        """ffprobe 성공 시 올바른 duration을 반환한다."""
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps({"format": {"duration": "123.456"}}),
+        )
+        result = probe_duration(Path("/fake/video.mp4"))
+        assert result == pytest.approx(123.456)
+        mock_run.assert_called_once()
+
+    @patch("tubearchive.core.splitter.subprocess.run")
+    def test_returns_zero_on_ffprobe_failure(self, mock_run: MagicMock) -> None:
+        """ffprobe 실패 시 0.0을 반환한다."""
+        mock_run.side_effect = subprocess.CalledProcessError(1, "ffprobe")
+        result = probe_duration(Path("/fake/video.mp4"))
+        assert result == 0.0
+
+    @patch("tubearchive.core.splitter.subprocess.run")
+    def test_returns_zero_on_invalid_json(self, mock_run: MagicMock) -> None:
+        """유효하지 않은 JSON 출력 시 0.0을 반환한다."""
+        mock_run.return_value = MagicMock(stdout="not json")
+        result = probe_duration(Path("/fake/video.mp4"))
+        assert result == 0.0
+
+    @patch("tubearchive.core.splitter.subprocess.run")
+    def test_returns_zero_on_missing_duration(self, mock_run: MagicMock) -> None:
+        """duration 필드가 없으면 0.0을 반환한다."""
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps({"format": {"filename": "test.mp4"}}),
+        )
+        result = probe_duration(Path("/fake/video.mp4"))
+        assert result == 0.0

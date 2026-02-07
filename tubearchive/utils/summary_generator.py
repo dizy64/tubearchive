@@ -417,3 +417,95 @@ def generate_single_file_description(
         lines.append(f"Shot at {shot_time}")
 
     return "\n".join(lines)
+
+
+def remap_chapters_for_splits(
+    clips: list[tuple[str, float]],
+    split_durations: list[float],
+    groups: list[FileSequenceGroup] | None = None,
+) -> list[list[tuple[str, str]]]:
+    """분할 파일별 챕터 목록을 생성한다.
+
+    원본 타임라인의 클립 정보와 각 분할 파일의 실제 길이를 바탕으로,
+    분할 파일마다 해당 구간에 속하는 챕터를 재매핑한다.
+
+    클립이 분할 경계를 걸치는 경우, 해당 클립은 양쪽 파트 모두에
+    챕터로 포함된다 (후속 파트에서는 0:00부터 시작).
+
+    Args:
+        clips: (파일명, 길이 초) 튜플 리스트 (원본 타임라인 순서)
+        split_durations: 각 분할 파일의 실제 길이(초) 리스트
+        groups: 그룹 정보 (있으면 연속 파일을 하나의 챕터로 합침)
+
+    Returns:
+        분할 파일별 [(타임스탬프, 제목)] 리스트의 리스트
+    """
+    aggregated = _aggregate_clips_for_chapters(clips, groups)
+
+    # 클립 타임라인 구축
+    clip_timeline: list[tuple[str, float, float]] = []  # (name, start, end)
+    current = 0.0
+    for filename, duration in aggregated:
+        clip_timeline.append((filename, current, current + duration))
+        current += duration
+
+    # 분할 경계 구축
+    part_boundaries: list[tuple[float, float]] = []  # (start, end)
+    current = 0.0
+    for dur in split_durations:
+        part_boundaries.append((current, current + dur))
+        current += dur
+
+    # 각 파트별 챕터 생성
+    result: list[list[tuple[str, str]]] = []
+    for part_start, part_end in part_boundaries:
+        chapters: list[tuple[str, str]] = []
+        for filename, clip_start, clip_end in clip_timeline:
+            # 클립이 파트와 겹치는지 확인
+            if clip_start < part_end and clip_end > part_start:
+                # 파트 내 상대 타임스탬프
+                relative_start = max(0.0, clip_start - part_start)
+                title = Path(filename).stem
+                timestamp = format_timestamp(relative_start)
+                chapters.append((timestamp, title))
+        result.append(chapters)
+
+    return result
+
+
+def generate_split_youtube_description(
+    video_clips: list[ClipInfo],
+    split_durations: list[float],
+    part_index: int,
+    groups: list[FileSequenceGroup] | None = None,
+) -> str:
+    """분할 파일 하나에 대한 YouTube 설명을 생성한다.
+
+    Args:
+        video_clips: 원본 클립 메타데이터 리스트
+        split_durations: 각 분할 파일의 실제 길이(초) 리스트
+        part_index: 0-based 파트 인덱스
+        groups: 그룹 정보
+
+    Returns:
+        해당 파트의 YouTube 설명 문자열 (타임스탬프 + 촬영기기 정보)
+    """
+    clips_tuples = [(clip.name, clip.duration) for clip in video_clips]
+    all_chapters = remap_chapters_for_splits(clips_tuples, split_durations, groups)
+
+    if part_index >= len(all_chapters) or not all_chapters[part_index]:
+        return ""
+
+    chapters = all_chapters[part_index]
+    lines: list[str] = []
+    for timestamp, title in chapters:
+        lines.append(f"{timestamp} {title}")
+
+    # 촬영 기기 정보 (중복 제거, None 제외)
+    devices = list(dict.fromkeys(clip.device for clip in video_clips if clip.device))
+    if devices:
+        lines.append("")
+        devices_str = ", ".join(devices)
+        lines.append(f"이 영상은 {devices_str}로 촬영됨")
+
+    return "\n".join(lines)
