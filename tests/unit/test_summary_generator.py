@@ -395,6 +395,30 @@ class TestRemapChaptersForSplits:
         # Part 2: B continues at 0:00
         assert result[1] == [("0:00", "B")]
 
+    def test_clip_spanning_all_parts(self) -> None:
+        """하나의 클립이 모든 파트에 걸치는 경우."""
+        clips = [("A.mp4", 300.0)]
+        split_durations = [100.0, 100.0, 100.0]
+
+        result = remap_chapters_for_splits(clips, split_durations)
+
+        assert len(result) == 3
+        # A가 모든 파트에서 0:00에 시작
+        assert result[0] == [("0:00", "A")]
+        assert result[1] == [("0:00", "A")]
+        assert result[2] == [("0:00", "A")]
+
+    def test_zero_duration_clip(self) -> None:
+        """0초 클립은 어떤 파트에도 포함되지 않는다."""
+        clips = [("A.mp4", 0.0), ("B.mp4", 60.0)]
+        split_durations = [60.0]
+
+        result = remap_chapters_for_splits(clips, split_durations)
+
+        assert len(result) == 1
+        # A(0초)는 end==start이므로 overlap 조건 불충족
+        assert result[0] == [("0:00", "B")]
+
 
 class TestGenerateSplitYoutubeDescription:
     """generate_split_youtube_description 단위 테스트."""
@@ -447,3 +471,25 @@ class TestGenerateSplitYoutubeDescription:
 
         # 빈 파트이므로 타임스탬프 줄 없음
         assert result == "" or "0:00" not in result.split("\n")[0]
+
+    def test_negative_part_index(self) -> None:
+        """음수 part_index는 빈 문자열을 반환한다."""
+        clips = [
+            ClipInfo(name="A.mp4", duration=60.0, device=None, shot_time=None),
+        ]
+        split_durations = [60.0]
+
+        result = generate_split_youtube_description(clips, split_durations, part_index=-1)
+
+        assert result == ""
+
+    def test_out_of_range_part_index(self) -> None:
+        """범위 초과 part_index는 빈 문자열을 반환한다."""
+        clips = [
+            ClipInfo(name="A.mp4", duration=60.0, device=None, shot_time=None),
+        ]
+        split_durations = [60.0]
+
+        result = generate_split_youtube_description(clips, split_durations, part_index=5)
+
+        assert result == ""

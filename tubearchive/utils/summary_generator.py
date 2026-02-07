@@ -493,7 +493,7 @@ def generate_split_youtube_description(
     clips_tuples = [(clip.name, clip.duration) for clip in video_clips]
     all_chapters = remap_chapters_for_splits(clips_tuples, split_durations, groups)
 
-    if part_index >= len(all_chapters) or not all_chapters[part_index]:
+    if part_index < 0 or part_index >= len(all_chapters) or not all_chapters[part_index]:
         return ""
 
     chapters = all_chapters[part_index]

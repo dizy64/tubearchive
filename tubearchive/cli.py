@@ -2328,15 +2328,20 @@ def _upload_split_files(
                 logger.warning(f"Failed to generate split description: {e}")
 
         print(f"\n📤 Part {i + 1}/{total} 업로드: {split_file.name}")
-        upload_to_youtube(
-            file_path=split_file,
-            title=part_title,
-            description=description,
-            privacy=privacy,
-            merge_job_id=merge_job_id,
-            playlist_ids=playlist_ids,
-            chunk_mb=chunk_mb,
-        )
+        try:
+            upload_to_youtube(
+                file_path=split_file,
+                title=part_title,
+                description=description,
+                privacy=privacy,
+                merge_job_id=merge_job_id,
+                playlist_ids=playlist_ids,
+                chunk_mb=chunk_mb,
+            )
+        except Exception as e:
+            logger.error(f"Part {i + 1}/{total} upload failed: {e}")
+            print(f"  ⚠️  Part {i + 1} 업로드 실패: {e}")
+            continue
 
 
 def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:

@@ -43,7 +43,13 @@ def probe_duration(file_path: Path) -> float:
         )
         data = json.loads(result.stdout)
         return float(data.get("format", {}).get("duration", 0))
-    except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError):
+    except (
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+        AttributeError,
+    ):
         return 0.0
 
 

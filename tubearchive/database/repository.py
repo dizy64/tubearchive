@@ -10,12 +10,15 @@ SQLite DB 위의 영상·트랜스코딩·병합·분할 작업 정보를 조회
 """
 
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 
 from tubearchive.models.job import JobStatus, MergeJob, SplitJob, TranscodingJob
 from tubearchive.models.video import VideoFile, VideoMetadata
+
+logger = logging.getLogger(__name__)
 
 
 class VideoRepository:
@@ -599,12 +602,17 @@ class SplitJobRepository:
 
     def _row_to_job(self, row: sqlite3.Row) -> SplitJob:
         """Row를 SplitJob으로 변환."""
+        try:
+            output_files = [Path(p) for p in json.loads(row["output_files"])]
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"Failed to parse output_files for split_job {row['id']}")
+            output_files = []
         return SplitJob(
             id=row["id"],
             merge_job_id=row["merge_job_id"],
             split_criterion=row["split_criterion"],
             split_value=row["split_value"],
-            output_files=[Path(p) for p in json.loads(row["output_files"])],
+            output_files=output_files,
             status=JobStatus(row["status"]),
             created_at=datetime.fromisoformat(row["created_at"]),
         )

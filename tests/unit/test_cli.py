@@ -845,6 +845,97 @@ class TestUploadSplitFiles:
         # 분할 파일 2개가 업로드됨
         assert mock_upload.call_count == 2
 
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.probe_duration", return_value=60.0)
+    def test_malformed_clips_json_does_not_crash(
+        self,
+        _mock_probe: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """잘못된 clips_info_json이어도 업로드가 진행된다."""
+        from tubearchive.cli import _upload_split_files
+
+        f1 = tmp_path / "video_001.mp4"
+        f1.touch()
+
+        _upload_split_files(
+            split_files=[f1],
+            title="Test",
+            clips_info_json="not valid json {{{",
+            privacy="unlisted",
+            merge_job_id=1,
+            playlist_ids=None,
+            chunk_mb=None,
+        )
+
+        assert mock_upload.call_count == 1
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.probe_duration", return_value=60.0)
+    def test_none_clips_json_does_not_crash(
+        self,
+        _mock_probe: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """clips_info_json이 None이어도 업로드가 진행된다."""
+        from tubearchive.cli import _upload_split_files
+
+        f1 = tmp_path / "video_001.mp4"
+        f1.touch()
+
+        _upload_split_files(
+            split_files=[f1],
+            title="Test",
+            clips_info_json=None,
+            privacy="unlisted",
+            merge_job_id=1,
+            playlist_ids=None,
+            chunk_mb=None,
+        )
+
+        assert mock_upload.call_count == 1
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.probe_duration", return_value=3600.0)
+    def test_partial_upload_failure_continues(
+        self,
+        _mock_probe: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """한 파트 업로드 실패 시 나머지 파트는 계속 업로드한다."""
+        from tubearchive.cli import _upload_split_files
+
+        f1 = tmp_path / "video_001.mp4"
+        f2 = tmp_path / "video_002.mp4"
+        f3 = tmp_path / "video_003.mp4"
+        f1.touch()
+        f2.touch()
+        f3.touch()
+
+        # 두 번째 호출만 실패
+        mock_upload.side_effect = [None, Exception("network error"), None]
+
+        clips_json = (
+            '[{"name":"A.mp4","duration":10800,"start":0,"end":10800,'
+            '"device":null,"shot_time":null}]'
+        )
+
+        _upload_split_files(
+            split_files=[f1, f2, f3],
+            title="Test",
+            clips_info_json=clips_json,
+            privacy="unlisted",
+            merge_job_id=1,
+            playlist_ids=None,
+            chunk_mb=None,
+        )
+
+        # 3번 모두 시도 (2번째 실패해도 3번째 진행)
+        assert mock_upload.call_count == 3
+
 
 class TestTruncatePath:
     """truncate_path 유틸리티 테스트."""

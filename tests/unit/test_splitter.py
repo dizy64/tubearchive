@@ -355,3 +355,23 @@ class TestProbeDuration:
         )
         result = probe_duration(Path("/fake/video.mp4"))
         assert result == 0.0
+
+    @patch("tubearchive.core.splitter.subprocess.run")
+    def test_returns_zero_on_non_dict_response(self, mock_run: MagicMock) -> None:
+        """ffprobe 응답이 dict가 아니면 0.0을 반환한다."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([1, 2, 3]))
+        assert probe_duration(Path("/fake/video.mp4")) == 0.0
+
+    @patch("tubearchive.core.splitter.subprocess.run")
+    def test_returns_zero_on_null_duration(self, mock_run: MagicMock) -> None:
+        """duration이 null이면 0.0을 반환한다."""
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps({"format": {"duration": None}}),
+        )
+        assert probe_duration(Path("/fake/video.mp4")) == 0.0
+
+    @patch("tubearchive.core.splitter.subprocess.run")
+    def test_returns_zero_on_empty_stdout(self, mock_run: MagicMock) -> None:
+        """빈 stdout이면 0.0을 반환한다."""
+        mock_run.return_value = MagicMock(stdout="")
+        assert probe_duration(Path("/fake/video.mp4")) == 0.0
