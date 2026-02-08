@@ -814,6 +814,99 @@ class TestValidateArgs:
         result = validate_args(args)
         assert result.auto_lut is False
 
+    def test_auto_lut_and_no_auto_lut_both_set(self) -> None:
+        """--auto-lut + --no-auto-lut 동시 → --no-auto-lut 우선."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level=None,
+            normalize_audio=False,
+            group=False,
+            no_group=False,
+            fade_duration=None,
+            upload=False,
+            thumbnail=False,
+            thumbnail_at=None,
+            thumbnail_quality=2,
+            detect_silence=False,
+            trim_silence=False,
+            silence_threshold="-30dB",
+            silence_duration=2.0,
+            bgm=None,
+            bgm_volume=None,
+            bgm_loop=False,
+            exclude=None,
+            include_only=None,
+            sort=None,
+            reorder=False,
+            split_duration=None,
+            split_size=None,
+            archive_originals=None,
+            archive_force=False,
+            timelapse=None,
+            timelapse_audio=False,
+            timelapse_resolution=None,
+            lut=None,
+            auto_lut=True,
+            no_auto_lut=True,
+            lut_before_hdr=False,
+        )
+        result = validate_args(args)
+        assert result.auto_lut is False
+
+    def test_device_luts_passed_through(self) -> None:
+        """device_luts 파라미터가 ValidatedArgs에 전달된다."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level=None,
+            normalize_audio=False,
+            group=False,
+            no_group=False,
+            fade_duration=None,
+            upload=False,
+            thumbnail=False,
+            thumbnail_at=None,
+            thumbnail_quality=2,
+            detect_silence=False,
+            trim_silence=False,
+            silence_threshold="-30dB",
+            silence_duration=2.0,
+            bgm=None,
+            bgm_volume=None,
+            bgm_loop=False,
+            exclude=None,
+            include_only=None,
+            sort=None,
+            reorder=False,
+            split_duration=None,
+            split_size=None,
+            archive_originals=None,
+            archive_force=False,
+            timelapse=None,
+            timelapse_audio=False,
+            timelapse_resolution=None,
+            lut=None,
+            auto_lut=None,
+            no_auto_lut=False,
+            lut_before_hdr=False,
+        )
+        luts = {"nikon": "/path/to/nikon.cube"}
+        result = validate_args(args, device_luts=luts)
+        assert result.device_luts == luts
+
 
 class TestCmdInitConfig:
     """cmd_init_config 테스트."""

@@ -56,7 +56,8 @@ TIMELAPSE_MAX_SPEED = 60
 ATEMPO_MAX = 2.0
 """FFmpeg atempo 필터 최대 배속 (단일 필터 제약)."""
 
-# LUT 지원 확장자
+# FFmpeg lut3d는 .cube/.3dl 외에도 .dat 등을 지원하지만,
+# 실무에서 거의 쓰이지 않으므로 이 두 형식만 허용한다.
 LUT_SUPPORTED_EXTENSIONS = {".cube", ".3dl"}
 
 
@@ -144,7 +145,10 @@ def create_lut_filter(lut_path: str) -> str:
         supported = ", ".join(sorted(LUT_SUPPORTED_EXTENSIONS))
         raise ValueError(f"Unsupported LUT format: {ext} (supported: {supported})")
 
-    return f"lut3d=file='{path}'"
+    # FFmpeg 필터 구문에서 경로를 작은따옴표로 감싸므로,
+    # 경로 내 작은따옴표를 이스케이프 처리한다 (' → '\\'').
+    escaped = str(path).replace("'", r"'\''")
+    return f"lut3d=file='{escaped}'"
 
 
 def create_hdr_to_sdr_filter(color_transfer: str | None) -> str:
@@ -722,7 +726,8 @@ def _build_portrait_video_filter(
     fg_height = target_height
     fg_width = int(source_width * (fg_height / source_height))
 
-    # 입력 체인: 안정화 → (LUT before) → HDR → (LUT after 아님) → split
+    # 입력 체인 구성. filter(None, [...])로 빈 문자열("")을 제거하여
+    # 선택적 필터(stabilize, lut, hdr)가 없을 때 쉼표가 남지 않게 한다.
     if lut_before_hdr and lut_filter:
         split_input = ",".join(
             filter(None, [stabilize_filter, lut_filter, hdr_filter, "split=2[bg][fg]"])
@@ -772,8 +777,7 @@ def _build_landscape_video_filter(
     if lut_before_hdr and lut_filter:
         chain = [stabilize_filter, lut_filter, hdr_filter, scale_pad, fade_filters]
     else:
-        lut_part = lut_filter if lut_filter else ""
-        chain = [stabilize_filter, hdr_filter, scale_pad, lut_part, fade_filters]
+        chain = [stabilize_filter, hdr_filter, scale_pad, lut_filter, fade_filters]
     parts = [p for p in chain if p]
     return f"[0:v]{','.join(parts)}[v_out]"
 

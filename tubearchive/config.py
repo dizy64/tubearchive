@@ -117,12 +117,16 @@ class ColorGradingConfig:
     """``config.toml`` 의 ``[color_grading]`` 섹션.
 
     LUT(Look-Up Table) 기반 컬러 그레이딩 설정을 관리한다.
+
+    ``auto_lut``만 환경변수(``TUBEARCHIVE_AUTO_LUT``)로 오버라이드 가능.
+    ``device_luts``는 TOML 중첩 테이블 구조이므로 환경변수 매핑이 없으며,
+    config.toml에서만 설정한다.
     """
 
     auto_lut: bool | None = None
     """기기 모델명 기반 자동 LUT 적용 여부."""
     device_luts: dict[str, str] = field(default_factory=dict)
-    """기기 키워드 → LUT 파일 경로 매핑."""
+    """기기 키워드 → LUT 파일 경로 매핑 (config.toml 전용, env var 없음)."""
 
 
 @dataclass(frozen=True)

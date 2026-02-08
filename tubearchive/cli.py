@@ -741,6 +741,8 @@ def create_parser() -> argparse.ArgumentParser:
         help="LUT 파일 경로 (.cube, .3dl) — 트랜스코딩 시 lut3d 필터 적용",
     )
 
+    # default=None으로 "CLI에서 명시하지 않음"과 "명시적 True"를 구분.
+    # None이면 환경변수/config 기본값(get_default_auto_lut())으로 결정.
     parser.add_argument(
         "--auto-lut",
         action="store_true",
@@ -870,7 +872,10 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def validate_args(args: argparse.Namespace) -> ValidatedArgs:
+def validate_args(
+    args: argparse.Namespace,
+    device_luts: dict[str, str] | None = None,
+) -> ValidatedArgs:
     """CLI 인자를 검증하고 :class:`ValidatedArgs` 로 변환한다.
 
     각 설정의 우선순위: **CLI 옵션 > 환경변수 > config.toml > 기본값**.
@@ -1071,7 +1076,10 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
 
     auto_lut_flag = getattr(args, "auto_lut", None)
     no_auto_lut_flag = getattr(args, "no_auto_lut", False)
+    # --no-auto-lut이 --auto-lut보다 우선 (명시적 비활성화)
     if no_auto_lut_flag:
+        if auto_lut_flag:
+            logger.warning("--auto-lut and --no-auto-lut both set; --no-auto-lut wins")
         auto_lut = False
     elif auto_lut_flag:
         auto_lut = True
@@ -1122,6 +1130,7 @@ def validate_args(args: argparse.Namespace) -> ValidatedArgs:
         lut_path=lut_path,
         auto_lut=auto_lut,
         lut_before_hdr=lut_before_hdr,
+        device_luts=device_luts if device_luts else None,
     )
 
 
@@ -3297,11 +3306,9 @@ def main() -> None:
             cmd_upload_only(args)
             return
 
-        validated_args = validate_args(args)
-
-        # config의 device_luts를 validated_args에 주입
-        if validated_args.device_luts is None and config.color_grading.device_luts:
-            validated_args.device_luts = config.color_grading.device_luts
+        # config의 device_luts를 validate_args에 전달하여 초기화 시 주입
+        cfg_device_luts = config.color_grading.device_luts or None
+        validated_args = validate_args(args, device_luts=cfg_device_luts)
 
         if validated_args.dry_run:
             _cmd_dry_run(validated_args)

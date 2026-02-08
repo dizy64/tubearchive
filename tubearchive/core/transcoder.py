@@ -50,12 +50,17 @@ def _resolve_auto_lut(device_model: str, device_luts: dict[str, str]) -> str | N
     부분 문자열 매칭(대소문자 무시)을 사용하며,
     다중 매칭 시 가장 긴 키워드(가장 구체적)를 우선한다.
 
+    Note:
+        짧은 키워드(예: "z")는 의도치 않은 매칭을 유발할 수 있으므로
+        config.toml에 충분히 구체적인 키워드를 사용하는 것을 권장한다.
+        ``~`` 경로도 지원한다 (expanduser 자동 적용).
+
     Args:
         device_model: FFprobe에서 감지된 기기 모델명
         device_luts: 기기 키워드 → LUT 파일 경로 매핑
 
     Returns:
-        매칭된 LUT 파일 경로 또는 None
+        매칭된 LUT 파일의 확장(절대) 경로 또는 None
     """
     if not device_model or not device_luts:
         return None
@@ -64,6 +69,8 @@ def _resolve_auto_lut(device_model: str, device_luts: dict[str, str]) -> str | N
     matches: list[tuple[int, str]] = []
 
     for keyword, lut_path in device_luts.items():
+        if not keyword:  # 빈 키워드는 모든 기기에 매칭되므로 건너뜀
+            continue
         if keyword.lower() in model_lower:
             matches.append((len(keyword), lut_path))
 
@@ -74,11 +81,13 @@ def _resolve_auto_lut(device_model: str, device_luts: dict[str, str]) -> str | N
     matches.sort(key=lambda x: x[0], reverse=True)
     best_path = matches[0][1]
 
-    if not Path(best_path).is_file():
+    # config.toml에서 ~/LUTs/nikon.cube 같은 경로가 올 수 있으므로 확장
+    resolved = Path(best_path).expanduser()
+    if not resolved.is_file():
         logger.warning("Auto-LUT file not found: %s", best_path)
         return None
 
-    return best_path
+    return str(resolved)
 
 
 class Transcoder:

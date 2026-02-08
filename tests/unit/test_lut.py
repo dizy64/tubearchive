@@ -78,6 +78,17 @@ class TestCreateLutFilter:
         result = create_lut_filter(str(lut_file))
         assert "lut3d=file=" in result
 
+    def test_path_with_single_quote(self, tmp_path: Path) -> None:
+        """작은따옴표 포함 경로 — FFmpeg 필터 이스케이핑 검증."""
+        lut_dir = tmp_path / "user's luts"
+        lut_dir.mkdir()
+        lut_file = lut_dir / "test.cube"
+        lut_file.write_text("LUT data\n")
+        result = create_lut_filter(str(lut_file))
+        # 작은따옴표가 ''\'' 패턴으로 이스케이프됨
+        assert r"'\''" in result
+        assert "lut3d=file=" in result
+
     def test_supported_extensions_constant(self) -> None:
         """지원 확장자 상수 확인."""
         assert ".cube" in LUT_SUPPORTED_EXTENSIONS
@@ -164,3 +175,27 @@ class TestResolveLutFilter:
         device_luts = {"nikon": str(lut_file)}
         result = _resolve_auto_lut("", device_luts)
         assert result is None
+
+    def test_empty_keyword_skipped(self, tmp_path: Path) -> None:
+        """빈 문자열 키워드는 건너뛴다."""
+        from tubearchive.core.transcoder import _resolve_auto_lut
+
+        lut_file = tmp_path / "catch_all.cube"
+        lut_file.write_text("LUT data\n")
+        device_luts = {"": str(lut_file)}
+        result = _resolve_auto_lut("Nikon Z6III", device_luts)
+        assert result is None
+
+    def test_tilde_path_expanduser(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """~ 경로가 expanduser로 확장된다."""
+        from tubearchive.core.transcoder import _resolve_auto_lut
+
+        lut_file = tmp_path / "nikon.cube"
+        lut_file.write_text("LUT data\n")
+        # ~ → tmp_path로 확장되도록 HOME 환경변수 변경
+        monkeypatch.setenv("HOME", str(tmp_path))
+        device_luts = {"nikon": "~/nikon.cube"}
+        result = _resolve_auto_lut("NIKON Z6III", device_luts)
+        assert result is not None
+        assert "~" not in result  # 확장되어 절대경로
+        assert str(tmp_path) in result
