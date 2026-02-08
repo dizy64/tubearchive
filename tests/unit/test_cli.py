@@ -344,6 +344,48 @@ class TestCreateParser:
 
         assert args.csv is True
 
+    def test_parses_lut_option(self) -> None:
+        """--lut 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(["--lut", "/path/to/lut.cube"])
+
+        assert args.lut == "/path/to/lut.cube"
+
+    def test_lut_default_is_none(self) -> None:
+        """--lut 기본값 None."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.lut is None
+
+    def test_parses_auto_lut_flag(self) -> None:
+        """--auto-lut 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--auto-lut"])
+
+        assert args.auto_lut is True
+
+    def test_parses_no_auto_lut_flag(self) -> None:
+        """--no-auto-lut 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--no-auto-lut"])
+
+        assert args.no_auto_lut is True
+
+    def test_parses_lut_before_hdr_flag(self) -> None:
+        """--lut-before-hdr 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--lut-before-hdr"])
+
+        assert args.lut_before_hdr is True
+
+    def test_lut_before_hdr_default_false(self) -> None:
+        """--lut-before-hdr 기본값 False."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.lut_before_hdr is False
+
 
 class TestValidateArgs:
     """인자 검증 테스트."""
@@ -532,6 +574,338 @@ class TestValidateArgs:
 
         with pytest.raises(FileNotFoundError, match="Output directory"):
             validate_args(args)
+
+    def test_validates_lut_path(self, tmp_path: Path) -> None:
+        """유효한 LUT 파일 경로 검증."""
+        lut_file = tmp_path / "test.cube"
+        lut_file.write_text("LUT_3D_SIZE 33\n")
+        target = tmp_path / "video.mp4"
+        target.touch()
+
+        args = argparse.Namespace(
+            targets=[str(target)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level=None,
+            normalize_audio=False,
+            group=False,
+            no_group=False,
+            fade_duration=None,
+            upload=False,
+            thumbnail=False,
+            thumbnail_at=None,
+            thumbnail_quality=2,
+            detect_silence=False,
+            trim_silence=False,
+            silence_threshold="-30dB",
+            silence_duration=2.0,
+            bgm=None,
+            bgm_volume=None,
+            bgm_loop=False,
+            exclude=None,
+            include_only=None,
+            sort=None,
+            reorder=False,
+            split_duration=None,
+            split_size=None,
+            archive_originals=None,
+            archive_force=False,
+            timelapse=None,
+            timelapse_audio=False,
+            timelapse_resolution=None,
+            lut=str(lut_file),
+            auto_lut=None,
+            no_auto_lut=False,
+            lut_before_hdr=False,
+        )
+        result = validate_args(args)
+        assert result.lut_path is not None
+        assert result.lut_path.name == "test.cube"
+
+    def test_lut_nonexistent_file_raises(self) -> None:
+        """존재하지 않는 LUT 파일 → FileNotFoundError."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level=None,
+            normalize_audio=False,
+            group=False,
+            no_group=False,
+            fade_duration=None,
+            upload=False,
+            thumbnail=False,
+            thumbnail_at=None,
+            thumbnail_quality=2,
+            detect_silence=False,
+            trim_silence=False,
+            silence_threshold="-30dB",
+            silence_duration=2.0,
+            bgm=None,
+            bgm_volume=None,
+            bgm_loop=False,
+            exclude=None,
+            include_only=None,
+            sort=None,
+            reorder=False,
+            split_duration=None,
+            split_size=None,
+            archive_originals=None,
+            archive_force=False,
+            timelapse=None,
+            timelapse_audio=False,
+            timelapse_resolution=None,
+            lut="/nonexistent/path/test.cube",
+            auto_lut=None,
+            no_auto_lut=False,
+            lut_before_hdr=False,
+        )
+        with pytest.raises(FileNotFoundError, match="LUT file not found"):
+            validate_args(args)
+
+    def test_lut_invalid_extension_raises(self, tmp_path: Path) -> None:
+        """잘못된 LUT 확장자 → ValueError."""
+        lut_file = tmp_path / "test.png"
+        lut_file.write_text("not a lut\n")
+
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level=None,
+            normalize_audio=False,
+            group=False,
+            no_group=False,
+            fade_duration=None,
+            upload=False,
+            thumbnail=False,
+            thumbnail_at=None,
+            thumbnail_quality=2,
+            detect_silence=False,
+            trim_silence=False,
+            silence_threshold="-30dB",
+            silence_duration=2.0,
+            bgm=None,
+            bgm_volume=None,
+            bgm_loop=False,
+            exclude=None,
+            include_only=None,
+            sort=None,
+            reorder=False,
+            split_duration=None,
+            split_size=None,
+            archive_originals=None,
+            archive_force=False,
+            timelapse=None,
+            timelapse_audio=False,
+            timelapse_resolution=None,
+            lut=str(lut_file),
+            auto_lut=None,
+            no_auto_lut=False,
+            lut_before_hdr=False,
+        )
+        with pytest.raises(ValueError, match="Unsupported LUT format"):
+            validate_args(args)
+
+    def test_auto_lut_flag_sets_true(self) -> None:
+        """--auto-lut 플래그가 auto_lut=True로 설정."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level=None,
+            normalize_audio=False,
+            group=False,
+            no_group=False,
+            fade_duration=None,
+            upload=False,
+            thumbnail=False,
+            thumbnail_at=None,
+            thumbnail_quality=2,
+            detect_silence=False,
+            trim_silence=False,
+            silence_threshold="-30dB",
+            silence_duration=2.0,
+            bgm=None,
+            bgm_volume=None,
+            bgm_loop=False,
+            exclude=None,
+            include_only=None,
+            sort=None,
+            reorder=False,
+            split_duration=None,
+            split_size=None,
+            archive_originals=None,
+            archive_force=False,
+            timelapse=None,
+            timelapse_audio=False,
+            timelapse_resolution=None,
+            lut=None,
+            auto_lut=True,
+            no_auto_lut=False,
+            lut_before_hdr=False,
+        )
+        result = validate_args(args)
+        assert result.auto_lut is True
+
+    def test_no_auto_lut_overrides(self) -> None:
+        """--no-auto-lut이 환경변수/config보다 우선."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level=None,
+            normalize_audio=False,
+            group=False,
+            no_group=False,
+            fade_duration=None,
+            upload=False,
+            thumbnail=False,
+            thumbnail_at=None,
+            thumbnail_quality=2,
+            detect_silence=False,
+            trim_silence=False,
+            silence_threshold="-30dB",
+            silence_duration=2.0,
+            bgm=None,
+            bgm_volume=None,
+            bgm_loop=False,
+            exclude=None,
+            include_only=None,
+            sort=None,
+            reorder=False,
+            split_duration=None,
+            split_size=None,
+            archive_originals=None,
+            archive_force=False,
+            timelapse=None,
+            timelapse_audio=False,
+            timelapse_resolution=None,
+            lut=None,
+            auto_lut=None,
+            no_auto_lut=True,
+            lut_before_hdr=False,
+        )
+        result = validate_args(args)
+        assert result.auto_lut is False
+
+    def test_auto_lut_and_no_auto_lut_both_set(self) -> None:
+        """--auto-lut + --no-auto-lut 동시 → --no-auto-lut 우선."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level=None,
+            normalize_audio=False,
+            group=False,
+            no_group=False,
+            fade_duration=None,
+            upload=False,
+            thumbnail=False,
+            thumbnail_at=None,
+            thumbnail_quality=2,
+            detect_silence=False,
+            trim_silence=False,
+            silence_threshold="-30dB",
+            silence_duration=2.0,
+            bgm=None,
+            bgm_volume=None,
+            bgm_loop=False,
+            exclude=None,
+            include_only=None,
+            sort=None,
+            reorder=False,
+            split_duration=None,
+            split_size=None,
+            archive_originals=None,
+            archive_force=False,
+            timelapse=None,
+            timelapse_audio=False,
+            timelapse_resolution=None,
+            lut=None,
+            auto_lut=True,
+            no_auto_lut=True,
+            lut_before_hdr=False,
+        )
+        result = validate_args(args)
+        assert result.auto_lut is False
+
+    def test_device_luts_passed_through(self) -> None:
+        """device_luts 파라미터가 ValidatedArgs에 전달된다."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            denoise=False,
+            denoise_level=None,
+            normalize_audio=False,
+            group=False,
+            no_group=False,
+            fade_duration=None,
+            upload=False,
+            thumbnail=False,
+            thumbnail_at=None,
+            thumbnail_quality=2,
+            detect_silence=False,
+            trim_silence=False,
+            silence_threshold="-30dB",
+            silence_duration=2.0,
+            bgm=None,
+            bgm_volume=None,
+            bgm_loop=False,
+            exclude=None,
+            include_only=None,
+            sort=None,
+            reorder=False,
+            split_duration=None,
+            split_size=None,
+            archive_originals=None,
+            archive_force=False,
+            timelapse=None,
+            timelapse_audio=False,
+            timelapse_resolution=None,
+            lut=None,
+            auto_lut=None,
+            no_auto_lut=False,
+            lut_before_hdr=False,
+        )
+        luts = {"nikon": "/path/to/nikon.cube"}
+        result = validate_args(args, device_luts=luts)
+        assert result.device_luts == luts
 
 
 class TestCmdInitConfig:
@@ -1003,6 +1377,28 @@ class TestTranscodeOptions:
         opts = TranscodeOptions()
         with pytest.raises(AttributeError):
             opts.denoise = True  # type: ignore[misc]
+
+    def test_lut_default_values(self) -> None:
+        """LUT 관련 기본값 확인."""
+        opts = TranscodeOptions()
+        assert opts.lut_path is None
+        assert opts.auto_lut is False
+        assert opts.lut_before_hdr is False
+        assert opts.device_luts is None
+
+    def test_lut_custom_values(self) -> None:
+        """LUT 관련 커스텀 값 확인."""
+        device_luts = {"nikon": "/path/to/nikon.cube"}
+        opts = TranscodeOptions(
+            lut_path="/path/to/lut.cube",
+            auto_lut=True,
+            lut_before_hdr=True,
+            device_luts=device_luts,
+        )
+        assert opts.lut_path == "/path/to/lut.cube"
+        assert opts.auto_lut is True
+        assert opts.lut_before_hdr is True
+        assert opts.device_luts == device_luts
 
 
 class TestDatabaseSession:

@@ -44,6 +44,52 @@ from tubearchive.utils.progress import ProgressInfo
 logger = logging.getLogger(__name__)
 
 
+def _resolve_auto_lut(device_model: str, device_luts: dict[str, str]) -> str | None:
+    """기기 모델명 기반으로 LUT 파일 경로를 자동 매칭한다.
+
+    부분 문자열 매칭(대소문자 무시)을 사용하며,
+    다중 매칭 시 가장 긴 키워드(가장 구체적)를 우선한다.
+
+    Note:
+        짧은 키워드(예: "z")는 의도치 않은 매칭을 유발할 수 있으므로
+        config.toml에 충분히 구체적인 키워드를 사용하는 것을 권장한다.
+        ``~`` 경로도 지원한다 (expanduser 자동 적용).
+
+    Args:
+        device_model: FFprobe에서 감지된 기기 모델명
+        device_luts: 기기 키워드 → LUT 파일 경로 매핑
+
+    Returns:
+        매칭된 LUT 파일의 확장(절대) 경로 또는 None
+    """
+    if not device_model or not device_luts:
+        return None
+
+    model_lower = device_model.lower()
+    matches: list[tuple[int, str]] = []
+
+    for keyword, lut_path in device_luts.items():
+        if not keyword:  # 빈 키워드는 모든 기기에 매칭되므로 건너뜀
+            continue
+        if keyword.lower() in model_lower:
+            matches.append((len(keyword), lut_path))
+
+    if not matches:
+        return None
+
+    # 가장 긴 키워드(가장 구체적) 우선
+    matches.sort(key=lambda x: x[0], reverse=True)
+    best_path = matches[0][1]
+
+    # config.toml에서 ~/LUTs/nikon.cube 같은 경로가 올 수 있으므로 확장
+    resolved = Path(best_path).expanduser()
+    if not resolved.is_file():
+        logger.warning("Auto-LUT file not found: %s", best_path)
+        return None
+
+    return str(resolved)
+
+
 class Transcoder:
     """영상 파일을 HEVC 10-bit SDR로 트랜스코딩하는 엔진.
 
@@ -290,6 +336,10 @@ class Transcoder:
         stabilize: bool = False,
         stabilize_strength: str = "medium",
         stabilize_crop: str = "crop",
+        lut_path: str | None = None,
+        auto_lut: bool = False,
+        lut_before_hdr: bool = False,
+        device_luts: dict[str, str] | None = None,
         progress_info_callback: Callable[[ProgressInfo], None] | None = None,
     ) -> tuple[Path, int, list[SilenceSegment] | None]:
         """
@@ -311,6 +361,10 @@ class Transcoder:
             stabilize: 영상 안정화(vidstab) 활성화 여부
             stabilize_strength: 안정화 강도 (light/medium/heavy)
             stabilize_crop: 안정화 후 크롭 모드 (crop/expand)
+            lut_path: LUT 파일 경로 (직접 지정, auto_lut보다 우선)
+            auto_lut: 기기 모델 기반 자동 LUT 매칭 활성화
+            lut_before_hdr: LUT 필터를 HDR→SDR 변환 전에 적용
+            device_luts: 기기 키워드 → LUT 파일 경로 매핑
             progress_info_callback: 상세 진행률 콜백 (UI 업데이트용)
 
         Returns:
@@ -408,6 +462,13 @@ class Transcoder:
                 logger.warning(f"Vidstab analysis failed, skipping stabilization: {e}")
                 stabilize_filter = ""
 
+        # 5.8 LUT 해석 (lut_path 직접 지정 > auto_lut 매칭)
+        resolved_lut: str | None = lut_path
+        if resolved_lut is None and auto_lut and device_luts and metadata.device_model:
+            resolved_lut = _resolve_auto_lut(metadata.device_model, device_luts)
+            if resolved_lut:
+                logger.info(f"Auto-LUT matched: {resolved_lut} for {metadata.device_model}")
+
         # 6. 프로파일 및 필터 준비 (항상 SDR, HDR은 필터에서 변환)
         profile = PROFILE_SDR
         logger.info(f"Using profile: {profile.name}")
@@ -428,6 +489,8 @@ class Transcoder:
             denoise_level=denoise_level,
             silence_remove=silence_remove_filter,
             loudnorm_analysis=loudnorm_analysis,
+            lut_path=resolved_lut,
+            lut_before_hdr=lut_before_hdr,
         )
 
         # 7. 실행: VideoToolbox → (실패 시) libx265 폴백

@@ -12,6 +12,7 @@ from tubearchive.config import (
     ENV_STABILIZE_CROP,
     ENV_STABILIZE_STRENGTH,
     AppConfig,
+    ColorGradingConfig,
     GeneralConfig,
     YouTubeConfig,
     apply_config_to_env,
@@ -900,3 +901,169 @@ class TestStabilizeConfig:
         """기본 설정 템플릿에 stabilize 관련 주석이 포함된다."""
         content = generate_default_config()
         assert "stabilize" in content
+
+    def test_color_grading_config_frozen(self) -> None:
+        """ColorGradingConfig는 불변."""
+        config = ColorGradingConfig(auto_lut=True)
+        with pytest.raises(AttributeError):
+            config.auto_lut = False  # type: ignore[misc]
+
+
+class TestColorGradingConfig:
+    """[color_grading] 섹션 파싱 테스트."""
+
+    def test_loads_auto_lut_true(self, tmp_path: Path) -> None:
+        """auto_lut=true 파싱."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[color_grading]
+auto_lut = true
+""")
+        config = load_config(config_file)
+        assert config.color_grading.auto_lut is True
+
+    def test_loads_auto_lut_false(self, tmp_path: Path) -> None:
+        """auto_lut=false 파싱."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[color_grading]
+auto_lut = false
+""")
+        config = load_config(config_file)
+        assert config.color_grading.auto_lut is False
+
+    def test_loads_device_luts(self, tmp_path: Path) -> None:
+        """device_luts 중첩 테이블 파싱."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[color_grading]
+auto_lut = true
+
+[color_grading.device_luts]
+nikon = "/path/to/nikon.cube"
+gopro = "/path/to/gopro.cube"
+""")
+        config = load_config(config_file)
+        assert config.color_grading.auto_lut is True
+        assert config.color_grading.device_luts == {
+            "nikon": "/path/to/nikon.cube",
+            "gopro": "/path/to/gopro.cube",
+        }
+
+    def test_missing_section_returns_default(self, tmp_path: Path) -> None:
+        """[color_grading] 미존재 시 기본값."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[general]
+parallel = 2
+""")
+        config = load_config(config_file)
+        assert config.color_grading == ColorGradingConfig()
+        assert config.color_grading.auto_lut is None
+        assert config.color_grading.device_luts == {}
+
+    def test_empty_section_returns_default(self, tmp_path: Path) -> None:
+        """빈 [color_grading] → 기본값."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[color_grading]
+""")
+        config = load_config(config_file)
+        assert config.color_grading.auto_lut is None
+        assert config.color_grading.device_luts == {}
+
+    def test_auto_lut_type_error(self, tmp_path: Path) -> None:
+        """auto_lut="yes" → 타입 경고 + None."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[color_grading]
+auto_lut = "yes"
+""")
+        config = load_config(config_file)
+        assert config.color_grading.auto_lut is None
+
+    def test_device_luts_non_string_value_ignored(self, tmp_path: Path) -> None:
+        """device_luts 값이 문자열이 아닌 경우 무시."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[color_grading]
+[color_grading.device_luts]
+nikon = "/valid/path.cube"
+bad_entry = 123
+""")
+        config = load_config(config_file)
+        assert config.color_grading.device_luts == {"nikon": "/valid/path.cube"}
+
+    def test_device_luts_not_table_ignored(self, tmp_path: Path) -> None:
+        """device_luts가 테이블이 아닌 경우 무시."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[color_grading]
+device_luts = "not_a_table"
+""")
+        config = load_config(config_file)
+        assert config.color_grading.device_luts == {}
+
+    def test_auto_lut_env_injection(self) -> None:
+        """apply_config_to_env로 auto_lut 환경변수 주입 확인."""
+        config = AppConfig(
+            color_grading=ColorGradingConfig(auto_lut=True),
+        )
+
+        saved = os.environ.pop("TUBEARCHIVE_AUTO_LUT", None)
+        try:
+            apply_config_to_env(config)
+            assert os.environ.get("TUBEARCHIVE_AUTO_LUT") == "true"
+        finally:
+            os.environ.pop("TUBEARCHIVE_AUTO_LUT", None)
+            if saved is not None:
+                os.environ["TUBEARCHIVE_AUTO_LUT"] = saved
+
+    def test_auto_lut_env_preserves_existing(self) -> None:
+        """기존 환경변수 미덮어쓰기."""
+        config = AppConfig(
+            color_grading=ColorGradingConfig(auto_lut=True),
+        )
+
+        saved = os.environ.get("TUBEARCHIVE_AUTO_LUT")
+        os.environ["TUBEARCHIVE_AUTO_LUT"] = "false"
+        try:
+            apply_config_to_env(config)
+            assert os.environ.get("TUBEARCHIVE_AUTO_LUT") == "false"
+        finally:
+            if saved is not None:
+                os.environ["TUBEARCHIVE_AUTO_LUT"] = saved
+            else:
+                os.environ.pop("TUBEARCHIVE_AUTO_LUT", None)
+
+    def test_get_default_auto_lut(self) -> None:
+        """환경변수 미설정 시 기본값 False."""
+        from tubearchive.config import get_default_auto_lut
+
+        saved = os.environ.pop("TUBEARCHIVE_AUTO_LUT", None)
+        try:
+            assert get_default_auto_lut() is False
+        finally:
+            if saved is not None:
+                os.environ["TUBEARCHIVE_AUTO_LUT"] = saved
+
+    def test_get_default_auto_lut_env_override(self) -> None:
+        """환경변수로 auto_lut 활성화."""
+        from tubearchive.config import get_default_auto_lut
+
+        saved = os.environ.get("TUBEARCHIVE_AUTO_LUT")
+        try:
+            os.environ["TUBEARCHIVE_AUTO_LUT"] = "true"
+            assert get_default_auto_lut() is True
+        finally:
+            if saved is not None:
+                os.environ["TUBEARCHIVE_AUTO_LUT"] = saved
+            else:
+                os.environ.pop("TUBEARCHIVE_AUTO_LUT", None)
+
+    def test_generate_default_config_includes_color_grading(self) -> None:
+        """generate_default_config에 [color_grading] 섹션 포함."""
+        result = generate_default_config()
+        assert "[color_grading]" in result
+        assert "auto_lut" in result
+        assert "device_luts" in result
