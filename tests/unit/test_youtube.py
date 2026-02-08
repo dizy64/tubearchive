@@ -571,3 +571,256 @@ class TestAuthStatusMessage:
         guide = status.get_setup_guide()
 
         assert "완료" in guide or "준비" in guide or "✅" in guide
+
+
+class TestListPlaylists:
+    """list_playlists API 테스트."""
+
+    def test_single_page(self) -> None:
+        """단일 페이지 응답."""
+        from tubearchive.youtube.playlist import list_playlists
+
+        service = MagicMock()
+        service.playlists().list().execute.return_value = {
+            "items": [
+                {
+                    "id": "PL1",
+                    "snippet": {"title": "여행"},
+                    "contentDetails": {"itemCount": 5},
+                },
+                {
+                    "id": "PL2",
+                    "snippet": {"title": "일상"},
+                    "contentDetails": {"itemCount": 3},
+                },
+            ],
+        }
+
+        result = list_playlists(service)
+
+        assert len(result) == 2
+        assert result[0].id == "PL1"
+        assert result[0].title == "여행"
+        assert result[0].item_count == 5
+
+    def test_pagination(self) -> None:
+        """페이지네이션 응답."""
+        from tubearchive.youtube.playlist import list_playlists
+
+        service = MagicMock()
+        page1 = {
+            "items": [
+                {"id": "PL1", "snippet": {"title": "A"}, "contentDetails": {"itemCount": 1}},
+            ],
+            "nextPageToken": "token2",
+        }
+        page2 = {
+            "items": [
+                {"id": "PL2", "snippet": {"title": "B"}, "contentDetails": {"itemCount": 2}},
+            ],
+        }
+        service.playlists().list().execute.side_effect = [page1, page2]
+
+        result = list_playlists(service)
+
+        assert len(result) == 2
+        assert result[0].id == "PL1"
+        assert result[1].id == "PL2"
+
+    def test_empty_response(self) -> None:
+        """빈 응답."""
+        from tubearchive.youtube.playlist import list_playlists
+
+        service = MagicMock()
+        service.playlists().list().execute.return_value = {"items": []}
+
+        result = list_playlists(service)
+        assert result == []
+
+    def test_missing_items_key(self) -> None:
+        """items 키 없는 응답은 빈 리스트."""
+        from tubearchive.youtube.playlist import list_playlists
+
+        service = MagicMock()
+        service.playlists().list().execute.return_value = {}
+
+        result = list_playlists(service)
+        assert result == []
+
+
+class TestCreatePlaylist:
+    """create_playlist API 테스트."""
+
+    def test_success(self) -> None:
+        """성공적으로 플레이리스트 생성."""
+        from tubearchive.youtube.playlist import create_playlist
+
+        service = MagicMock()
+        service.playlists().insert().execute.return_value = {"id": "PLnew"}
+
+        result = create_playlist(service, "테스트 리스트")
+        assert result == "PLnew"
+
+    def test_missing_id_raises(self) -> None:
+        """응답에 id 없으면 PlaylistError."""
+        from tubearchive.youtube.playlist import PlaylistError, create_playlist
+
+        service = MagicMock()
+        service.playlists().insert().execute.return_value = {}
+
+        with pytest.raises(PlaylistError, match="missing"):
+            create_playlist(service, "테스트")
+
+    def test_api_exception_wraps(self) -> None:
+        """API 예외를 PlaylistError로 래핑."""
+        from tubearchive.youtube.playlist import PlaylistError, create_playlist
+
+        service = MagicMock()
+        service.playlists().insert().execute.side_effect = RuntimeError("API error")
+
+        with pytest.raises(PlaylistError, match="Failed to create"):
+            create_playlist(service, "테스트")
+
+    def test_passes_privacy(self) -> None:
+        """privacy 파라미터가 body에 올바르게 전달."""
+        from tubearchive.youtube.playlist import create_playlist
+
+        service = MagicMock()
+        service.playlists().insert().execute.return_value = {"id": "PLnew"}
+
+        create_playlist(service, "테스트", privacy="private")
+
+        call_kwargs = service.playlists().insert.call_args
+        body = call_kwargs[1]["body"]
+        assert body["status"]["privacyStatus"] == "private"
+
+
+class TestAddToPlaylist:
+    """add_to_playlist API 테스트."""
+
+    def test_success(self) -> None:
+        """성공적으로 영상 추가."""
+        from tubearchive.youtube.playlist import add_to_playlist
+
+        service = MagicMock()
+        service.playlistItems().insert().execute.return_value = {"id": "ITEM1"}
+
+        result = add_to_playlist(service, "PL1", "VIDEO1")
+        assert result == "ITEM1"
+
+    def test_missing_id_raises(self) -> None:
+        """응답에 id 없으면 PlaylistError."""
+        from tubearchive.youtube.playlist import PlaylistError, add_to_playlist
+
+        service = MagicMock()
+        service.playlistItems().insert().execute.return_value = {}
+
+        with pytest.raises(PlaylistError, match="missing"):
+            add_to_playlist(service, "PL1", "VIDEO1")
+
+    def test_api_exception_wraps(self) -> None:
+        """API 예외를 PlaylistError로 래핑."""
+        from tubearchive.youtube.playlist import PlaylistError, add_to_playlist
+
+        service = MagicMock()
+        service.playlistItems().insert().execute.side_effect = RuntimeError("API error")
+
+        with pytest.raises(PlaylistError, match="Failed to add"):
+            add_to_playlist(service, "PL1", "VIDEO1")
+
+    def test_correct_resource_body(self) -> None:
+        """playlistId, videoId가 body에 올바르게 전달."""
+        from tubearchive.youtube.playlist import add_to_playlist
+
+        service = MagicMock()
+        service.playlistItems().insert().execute.return_value = {"id": "ITEM1"}
+
+        add_to_playlist(service, "PL1", "VIDEO1")
+
+        call_kwargs = service.playlistItems().insert.call_args
+        body = call_kwargs[1]["body"]
+        assert body["snippet"]["playlistId"] == "PL1"
+        assert body["snippet"]["resourceId"]["videoId"] == "VIDEO1"
+
+
+class TestSelectPlaylistInteractive:
+    """select_playlist_interactive 인터랙션 테스트."""
+
+    def _make_playlists(self, count: int = 3) -> list:
+        from tubearchive.youtube.playlist import Playlist
+
+        return [
+            Playlist(id=f"PL{i}", title=f"리스트{i}", item_count=i) for i in range(1, count + 1)
+        ]
+
+    def test_empty_list_returns_empty(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """빈 목록 → 빈 리스트 반환."""
+        from tubearchive.youtube.playlist import select_playlist_interactive
+
+        result = select_playlist_interactive([])
+
+        assert result == []
+        captured = capsys.readouterr()
+        assert "없습니다" in captured.out
+
+    def test_single_selection(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """단일 선택 (번호 1 입력)."""
+        from tubearchive.youtube.playlist import select_playlist_interactive
+
+        playlists = self._make_playlists()
+        monkeypatch.setattr("builtins.input", lambda _: "1")
+
+        result = select_playlist_interactive(playlists)
+
+        assert len(result) == 1
+        assert result[0].id == "PL1"
+
+    def test_cancel_with_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """0 입력으로 취소."""
+        from tubearchive.youtube.playlist import select_playlist_interactive
+
+        playlists = self._make_playlists()
+        monkeypatch.setattr("builtins.input", lambda _: "0")
+
+        result = select_playlist_interactive(playlists)
+        assert result == []
+
+    def test_multi_selection(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """여러 개 선택 (1,3 입력)."""
+        from tubearchive.youtube.playlist import select_playlist_interactive
+
+        playlists = self._make_playlists()
+        monkeypatch.setattr("builtins.input", lambda _: "1,3")
+
+        result = select_playlist_interactive(playlists)
+
+        assert len(result) == 2
+        assert result[0].id == "PL1"
+        assert result[1].id == "PL3"
+
+    def test_invalid_then_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """잘못된 입력 후 올바른 입력."""
+        from tubearchive.youtube.playlist import select_playlist_interactive
+
+        playlists = self._make_playlists()
+        inputs = iter(["abc", "1"])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+
+        result = select_playlist_interactive(playlists)
+
+        assert len(result) == 1
+        assert result[0].id == "PL1"
+
+    def test_keyboard_interrupt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """EOFError → 빈 리스트 반환."""
+        from tubearchive.youtube.playlist import select_playlist_interactive
+
+        playlists = self._make_playlists()
+
+        def raise_eof(_: str) -> str:
+            raise EOFError()
+
+        monkeypatch.setattr("builtins.input", raise_eof)
+
+        result = select_playlist_interactive(playlists)
+        assert result == []

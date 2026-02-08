@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import pytest
 
 from tubearchive.core.scanner import scan_videos
-from tubearchive.models.video import VideoFile
+from tubearchive.models.video import FadeConfig, VideoFile, VideoMetadata
 
 
 class TestScanner:
@@ -120,3 +120,68 @@ class TestScanner:
         assert len(videos) >= 3
         filenames = [v.path.name for v in videos]
         assert "video1.mp4" in filenames
+
+
+class TestVideoMetadataProperties:
+    """VideoMetadata 프로퍼티 테스트."""
+
+    def _make_metadata(self, **kwargs: object) -> VideoMetadata:
+        """테스트용 VideoMetadata 생성 헬퍼."""
+        defaults: dict[str, object] = {
+            "width": 3840,
+            "height": 2160,
+            "duration_seconds": 60.0,
+            "fps": 29.97,
+            "codec": "hevc",
+            "pixel_format": "yuv420p10le",
+            "is_portrait": False,
+            "is_vfr": False,
+            "device_model": None,
+            "color_space": None,
+            "color_transfer": None,
+            "color_primaries": None,
+        }
+        defaults.update(kwargs)
+        return VideoMetadata(**defaults)  # type: ignore[arg-type]
+
+    def test_aspect_ratio_landscape(self) -> None:
+        """가로 영상 종횡비 (16:9)."""
+        meta = self._make_metadata(width=3840, height=2160)
+        assert meta.aspect_ratio == pytest.approx(16 / 9, rel=0.01)
+
+    def test_aspect_ratio_portrait(self) -> None:
+        """세로 영상 종횡비 (9:16)."""
+        meta = self._make_metadata(width=1080, height=1920)
+        assert meta.aspect_ratio == pytest.approx(9 / 16, rel=0.01)
+
+    def test_aspect_ratio_square(self) -> None:
+        """정사각형 영상 종횡비 (1:1)."""
+        meta = self._make_metadata(width=1920, height=1920)
+        assert meta.aspect_ratio == pytest.approx(1.0)
+
+    def test_resolution_returns_tuple(self) -> None:
+        """resolution 프로퍼티가 (width, height) 튜플을 반환."""
+        meta = self._make_metadata(width=1920, height=1080)
+        assert meta.resolution == (1920, 1080)
+
+
+class TestFadeConfig:
+    """FadeConfig 기본값 및 커스텀 값 테스트."""
+
+    def test_default_values(self) -> None:
+        """기본 페이드 0.5초."""
+        config = FadeConfig()
+        assert config.fade_in == 0.5
+        assert config.fade_out == 0.5
+
+    def test_custom_values(self) -> None:
+        """커스텀 페이드 값."""
+        config = FadeConfig(fade_in=1.0, fade_out=2.0)
+        assert config.fade_in == 1.0
+        assert config.fade_out == 2.0
+
+    def test_zero_fade(self) -> None:
+        """페이드 없음 (0.0)."""
+        config = FadeConfig(fade_in=0.0, fade_out=0.0)
+        assert config.fade_in == 0.0
+        assert config.fade_out == 0.0

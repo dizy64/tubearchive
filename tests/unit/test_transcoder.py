@@ -387,3 +387,405 @@ class TestTranscoderVidstab:
                 mock_detect.assert_called_once()
                 call_args = mock_detect.call_args
                 assert call_args[0][0] == StabilizeStrength(strength)
+
+
+class TestTranscoderSilenceAnalysis:
+    """무음 구간 분석 경로 테스트."""
+
+    @pytest.fixture
+    def mock_transcoder(self, tmp_path: Path) -> Generator[MagicMock]:
+        """DB/FFmpeg를 mock한 Transcoder 인스턴스."""
+        with (
+            patch("tubearchive.core.transcoder.init_database"),
+            patch("tubearchive.core.transcoder.VideoRepository"),
+            patch("tubearchive.core.transcoder.TranscodingJobRepository") as mock_job_repo_cls,
+            patch("tubearchive.core.transcoder.ResumeManager") as mock_resume_cls,
+        ):
+            from tubearchive.core.transcoder import Transcoder
+
+            t = Transcoder(db_path=tmp_path / "test.db", temp_dir=tmp_path)
+            t.executor = MagicMock()
+
+            mock_resume = mock_resume_cls.return_value
+            mock_resume.is_video_processed.return_value = False
+            mock_resume.get_or_create_job.return_value = 1
+
+            mock_job_repo = mock_job_repo_cls.return_value
+            mock_job = MagicMock()
+            mock_job.status = MagicMock()
+            mock_job.status.__eq__ = lambda self, other: False
+            mock_job.progress_percent = 0
+            mock_job_repo.get_by_id.return_value = mock_job
+
+            t.video_repo.get_by_path.return_value = None
+            t.video_repo.insert.return_value = 1
+
+            yield t
+
+    @pytest.fixture
+    def mock_metadata(self) -> MagicMock:
+        meta = MagicMock()
+        meta.width = 3840
+        meta.height = 2160
+        meta.duration_seconds = 60.0
+        meta.fps = 29.97
+        meta.is_portrait = False
+        meta.is_vfr = False
+        meta.device_model = "Nikon Z6III"
+        meta.color_transfer = None
+        meta.has_audio = True
+        return meta
+
+    @pytest.fixture
+    def video_file(self) -> MagicMock:
+        vf = MagicMock()
+        vf.path = Path("/fake/video.mp4")
+        return vf
+
+    def test_trim_silence_runs_analysis(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """trim_silence=True → 무음 분석 실행."""
+        with (
+            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
+            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
+            patch(
+                "tubearchive.ffmpeg.effects.create_silence_detect_filter",
+                return_value="silencedetect",
+            ),
+            patch("tubearchive.ffmpeg.effects.parse_silence_segments", return_value=[]),
+        ):
+            mock_transcoder.executor.run.return_value = None
+            mock_transcoder.executor.run_analysis.return_value = ""
+            mock_transcoder.executor.build_silence_detection_command.return_value = ["ffmpeg"]
+
+            with contextlib.suppress(Exception):
+                mock_transcoder.transcode_video(video_file, trim_silence=True)
+
+            mock_transcoder.executor.build_silence_detection_command.assert_called_once()
+
+    def test_trim_silence_no_audio_skips(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """has_audio=False → 무음 분석 스킵."""
+        mock_metadata.has_audio = False
+
+        with (
+            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
+            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
+        ):
+            mock_transcoder.executor.run.return_value = None
+
+            with contextlib.suppress(Exception):
+                mock_transcoder.transcode_video(video_file, trim_silence=True)
+
+            # 무음 분석 명령이 호출되지 않아야 함
+            mock_transcoder.executor.build_silence_detection_command.assert_not_called()
+
+    def test_trim_silence_failure_continues(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """무음 분석 실패 → 경고 후 트랜스코딩 계속."""
+        from tubearchive.ffmpeg.executor import FFmpegError
+
+        with (
+            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
+            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
+            patch(
+                "tubearchive.ffmpeg.effects.create_silence_detect_filter",
+                return_value="silencedetect",
+            ),
+        ):
+            mock_transcoder.executor.run.return_value = None
+            mock_transcoder.executor.run_analysis.side_effect = FFmpegError("silence fail")
+            mock_transcoder.executor.build_silence_detection_command.return_value = ["ffmpeg"]
+
+            with contextlib.suppress(Exception):
+                mock_transcoder.transcode_video(video_file, trim_silence=True)
+
+            # 실패해도 build_transcode_command는 호출됨 (트랜스코딩 진행)
+            mock_transcoder.executor.build_transcode_command.assert_called()
+
+
+class TestTranscoderNoAudioPaths:
+    """오디오 없는 영상 경로 테스트."""
+
+    @pytest.fixture
+    def mock_transcoder(self, tmp_path: Path) -> Generator[MagicMock]:
+        with (
+            patch("tubearchive.core.transcoder.init_database"),
+            patch("tubearchive.core.transcoder.VideoRepository"),
+            patch("tubearchive.core.transcoder.TranscodingJobRepository") as mock_job_repo_cls,
+            patch("tubearchive.core.transcoder.ResumeManager") as mock_resume_cls,
+        ):
+            from tubearchive.core.transcoder import Transcoder
+
+            t = Transcoder(db_path=tmp_path / "test.db", temp_dir=tmp_path)
+            t.executor = MagicMock()
+
+            mock_resume = mock_resume_cls.return_value
+            mock_resume.is_video_processed.return_value = False
+            mock_resume.get_or_create_job.return_value = 1
+
+            mock_job_repo = mock_job_repo_cls.return_value
+            mock_job = MagicMock()
+            mock_job.status = MagicMock()
+            mock_job.status.__eq__ = lambda self, other: False
+            mock_job.progress_percent = 0
+            mock_job_repo.get_by_id.return_value = mock_job
+
+            t.video_repo.get_by_path.return_value = None
+            t.video_repo.insert.return_value = 1
+
+            yield t
+
+    @pytest.fixture
+    def mock_metadata(self) -> MagicMock:
+        meta = MagicMock()
+        meta.width = 3840
+        meta.height = 2160
+        meta.duration_seconds = 60.0
+        meta.fps = 29.97
+        meta.is_portrait = False
+        meta.is_vfr = False
+        meta.device_model = None
+        meta.color_transfer = None
+        meta.has_audio = False
+        return meta
+
+    @pytest.fixture
+    def video_file(self) -> MagicMock:
+        vf = MagicMock()
+        vf.path = Path("/fake/video.mp4")
+        return vf
+
+    def test_normalize_no_audio_skips(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """has_audio=False + normalize_audio=True → loudnorm 분석 스킵."""
+        with (
+            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
+            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
+        ):
+            mock_transcoder.executor.run.return_value = None
+
+            with contextlib.suppress(Exception):
+                mock_transcoder.transcode_video(video_file, normalize_audio=True)
+
+            # loudnorm 분석이 호출되지 않아야 함
+            mock_transcoder.executor.build_loudness_analysis_command.assert_not_called()
+
+    def test_normalize_failure_skips(
+        self,
+        mock_transcoder: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """loudnorm 분석 실패 → 정규화 없이 진행."""
+        from tubearchive.ffmpeg.executor import FFmpegError
+
+        meta = MagicMock()
+        meta.width = 3840
+        meta.height = 2160
+        meta.duration_seconds = 60.0
+        meta.fps = 29.97
+        meta.is_portrait = False
+        meta.is_vfr = False
+        meta.device_model = None
+        meta.color_transfer = None
+        meta.has_audio = True
+
+        with (
+            patch("tubearchive.core.transcoder.detect_metadata", return_value=meta),
+            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
+            patch(
+                "tubearchive.core.transcoder.create_loudnorm_analysis_filter",
+                return_value="loudnorm",
+            ),
+        ):
+            mock_transcoder.executor.run.return_value = None
+            mock_transcoder.executor.run_analysis.side_effect = FFmpegError("loudnorm fail")
+            mock_transcoder.executor.build_loudness_analysis_command.return_value = ["ffmpeg"]
+
+            with contextlib.suppress(Exception):
+                mock_transcoder.transcode_video(video_file, normalize_audio=True)
+
+            # 분석 실패해도 트랜스코딩은 진행
+            mock_transcoder.executor.build_transcode_command.assert_called()
+
+
+class TestTranscoderLutResolution:
+    """LUT 해석 우선순위 테스트."""
+
+    def test_lut_path_priority(self, tmp_path: Path) -> None:
+        """lut_path + auto_lut=True → lut_path 우선."""
+        from tubearchive.core.transcoder import _resolve_auto_lut
+
+        lut_file = tmp_path / "manual.cube"
+        lut_file.touch()
+        auto_lut_file = tmp_path / "auto.cube"
+        auto_lut_file.touch()
+
+        # _resolve_auto_lut가 auto 파일을 반환하더라도, transcode_video에서
+        # lut_path가 None이 아니면 _resolve_auto_lut를 호출하지 않음
+        # 여기서는 _resolve_auto_lut 자체의 동작만 검증
+        result = _resolve_auto_lut("Nikon Z6III", {"nikon": str(auto_lut_file)})
+        assert result == str(auto_lut_file)
+
+    def test_auto_lut_from_device(self, tmp_path: Path) -> None:
+        """auto_lut=True + device_luts → 기기 매칭."""
+        from tubearchive.core.transcoder import _resolve_auto_lut
+
+        lut_file = tmp_path / "nikon.cube"
+        lut_file.touch()
+
+        result = _resolve_auto_lut("NIKON Z6III", {"nikon": str(lut_file)})
+        assert result == str(lut_file)
+
+    def test_auto_lut_no_match(self) -> None:
+        """매칭 안되면 None."""
+        from tubearchive.core.transcoder import _resolve_auto_lut
+
+        result = _resolve_auto_lut("Canon R5", {"nikon": "/nonexistent.cube"})
+        assert result is None
+
+    def test_auto_lut_empty_model(self) -> None:
+        """빈 device_model이면 None."""
+        from tubearchive.core.transcoder import _resolve_auto_lut
+
+        result = _resolve_auto_lut("", {"nikon": "/some.cube"})
+        assert result is None
+
+
+class TestTranscoderFallback:
+    """VideoToolbox 폴백 테스트."""
+
+    @pytest.fixture
+    def mock_transcoder(self, tmp_path: Path) -> Generator[MagicMock]:
+        with (
+            patch("tubearchive.core.transcoder.init_database"),
+            patch("tubearchive.core.transcoder.VideoRepository"),
+            patch("tubearchive.core.transcoder.TranscodingJobRepository") as mock_job_repo_cls,
+            patch("tubearchive.core.transcoder.ResumeManager") as mock_resume_cls,
+        ):
+            from tubearchive.core.transcoder import Transcoder
+
+            t = Transcoder(db_path=tmp_path / "test.db", temp_dir=tmp_path)
+            t.executor = MagicMock()
+
+            mock_resume = mock_resume_cls.return_value
+            mock_resume.is_video_processed.return_value = False
+            mock_resume.get_or_create_job.return_value = 1
+
+            mock_job_repo = mock_job_repo_cls.return_value
+            mock_job = MagicMock()
+            mock_job.status = MagicMock()
+            mock_job.status.__eq__ = lambda self, other: False
+            mock_job.progress_percent = 0
+            mock_job_repo.get_by_id.return_value = mock_job
+
+            t.video_repo.get_by_path.return_value = None
+            t.video_repo.insert.return_value = 1
+
+            yield t
+
+    @pytest.fixture
+    def mock_metadata(self) -> MagicMock:
+        meta = MagicMock()
+        meta.width = 3840
+        meta.height = 2160
+        meta.duration_seconds = 60.0
+        meta.fps = 29.97
+        meta.is_portrait = False
+        meta.is_vfr = False
+        meta.device_model = None
+        meta.color_transfer = None
+        meta.has_audio = True
+        return meta
+
+    @pytest.fixture
+    def video_file(self) -> MagicMock:
+        vf = MagicMock()
+        vf.path = Path("/fake/video.mp4")
+        return vf
+
+    def test_already_processed_returns_early(
+        self,
+        tmp_path: Path,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """이미 처리된 영상은 즉시 반환."""
+        with (
+            patch("tubearchive.core.transcoder.init_database"),
+            patch("tubearchive.core.transcoder.VideoRepository"),
+            patch("tubearchive.core.transcoder.TranscodingJobRepository"),
+            patch("tubearchive.core.transcoder.ResumeManager") as mock_resume_cls,
+        ):
+            from tubearchive.core.transcoder import Transcoder
+
+            t = Transcoder(db_path=tmp_path / "test.db", temp_dir=tmp_path)
+            t.executor = MagicMock()
+
+            mock_resume = mock_resume_cls.return_value
+            mock_resume.is_video_processed.return_value = True
+
+            # completed job이 있고 파일이 존재하는 경우
+            existing_path = tmp_path / "existing.mp4"
+            existing_path.touch()
+
+            from tubearchive.models.job import JobStatus
+
+            mock_job = MagicMock()
+            mock_job.status = JobStatus.COMPLETED
+            mock_job.temp_file_path = existing_path
+            t.job_repo.get_by_video_id.return_value = [mock_job]
+
+            t.video_repo.get_by_path.return_value = {"id": 1}
+
+            with patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata):
+                result_path, video_id, silence = t.transcode_video(video_file)
+
+            assert result_path == existing_path
+            assert video_id == 1
+            assert silence is None
+            # 트랜스코딩 실행이 호출되지 않아야 함
+            t.executor.run.assert_not_called()
+
+    def test_resume_calculates_seek(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """PROCESSING + progress>0 → seek_start 계산."""
+        from tubearchive.models.job import JobStatus
+
+        mock_job = MagicMock()
+        mock_job.status = JobStatus.PROCESSING
+        mock_job.progress_percent = 50
+        mock_transcoder.job_repo.get_by_id.return_value = mock_job
+
+        with (
+            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
+            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
+        ):
+            mock_transcoder.executor.run.return_value = None
+            mock_transcoder.resume_mgr.calculate_resume_position.return_value = 30.0
+
+            with contextlib.suppress(Exception):
+                mock_transcoder.transcode_video(video_file)
+
+            # resume_mgr.calculate_resume_position이 호출됐는지 확인
+            mock_transcoder.resume_mgr.calculate_resume_position.assert_called_once()

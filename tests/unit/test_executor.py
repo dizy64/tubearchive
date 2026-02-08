@@ -408,3 +408,99 @@ class TestBuildTranscodeNoAudio:
 
         # 오디오 필터가 무음에 적용될 필요 없으므로 -af 없어야 한다
         assert "-af" not in cmd
+
+
+class TestBuildConcatCommand:
+    """concat 명령어 빌드 테스트."""
+
+    @pytest.fixture
+    def executor(self) -> FFmpegExecutor:
+        return FFmpegExecutor()
+
+    def test_basic_structure(self, executor: FFmpegExecutor, tmp_path: Path) -> None:
+        """기본 concat 명령어 구조."""
+        concat_file = tmp_path / "concat.txt"
+        output_path = tmp_path / "output.mp4"
+        cmd = executor.build_concat_command(concat_file, output_path)
+
+        assert "-f" in cmd
+        assert "concat" in cmd
+        assert "-safe" in cmd
+        assert "0" in cmd
+        assert "-c" in cmd
+        assert "copy" in cmd
+        assert str(concat_file) in cmd
+        assert str(output_path) in cmd
+
+    def test_with_overwrite(self, executor: FFmpegExecutor, tmp_path: Path) -> None:
+        """덮어쓰기 옵션 포함."""
+        cmd = executor.build_concat_command(
+            tmp_path / "concat.txt", tmp_path / "output.mp4", overwrite=True
+        )
+        assert "-y" in cmd
+
+    def test_without_overwrite(self, executor: FFmpegExecutor, tmp_path: Path) -> None:
+        """덮어쓰기 옵션 미포함."""
+        cmd = executor.build_concat_command(
+            tmp_path / "concat.txt", tmp_path / "output.mp4", overwrite=False
+        )
+        assert "-y" not in cmd
+
+
+class TestBuildSilenceDetectionCommand:
+    """무음 감지 명령어 빌드 테스트."""
+
+    @pytest.fixture
+    def executor(self) -> FFmpegExecutor:
+        return FFmpegExecutor()
+
+    def test_basic_structure(self, executor: FFmpegExecutor, tmp_path: Path) -> None:
+        """기본 무음 감지 명령어 구조."""
+        input_path = tmp_path / "input.mp4"
+        cmd = executor.build_silence_detection_command(input_path, "silencedetect=n=-30dB:d=2")
+
+        assert "-af" in cmd
+        assert "-vn" in cmd
+        assert "-f" in cmd
+        assert "null" in cmd
+
+    def test_filter_value_position(self, executor: FFmpegExecutor, tmp_path: Path) -> None:
+        """필터 문자열이 -af 뒤에 위치."""
+        input_path = tmp_path / "input.mp4"
+        filter_str = "silencedetect=n=-30dB:d=2"
+        cmd = executor.build_silence_detection_command(input_path, filter_str)
+
+        af_idx = cmd.index("-af")
+        assert cmd[af_idx + 1] == filter_str
+
+
+class TestFFmpegErrorStr:
+    """FFmpegError 문자열 포맷 테스트."""
+
+    def test_without_stderr(self) -> None:
+        """stderr 없는 에러 메시지."""
+        error = FFmpegError("FFmpeg failed with exit code 1")
+        assert str(error) == "FFmpeg failed with exit code 1"
+
+    def test_with_short_stderr(self) -> None:
+        """짧은 stderr 포함."""
+        stderr = "Error opening input\nNo such file"
+        error = FFmpegError("FFmpeg failed", stderr=stderr)
+        result = str(error)
+
+        assert "FFmpeg failed" in result
+        assert "Error opening input" in result
+        assert "No such file" in result
+
+    def test_truncates_long_stderr(self) -> None:
+        """20줄 초과 stderr은 마지막 20줄만 표시."""
+        lines = [f"line {i}" for i in range(30)]
+        stderr = "\n".join(lines)
+        error = FFmpegError("FFmpeg failed", stderr=stderr)
+        result = str(error)
+
+        assert "last 20 lines" in result
+        assert "line 29" in result
+        assert "line 10" in result
+        # 처음 10줄은 포함되지 않아야 함
+        assert "line 9" not in result
