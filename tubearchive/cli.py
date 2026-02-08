@@ -322,7 +322,7 @@ class TranscodeOptions:
     stabilize: bool = False
     stabilize_strength: str = "medium"
     stabilize_crop: str = "crop"
-    lut_path: str | None = None
+    lut_path: Path | None = None
     auto_lut: bool = False
     lut_before_hdr: bool = False
     device_luts: dict[str, str] | None = None
@@ -1465,7 +1465,7 @@ def _transcode_single(
             stabilize=opts.stabilize,
             stabilize_strength=opts.stabilize_strength,
             stabilize_crop=opts.stabilize_crop,
-            lut_path=opts.lut_path,
+            lut_path=str(opts.lut_path) if opts.lut_path else None,
             auto_lut=opts.auto_lut,
             lut_before_hdr=opts.lut_before_hdr,
             device_luts=opts.device_luts,
@@ -1591,7 +1591,7 @@ def _transcode_sequential(
                 stabilize=opts.stabilize,
                 stabilize_strength=opts.stabilize_strength,
                 stabilize_crop=opts.stabilize_crop,
-                lut_path=opts.lut_path,
+                lut_path=str(opts.lut_path) if opts.lut_path else None,
                 auto_lut=opts.auto_lut,
                 lut_before_hdr=opts.lut_before_hdr,
                 device_luts=opts.device_luts,
@@ -1779,7 +1779,7 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         stabilize=validated_args.stabilize,
         stabilize_strength=validated_args.stabilize_strength,
         stabilize_crop=validated_args.stabilize_crop,
-        lut_path=str(validated_args.lut_path) if validated_args.lut_path else None,
+        lut_path=validated_args.lut_path,
         auto_lut=validated_args.auto_lut,
         lut_before_hdr=validated_args.lut_before_hdr,
         device_luts=validated_args.device_luts,
