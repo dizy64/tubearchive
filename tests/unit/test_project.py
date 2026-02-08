@@ -4,12 +4,22 @@ ProjectRepository CRUD, 다대다 관계, 날짜 범위 자동 갱신,
 프로젝트 상세 조회, 엣지 케이스를 검증한다.
 """
 
+import io
+import json
 import sqlite3
 from collections.abc import Generator
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from tubearchive.commands.project import (
+    _format_date_range,
+    _format_project_status,
+    print_project_detail,
+    print_project_list,
+)
 from tubearchive.database.repository import (
     MergeJobRepository,
     ProjectRepository,
@@ -834,3 +844,193 @@ class TestProjectDeleteCascade:
         project = repo.get_by_id(project_id)
         assert project is not None
         assert repo.get_merge_job_ids(project_id) == []
+
+
+class TestFormatDateRange:
+    """날짜 범위 포맷 테스트."""
+
+    def _make_project(self, start: str | None = None, end: str | None = None) -> Project:
+        return Project(
+            id=1,
+            name="테스트",
+            description=None,
+            date_range_start=start,
+            date_range_end=end,
+            playlist_id=None,
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
+        )
+
+    def test_same_start_end(self) -> None:
+        """시작일과 종료일이 같으면 단일 날짜."""
+        project = self._make_project("2025-01-15", "2025-01-15")
+        assert _format_date_range(project) == "2025-01-15"
+
+    def test_different_start_end(self) -> None:
+        """시작일과 종료일이 다르면 범위 표시."""
+        project = self._make_project("2025-01-15", "2025-01-20")
+        assert _format_date_range(project) == "2025-01-15 ~ 2025-01-20"
+
+    def test_no_dates(self) -> None:
+        """날짜 없으면 대시."""
+        project = self._make_project(None, None)
+        assert _format_date_range(project) == "-"
+
+    def test_start_only(self) -> None:
+        """시작일만 있어도 대시 (end 필수)."""
+        project = self._make_project("2025-01-15", None)
+        assert _format_date_range(project) == "-"
+
+
+class TestFormatProjectStatus:
+    """프로젝트 상태 포맷 테스트."""
+
+    def test_empty(self) -> None:
+        """영상 없는 빈 프로젝트."""
+        assert _format_project_status(0, 0) == "빈 프로젝트"
+
+    def test_all_uploaded(self) -> None:
+        """전체 업로드 완료."""
+        assert _format_project_status(3, 3) == "전체 업로드 (3개)"
+
+    def test_partial_upload(self) -> None:
+        """부분 업로드."""
+        assert _format_project_status(3, 1) == "부분 업로드 (1/3)"
+
+    def test_no_upload(self) -> None:
+        """업로드 없음."""
+        assert _format_project_status(3, 0) == "영상 3개"
+
+
+class TestPrintProjectList:
+    """print_project_list 출력 테스트."""
+
+    @pytest.fixture
+    def db_conn_with_project(self, tmp_path: Path) -> sqlite3.Connection:
+        """프로젝트 데이터가 포함된 DB."""
+        conn = init_database(tmp_path / "test.db")
+        repo = ProjectRepository(conn)
+        project_id = repo.create("테스트 프로젝트")
+
+        # merge_job 추가
+        merge_repo = MergeJobRepository(conn)
+        mj_id = merge_repo.create(
+            output_path=tmp_path / "out.mp4",
+            video_ids=[1],
+            title="영상1",
+            date="2025-01-15",
+        )
+        repo.add_merge_job(project_id, mj_id)
+        conn.commit()
+        return conn
+
+    def test_json_with_projects(self, db_conn_with_project: sqlite3.Connection) -> None:
+        """JSON 형식 출력 검증."""
+        stream = io.StringIO()
+        print_project_list(db_conn_with_project, output_format="json", stream=stream)
+        output = stream.getvalue()
+        data = json.loads(output)
+
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["name"] == "테스트 프로젝트"
+        assert "id" in data[0]
+        assert "merge_job_count" in data[0]
+
+    def test_json_empty(self, tmp_path: Path) -> None:
+        """빈 프로젝트 목록 JSON."""
+        conn = init_database(tmp_path / "test.db")
+        stream = io.StringIO()
+        print_project_list(conn, output_format="json", stream=stream)
+        data = json.loads(stream.getvalue())
+        assert data == []
+        conn.close()
+
+    def test_table_empty(self, tmp_path: Path) -> None:
+        """빈 프로젝트 목록 테이블 → '프로젝트 없음' 메시지."""
+        conn = init_database(tmp_path / "test.db")
+        stream = io.StringIO()
+        print_project_list(conn, output_format="table", stream=stream)
+        output = stream.getvalue()
+        assert "프로젝트 없음" in output
+        conn.close()
+
+    def test_table_with_projects(self, db_conn_with_project: sqlite3.Connection) -> None:
+        """프로젝트 있는 테이블 출력 → '프로젝트 목록' 헤더."""
+        stream = io.StringIO()
+        with patch("tubearchive.commands.project.render_table"):
+            print_project_list(db_conn_with_project, output_format="table", stream=stream)
+        output = stream.getvalue()
+        assert "프로젝트 목록" in output
+
+
+class TestPrintProjectDetail:
+    """print_project_detail 출력 테스트."""
+
+    @pytest.fixture
+    def db_with_detail(self, tmp_path: Path) -> tuple[sqlite3.Connection, int]:
+        """상세 조회용 DB."""
+        conn = init_database(tmp_path / "test.db")
+        repo = ProjectRepository(conn)
+        project_id = repo.create("상세 테스트")
+
+        merge_repo = MergeJobRepository(conn)
+        mj_id = merge_repo.create(
+            output_path=tmp_path / "out.mp4",
+            video_ids=[1],
+            title="영상1",
+            date="2025-01-15",
+            total_duration_seconds=120.0,
+            total_size_bytes=1024 * 1024,
+        )
+        repo.add_merge_job(project_id, mj_id)
+        conn.commit()
+        return conn, project_id
+
+    def test_json_with_merge_jobs(self, db_with_detail: tuple[sqlite3.Connection, int]) -> None:
+        """JSON 상세 출력 구조 검증."""
+        conn, project_id = db_with_detail
+        stream = io.StringIO()
+        print_project_detail(conn, project_id, output_format="json", stream=stream)
+        data = json.loads(stream.getvalue())
+
+        assert "project" in data
+        assert data["project"]["name"] == "상세 테스트"
+        assert "summary" in data
+        assert "merge_jobs" in data
+        assert "date_groups" in data
+
+    def test_not_found(self, tmp_path: Path) -> None:
+        """존재하지 않는 프로젝트 → stderr에 에러 메시지."""
+        conn = init_database(tmp_path / "test.db")
+        stream = io.StringIO()
+        # stderr를 캡처하기 위해 sys.stderr를 패치
+        with patch("tubearchive.commands.project.sys") as mock_sys:
+            mock_sys.stderr = io.StringIO()
+            mock_sys.stdout = stream
+            print_project_detail(conn, 9999, output_format="table", stream=stream)
+            stderr_output = mock_sys.stderr.getvalue()
+        assert "찾을 수 없습니다" in stderr_output
+        conn.close()
+
+    def test_table_with_data(self, db_with_detail: tuple[sqlite3.Connection, int]) -> None:
+        """테이블 출력 시 프로젝트명 포함."""
+        conn, project_id = db_with_detail
+        stream = io.StringIO()
+        with patch("tubearchive.commands.project.render_table"):
+            print_project_detail(conn, project_id, output_format="table", stream=stream)
+        output = stream.getvalue()
+        assert "상세 테스트" in output
+
+    def test_table_empty_project(self, tmp_path: Path) -> None:
+        """영상 없는 프로젝트 → '영상 없음' 출력."""
+        conn = init_database(tmp_path / "test.db")
+        repo = ProjectRepository(conn)
+        project_id = repo.create("빈 프로젝트")
+        conn.commit()
+
+        stream = io.StringIO()
+        print_project_detail(conn, project_id, output_format="table", stream=stream)
+        output = stream.getvalue()
+        assert "영상 없음" in output
+        conn.close()

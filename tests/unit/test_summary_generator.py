@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from tubearchive.cli import ClipInfo
 from tubearchive.core.grouper import FileSequenceGroup
@@ -11,9 +12,11 @@ from tubearchive.utils.summary_generator import (
     extract_topic_from_path,
     format_timestamp,
     generate_chapters,
+    generate_clip_summary,
     generate_single_file_description,
     generate_split_youtube_description,
     generate_summary_markdown,
+    generate_youtube_description,
     remap_chapters_for_splits,
 )
 
@@ -492,3 +495,151 @@ class TestGenerateSplitYoutubeDescription:
         result = generate_split_youtube_description(clips, split_durations, part_index=5)
 
         assert result == ""
+
+
+class TestGenerateClipSummary:
+    """generate_clip_summary 테스트."""
+
+    def test_basic_clip_table(self) -> None:
+        """기본 클립 정보 테이블 생성."""
+        clips = [
+            ClipInfo(name="clip1.mp4", duration=60.0, device="Nikon Z6III", shot_time="10:30:00"),
+            ClipInfo(name="clip2.mp4", duration=120.0, device="GoPro HERO12", shot_time="10:31:00"),
+        ]
+        result = generate_clip_summary(clips)
+
+        assert "## 클립 정보" in result
+        assert "파일명" in result
+        assert "기종" in result
+        assert "clip1.mp4" in result
+        assert "Nikon Z6III" in result
+        assert "## YouTube 챕터" in result
+
+    def test_none_device_and_shot_time(self) -> None:
+        """기종/촬영시간이 None이면 '-' 표시."""
+        clips = [
+            ClipInfo(name="clip1.mp4", duration=60.0, device=None, shot_time=None),
+        ]
+        result = generate_clip_summary(clips)
+
+        # 테이블 행에서 '-'가 device와 shot_time 자리에 나와야 함
+        lines = result.split("\n")
+        data_lines = [line for line in lines if "clip1.mp4" in line]
+        assert len(data_lines) == 1
+        assert "| - |" in data_lines[0]
+
+    def test_with_chapters(self) -> None:
+        """YouTube 챕터 섹션 포함."""
+        clips = [
+            ClipInfo(name="A.mp4", duration=60.0, device=None, shot_time=None),
+            ClipInfo(name="B.mp4", duration=90.0, device=None, shot_time=None),
+        ]
+        result = generate_clip_summary(clips)
+
+        assert "## YouTube 챕터" in result
+        assert "0:00" in result
+        assert "1:00" in result
+
+    def test_with_groups(self) -> None:
+        """그룹 정보로 챕터 집계."""
+        # 그룹: clip1 + clip2가 하나의 시퀀스
+        clips = [
+            ClipInfo(name="GH010001.mp4", duration=30.0, device=None, shot_time=None),
+            ClipInfo(name="GH020001.mp4", duration=30.0, device=None, shot_time=None),
+            ClipInfo(name="solo.mp4", duration=60.0, device=None, shot_time=None),
+        ]
+
+        vf1 = MagicMock()
+        vf1.path.name = "GH010001.mp4"
+        vf2 = MagicMock()
+        vf2.path.name = "GH020001.mp4"
+
+        group = FileSequenceGroup(
+            group_id="gopro_0001",
+            files=[vf1, vf2],
+        )
+
+        result = generate_clip_summary(clips, groups=[group])
+
+        # 챕터 섹션에서 GH010001과 solo만 나와야 함 (GH020001은 그룹에 합침)
+        chapter_section = result.split("## YouTube 챕터")[1]
+        assert "GH010001" in chapter_section
+        assert "solo" in chapter_section
+
+    def test_empty_clips(self) -> None:
+        """빈 클립 리스트."""
+        result = generate_clip_summary([])
+
+        assert "## 클립 정보" in result
+        assert "## YouTube 챕터" in result
+
+
+class TestGenerateYoutubeDescription:
+    """generate_youtube_description 테스트."""
+
+    def test_basic_timestamps(self) -> None:
+        """기본 타임스탬프 형식."""
+        clips = [
+            ClipInfo(name="A.mp4", duration=60.0, device=None, shot_time=None),
+            ClipInfo(name="B.mp4", duration=90.0, device=None, shot_time=None),
+        ]
+        result = generate_youtube_description(clips)
+
+        assert "0:00 A" in result
+        assert "1:00 B" in result
+
+    def test_includes_device_info(self) -> None:
+        """촬영 기기 정보 포함."""
+        clips = [
+            ClipInfo(name="A.mp4", duration=60.0, device="Nikon Z6III", shot_time=None),
+        ]
+        result = generate_youtube_description(clips)
+
+        assert "촬영" in result
+        assert "Nikon Z6III" in result
+
+    def test_deduplicates_devices(self) -> None:
+        """동일 기기 중복 제거."""
+        clips = [
+            ClipInfo(name="A.mp4", duration=60.0, device="Nikon Z6III", shot_time=None),
+            ClipInfo(name="B.mp4", duration=60.0, device="Nikon Z6III", shot_time=None),
+            ClipInfo(name="C.mp4", duration=60.0, device="GoPro HERO12", shot_time=None),
+        ]
+        result = generate_youtube_description(clips)
+
+        # Nikon Z6III는 1번만 나와야 함
+        assert result.count("Nikon Z6III") == 1
+        assert "GoPro HERO12" in result
+
+    def test_no_devices(self) -> None:
+        """기기 정보 없으면 해당 줄 생략."""
+        clips = [
+            ClipInfo(name="A.mp4", duration=60.0, device=None, shot_time=None),
+        ]
+        result = generate_youtube_description(clips)
+
+        assert "촬영" not in result
+
+    def test_with_groups(self) -> None:
+        """그룹 기반 챕터 집계."""
+        clips = [
+            ClipInfo(name="GH010001.mp4", duration=30.0, device=None, shot_time=None),
+            ClipInfo(name="GH020001.mp4", duration=30.0, device=None, shot_time=None),
+            ClipInfo(name="solo.mp4", duration=60.0, device=None, shot_time=None),
+        ]
+
+        vf1 = MagicMock()
+        vf1.path.name = "GH010001.mp4"
+        vf2 = MagicMock()
+        vf2.path.name = "GH020001.mp4"
+
+        group = FileSequenceGroup(
+            group_id="gopro_0001",
+            files=[vf1, vf2],
+        )
+
+        result = generate_youtube_description(clips, groups=[group])
+
+        # 그룹 클립은 하나의 챕터로 합쳐져야 함
+        assert "0:00 GH010001" in result
+        assert "1:00 solo" in result

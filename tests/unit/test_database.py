@@ -3,6 +3,7 @@
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -12,7 +13,7 @@ from tubearchive.database.repository import (
     TranscodingJobRepository,
     VideoRepository,
 )
-from tubearchive.database.schema import init_database
+from tubearchive.database.schema import get_connection, get_default_db_path, init_database
 from tubearchive.models.job import JobStatus, SplitJob
 from tubearchive.models.video import VideoFile, VideoMetadata
 
@@ -685,3 +686,91 @@ class TestSplitJobRepository:
         repo.delete(job_id)
 
         assert repo.get_by_id(job_id) is None
+
+
+class TestGetDefaultDbPath:
+    """get_default_db_path 함수 테스트."""
+
+    def test_env_path_with_db_extension(self, tmp_path: Path) -> None:
+        """확장자가 .db인 경로는 그대로 반환."""
+        db_file = tmp_path / "custom.db"
+        with patch.dict("os.environ", {"TUBEARCHIVE_DB_PATH": str(db_file)}):
+            result = get_default_db_path()
+            assert result == db_file
+
+    def test_env_path_existing_dir(self, tmp_path: Path) -> None:
+        """기존 디렉토리 경로이면 디렉토리/tubearchive.db 반환."""
+        with patch.dict("os.environ", {"TUBEARCHIVE_DB_PATH": str(tmp_path)}):
+            result = get_default_db_path()
+            assert result == tmp_path / "tubearchive.db"
+
+    def test_default_under_home(self, tmp_path: Path) -> None:
+        """환경변수 없으면 ~/.tubearchive/tubearchive.db 반환."""
+        with patch.dict("os.environ", {}, clear=False):
+            # TUBEARCHIVE_DB_PATH 제거
+            import os
+
+            os.environ.pop("TUBEARCHIVE_DB_PATH", None)
+            result = get_default_db_path()
+            assert result.name == "tubearchive.db"
+            assert ".tubearchive" in str(result)
+
+    def test_env_empty_uses_default(self) -> None:
+        """빈 환경변수는 falsy이므로 기본 경로 사용."""
+        with patch.dict("os.environ", {"TUBEARCHIVE_DB_PATH": ""}):
+            result = get_default_db_path()
+            # 빈 문자열은 falsy → 기본 경로
+            assert result.name == "tubearchive.db"
+            assert ".tubearchive" in str(result)
+
+    def test_env_path_no_extension_creates_dir(self, tmp_path: Path) -> None:
+        """확장자 없는 미존재 경로 → 디렉토리 생성 + tubearchive.db 추가."""
+        new_dir = tmp_path / "custom_db_dir"
+        with patch.dict("os.environ", {"TUBEARCHIVE_DB_PATH": str(new_dir)}):
+            result = get_default_db_path()
+            assert result == new_dir / "tubearchive.db"
+            assert new_dir.is_dir()
+
+
+class TestGetConnection:
+    """get_connection 함수 테스트."""
+
+    def test_returns_valid_connection(self, tmp_path: Path) -> None:
+        """유효한 SQLite 연결 반환."""
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        try:
+            assert conn.row_factory == sqlite3.Row
+        finally:
+            conn.close()
+
+    def test_foreign_keys_enabled(self, tmp_path: Path) -> None:
+        """PRAGMA foreign_keys ON 설정 확인."""
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        try:
+            cursor = conn.execute("PRAGMA foreign_keys")
+            assert cursor.fetchone()[0] == 1
+        finally:
+            conn.close()
+
+
+class TestMigrationIdempotent:
+    """마이그레이션 멱등성 테스트."""
+
+    def test_init_database_twice_is_safe(self, tmp_path: Path) -> None:
+        """동일 DB에 init_database 두 번 호출해도 에러 없음."""
+        db_path = tmp_path / "test.db"
+        conn1 = init_database(db_path)
+        conn1.close()
+
+        # 두 번째 호출 → 에러 없이 완료
+        conn2 = init_database(db_path)
+        cursor = conn2.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cursor.fetchall()}
+
+        assert "videos" in tables
+        assert "transcoding_jobs" in tables
+        assert "merge_jobs" in tables
+        assert "projects" in tables
+        conn2.close()
