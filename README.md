@@ -18,6 +18,7 @@
 - **썸네일 자동 생성**: 병합 영상에서 주요 지점 JPEG 썸네일 추출
 - **YouTube 업로드**: OAuth 인증, 병합 후 자동 업로드, 챕터 타임스탬프 자동 삽입
 - **설정 파일**: `~/.tubearchive/config.toml`로 기본값 관리
+- **프로젝트 관리**: 여러 날의 촬영을 하나의 프로젝트로 묶어 관리, 날짜별 그룹핑 및 상태 조회
 - **작업 현황 조회**: 트랜스코딩/병합/업로드 이력 확인
 
 ## 지원 기기 및 프로파일
@@ -242,6 +243,28 @@ tubearchive --status
 tubearchive --status-detail 1
 ```
 
+### 프로젝트 관리
+
+여행, 이벤트 등 여러 날에 걸친 촬영을 하나의 프로젝트로 묶어 관리할 수 있습니다.
+
+```bash
+# 병합 결과를 프로젝트에 자동 연결 (프로젝트가 없으면 생성)
+tubearchive --project "제주도 여행" ~/Videos/Day1/
+tubearchive --project "제주도 여행" ~/Videos/Day2/
+
+# 프로젝트 목록 조회
+tubearchive --project-list
+
+# 프로젝트 상세 조회 (날짜별 영상 그룹핑, 업로드 상태)
+tubearchive --project-detail 1
+
+# JSON 형식 출력
+tubearchive --project-list --json
+tubearchive --project-detail 1 --json
+```
+
+프로젝트에 영상을 추가하면 날짜 범위가 자동으로 갱신됩니다. `--upload` 옵션과 함께 사용하면 프로젝트 전용 YouTube 플레이리스트가 자동 생성됩니다.
+
 ### 메타데이터 카탈로그
 
 DB에 저장된 영상 메타데이터를 날짜/기기/상태별로 조회합니다.
@@ -458,6 +481,7 @@ usage: tubearchive [-h] [-V] [-o OUTPUT] [--output-dir DIR] [--no-resume]
                    [--upload-chunk MB]
                    [--playlist ID] [--setup-youtube] [--youtube-auth] [--list-playlists]
                    [--reset-build [PATH]] [--reset-upload [PATH]]
+                   [--project NAME] [--project-list] [--project-detail ID]
                    [--status [STATUS]] [--status-detail ID]
                    [--catalog] [--search [PATTERN]] [--device NAME]
                    [--json | --csv]
@@ -497,6 +521,9 @@ options:
   --setup-youtube       YouTube 인증 상태 확인 및 설정 가이드 출력
   --youtube-auth        YouTube 브라우저 인증 실행
   --list-playlists      내 플레이리스트 목록 조회
+  --project NAME        프로젝트에 병합 결과 연결 (없으면 자동 생성)
+  --project-list        프로젝트 목록 조회 (--json 옵션 지원)
+  --project-detail ID   프로젝트 상세 조회 (--json 옵션 지원)
   --reset-build [PATH]  빌드 기록 초기화 (트랜스코딩/병합 다시 수행)
   --reset-upload [PATH] 업로드 기록 초기화 (YouTube 다시 업로드)
   --status [STATUS]     작업 현황 조회 (값 지정 시 메타데이터 검색 상태 필터)
@@ -562,7 +589,8 @@ tubearchive/
 ├── __init__.py           # 버전 정보
 ├── __main__.py           # python -m 진입점
 ├── commands/
-│   └── catalog.py        # 메타데이터 카탈로그/검색 CLI
+│   ├── catalog.py        # 메타데이터 카탈로그/검색 CLI
+│   └── project.py        # 프로젝트 관리 CLI (목록/상세 조회)
 ├── core/
 │   ├── scanner.py        # 파일 스캔 (3가지 케이스)
 │   ├── detector.py       # ffprobe 메타데이터 감지
@@ -571,7 +599,7 @@ tubearchive/
 │   └── merger.py         # concat 병합 (codec copy)
 ├── database/
 │   ├── schema.py         # SQLite 스키마
-│   ├── repository.py     # CRUD Repository (Video/TranscodingJob/MergeJob)
+│   ├── repository.py     # CRUD Repository (Video/TranscodingJob/MergeJob/Project)
 │   └── resume.py         # Resume 상태 추적
 ├── ffmpeg/
 │   ├── executor.py       # FFmpeg 실행 및 진행률
@@ -580,7 +608,7 @@ tubearchive/
 │   └── thumbnail.py      # 썸네일 추출
 ├── models/
 │   ├── video.py          # VideoFile, VideoMetadata, FadeConfig
-│   └── job.py            # TranscodingJob, MergeJob, JobStatus
+│   └── job.py            # TranscodingJob, MergeJob, Project, JobStatus
 ├── youtube/
 │   ├── __init__.py       # 모듈 exports
 │   ├── auth.py           # OAuth 2.0 인증

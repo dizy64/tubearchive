@@ -72,6 +72,57 @@ def list_playlists(service: YouTubeResource) -> list[Playlist]:
     return playlists
 
 
+def create_playlist(
+    service: YouTubeResource,
+    title: str,
+    description: str = "",
+    privacy: str = "unlisted",
+) -> str:
+    """
+    새 플레이리스트 생성.
+
+    Args:
+        service: 인증된 YouTube API 서비스
+        title: 플레이리스트 제목
+        description: 플레이리스트 설명
+        privacy: 공개 설정 (public/unlisted/private)
+
+    Returns:
+        생성된 플레이리스트 ID
+
+    Raises:
+        PlaylistError: 생성 실패 시
+    """
+    try:
+        request = service.playlists().insert(
+            part="snippet,status",
+            body={
+                "snippet": {
+                    "title": title,
+                    "description": description,
+                },
+                "status": {
+                    "privacyStatus": privacy,
+                },
+            },
+        )
+        response = request.execute()
+
+        playlist_id: str | None = response.get("id")
+        if not playlist_id:
+            logger.warning(f"Playlist API response missing 'id': {response}")
+            raise PlaylistError("API response missing playlist ID")
+
+        logger.info(f"Created playlist '{title}' (ID: {playlist_id})")
+        return playlist_id
+
+    except PlaylistError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create playlist: {e}")
+        raise PlaylistError(f"Failed to create playlist: {e}") from e
+
+
 def add_to_playlist(
     service: YouTubeResource,
     playlist_id: str,
