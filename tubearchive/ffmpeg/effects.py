@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -463,7 +464,7 @@ def parse_loudnorm_stats(ffmpeg_output: str) -> LoudnormAnalysis:
         raise ValueError(f"Failed to parse loudnorm JSON: {e}") from e
 
     try:
-        return LoudnormAnalysis(
+        analysis = LoudnormAnalysis(
             input_i=float(data["input_i"]),
             input_tp=float(data["input_tp"]),
             input_lra=float(data["input_lra"]),
@@ -472,6 +473,15 @@ def parse_loudnorm_stats(ffmpeg_output: str) -> LoudnormAnalysis:
         )
     except (KeyError, ValueError) as e:
         raise ValueError(f"Invalid loudnorm analysis data: {e}") from e
+
+    # 완전 무음 오디오는 -inf를 반환하며, FFmpeg loudnorm의
+    # measured_I 유효 범위 [-99, 0]을 벗어나 2nd pass에서 실패한다.
+    if math.isinf(analysis.input_i) or math.isinf(analysis.input_tp):
+        raise ValueError(
+            "Detected silent audio (measured values are -inf), skipping loudnorm normalization"
+        )
+
+    return analysis
 
 
 def parse_silence_segments(ffmpeg_output: str) -> list[SilenceSegment]:
