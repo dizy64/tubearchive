@@ -15,11 +15,20 @@
 - **Dip-to-Black 효과**: 0.5초 Fade In/Out 자동 적용 (그룹 경계에서만)
 - **오디오 라우드니스 정규화**: EBU R128 loudnorm 2-pass 자동 보정
 - **오디오 노이즈 제거**: FFmpeg afftdn 기반 바람소리/배경 소음 저감
+- **무음 구간 감지/제거**: 시작/끝 무음 자동 감지 및 트리밍
+- **영상 안정화**: vidstab 2-pass 기반 손떨림 보정 (light/medium/heavy)
+- **BGM 믹싱**: 배경음악 자동 믹싱, 볼륨 조절, 루프 재생
+- **LUT 컬러 그레이딩**: .cube/.3dl LUT 파일 적용, 기기별 자동 매칭
+- **타임랩스 생성**: 2x~60x 배속, 해상도 변환, 오디오 가속 지원
+- **영상 분할**: 시간/크기 기준 분할 (segment muxer, 재인코딩 없음)
 - **썸네일 자동 생성**: 병합 영상에서 주요 지점 JPEG 썸네일 추출
 - **YouTube 업로드**: OAuth 인증, 병합 후 자동 업로드, 챕터 타임스탬프 자동 삽입
+- **원본 파일 아카이브**: 처리 완료 후 원본 이동/삭제 관리
+- **파일 필터링/정렬**: 글로브 패턴 필터, 정렬 기준 변경, 수동 순서 편집
 - **설정 파일**: `~/.tubearchive/config.toml`로 기본값 관리
 - **프로젝트 관리**: 여러 날의 촬영을 하나의 프로젝트로 묶어 관리, 날짜별 그룹핑 및 상태 조회
 - **작업 현황 조회**: 트랜스코딩/병합/업로드 이력 확인
+- **통계 대시보드**: 전체 처리 통계, 기기별 분포, 기간별 필터
 
 ## 지원 기기 및 프로파일
 
@@ -169,34 +178,183 @@ uv run --project ~/Workspaces/dizy64/tubearchive tubearchive ./videos/ -o merged
 
 ```bash
 # 출력 파일 지정
-uv run tubearchive -o merged_output.mp4 ~/Videos/
+tubearchive -o merged_output.mp4 ~/Videos/
 
 # 실행 계획만 확인 (Dry Run)
-uv run tubearchive --dry-run ~/Videos/
+tubearchive --dry-run ~/Videos/
 
 # Resume 기능 비활성화
-uv run tubearchive --no-resume ~/Videos/
+tubearchive --no-resume ~/Videos/
 
 # 임시 파일 보존 (디버깅용)
-uv run tubearchive --keep-temp ~/Videos/
-
-# 오디오 노이즈 제거 (바람소리/배경 소음 저감)
-uv run tubearchive --denoise --denoise-level medium ~/Videos/
-
-# EBU R128 오디오 라우드니스 정규화
-uv run tubearchive --normalize-audio ~/Videos/
-
-# 썸네일 자동 생성 (기본: 10%, 33%, 50% 지점)
-uv run tubearchive --thumbnail ~/Videos/
-
-# 특정 시점에서 썸네일 추출
-uv run tubearchive --thumbnail --thumbnail-at 00:01:30 --thumbnail-at 00:03:00 ~/Videos/
+tubearchive --keep-temp ~/Videos/
 
 # 상세 로그 출력
-uv run tubearchive -v ~/Videos/
+tubearchive -v ~/Videos/
 
 # 병렬 트랜스코딩 (4개 파일 동시 처리)
-uv run tubearchive -j 4 ~/Videos/
+tubearchive -j 4 ~/Videos/
+```
+
+### 오디오 처리
+
+```bash
+# EBU R128 오디오 라우드니스 정규화
+tubearchive --normalize-audio ~/Videos/
+
+# 오디오 노이즈 제거 (바람소리/배경 소음 저감)
+tubearchive --denoise --denoise-level medium ~/Videos/
+```
+
+### 무음 구간 감지/제거
+
+```bash
+# 무음 구간 감지만 (제거하지 않음)
+tubearchive --detect-silence ~/Videos/
+
+# 시작/끝 무음 자동 제거
+tubearchive --trim-silence ~/Videos/
+
+# 커스텀 설정 (기준 dB, 최소 무음 길이)
+tubearchive --trim-silence --silence-threshold -35dB --silence-duration 3.0 ~/Videos/
+```
+
+### 영상 안정화
+
+vidstab 2-pass 기반 손떨림 보정. 트랜스코딩 시간이 증가합니다.
+
+```bash
+# 기본 안정화 (medium strength, crop 모드)
+tubearchive --stabilize ~/Videos/
+
+# 강한 안정화
+tubearchive --stabilize --stabilize-strength heavy ~/Videos/
+
+# 가장자리 확장 (crop 대신 검은색 채움)
+tubearchive --stabilize --stabilize-crop expand ~/Videos/
+
+# strength 지정 시 --stabilize 암묵적 활성화
+tubearchive --stabilize-strength light ~/Videos/
+```
+
+| 강도 | 설명 |
+|------|------|
+| `light` | 미세한 흔들림만 보정, 원본 느낌 유지 |
+| `medium` | 일반적 손떨림 보정 (기본값) |
+| `heavy` | 강한 흔들림 보정, 크롭 영역 증가 |
+
+### BGM 믹싱
+
+병합 영상에 배경음악을 자동으로 믹싱합니다.
+
+```bash
+# BGM 믹싱
+tubearchive --bgm ~/Music/bgm.mp3 ~/Videos/
+
+# 볼륨 조절 (0.0~1.0, 기본: 0.2)
+tubearchive --bgm ~/Music/bgm.mp3 --bgm-volume 0.3 ~/Videos/
+
+# BGM 루프 재생 (BGM이 영상보다 짧을 때)
+tubearchive --bgm ~/Music/bgm.mp3 --bgm-loop ~/Videos/
+```
+
+### LUT 컬러 그레이딩
+
+.cube 또는 .3dl 형식의 LUT 파일을 트랜스코딩 시 적용합니다.
+
+```bash
+# LUT 직접 지정
+tubearchive --lut ~/LUTs/nikon_rec709.cube ~/Videos/
+
+# 기기별 자동 LUT 매칭 (config.toml의 device_luts 설정 필요)
+tubearchive --auto-lut ~/Videos/
+
+# 자동 LUT 매칭 비활성화
+tubearchive --no-auto-lut ~/Videos/
+
+# HDR 변환 전에 LUT 적용 (Nikon N-Log 등)
+tubearchive --lut ~/LUTs/nlog.cube --lut-before-hdr ~/Videos/
+```
+
+> **우선순위**: `--lut`(직접 지정) > `--auto-lut`(기기 매칭) > 없음
+
+### 타임랩스 생성
+
+병합 영상에서 배속 타임랩스를 생성합니다.
+
+```bash
+# 10배속 타임랩스
+tubearchive --timelapse 10x ~/Videos/
+
+# 오디오 유지 (atempo 가속)
+tubearchive --timelapse 30x --timelapse-audio ~/Videos/
+
+# 해상도 변환 (프리셋: 4k, 1080p, 720p 또는 WIDTHxHEIGHT)
+tubearchive --timelapse 5x --timelapse-resolution 1080p ~/Videos/
+```
+
+- 배속 범위: 2x ~ 60x
+- 비디오: libx264, CRF 23
+- 오디오: 기본 제거, `--timelapse-audio` 시 atempo 체인으로 가속
+
+### 영상 분할
+
+FFmpeg segment muxer를 사용하여 재인코딩 없이 분할합니다.
+
+```bash
+# 시간 기준 분할 (1시간 단위)
+tubearchive --split-duration 1h ~/Videos/
+
+# 파일 크기 기준 분할 (10GB 단위)
+tubearchive --split-size 10G ~/Videos/
+
+# 분할 + YouTube 업로드 (분할 파일별 챕터 리매핑 + "Part N/M" 제목)
+tubearchive --split-duration 1h --upload ~/Videos/
+```
+
+시간 형식: `1h`, `30m`, `1h30m15s`
+크기 형식: `10G`, `500M`, `1.5G`
+
+### 썸네일
+
+```bash
+# 기본 지점(10%, 33%, 50%) 썸네일
+tubearchive --thumbnail ~/Videos/
+
+# 특정 시점에서 썸네일 추출
+tubearchive --thumbnail --thumbnail-at 00:01:30 --thumbnail-at 00:03:00 ~/Videos/
+```
+
+### 원본 파일 아카이브
+
+트랜스코딩 완료 후 원본 파일을 관리합니다.
+
+```bash
+# 원본 파일을 지정 경로로 이동
+tubearchive --archive-originals ~/Videos/archive ~/Videos/
+
+# delete 정책 시 확인 프롬프트 우회
+tubearchive --archive-force ~/Videos/
+```
+
+config.toml에서 기본 정책을 설정할 수도 있습니다 (`[archive]` 섹션 참조).
+
+### 파일 필터링 및 정렬
+
+```bash
+# 특정 패턴의 파일 제외 (글로브, 반복 가능)
+tubearchive --exclude "GH*" --exclude "*.mts" ~/Videos/
+
+# 특정 패턴의 파일만 포함
+tubearchive --include-only "*.mp4" ~/Videos/
+
+# 정렬 기준 변경 (기본: time)
+tubearchive --sort name ~/Videos/     # 이름순
+tubearchive --sort size ~/Videos/     # 크기순
+tubearchive --sort device ~/Videos/   # 기기순
+
+# 인터랙티브 모드로 클립 순서 수동 편집
+tubearchive --reorder ~/Videos/
 ```
 
 ### 병렬 트랜스코딩
@@ -233,6 +391,49 @@ tubearchive --init-config
 tubearchive --config /path/to/config.toml ~/Videos/
 ```
 
+설정 파일 예시:
+
+```toml
+[general]
+# output_dir = "~/Videos/output"
+# parallel = 1
+# db_path = "~/.tubearchive/tubearchive.db"
+# denoise = false
+# denoise_level = "medium"              # light/medium/heavy
+# normalize_audio = true                # EBU R128 loudnorm
+# stabilize = false                     # 영상 안정화
+# stabilize_strength = "medium"         # light/medium/heavy
+# stabilize_crop = "crop"               # crop/expand
+# group_sequences = true
+# fade_duration = 0.5
+
+[bgm]
+# bgm_path = "~/Music/bgm.mp3"         # 기본 BGM 파일 경로
+# bgm_volume = 0.2                      # 상대 볼륨 0.0~1.0
+# bgm_loop = false                      # 루프 재생 여부
+
+[archive]
+# policy = "keep"                       # keep/move/delete
+# destination = "~/Videos/archive"      # move 정책 시 이동 경로
+
+[color_grading]
+# auto_lut = true                       # 기기별 자동 LUT 매칭
+
+[color_grading.device_luts]             # 키워드=LUT경로 (부분 문자열 매칭, 대소문자 무시)
+# nikon = "~/LUTs/nikon_nlog_to_rec709.cube"
+# gopro = "~/LUTs/gopro_flat_to_rec709.cube"
+# iphone = "~/LUTs/apple_log_to_rec709.cube"
+
+[youtube]
+# client_secrets = "~/.tubearchive/client_secrets.json"
+# token = "~/.tubearchive/youtube_token.json"
+# playlist = ["PLxxxxxxxx"]
+# upload_chunk_mb = 32                  # 1-256
+# upload_privacy = "unlisted"           # public/unlisted/private
+```
+
+에러 정책: 파일 없음 → 빈 config, TOML 문법 오류 → warning + 빈 config, 타입 오류 → 해당 필드 무시
+
 ### 작업 현황 조회
 
 ```bash
@@ -241,6 +442,16 @@ tubearchive --status
 
 # 특정 작업 상세 조회 (merge_job ID)
 tubearchive --status-detail 1
+```
+
+### 통계 대시보드
+
+```bash
+# 전체 처리 통계 (트랜스코딩, 병합, 기기별 분포, 아카이브)
+tubearchive --stats
+
+# 특정 기간 통계 (연-월)
+tubearchive --stats --period "2026-01"
 ```
 
 ### 프로젝트 관리
@@ -412,6 +623,9 @@ tubearchive --upload-only video.mp4 --upload-title "나의 여행 영상"
 
 # 공개 설정 변경 (기본: unlisted)
 tubearchive --upload-only video.mp4 --upload-privacy public
+
+# 분할 + 업로드 (분할 파일별 챕터 리매핑 + "Part N/M" 제목)
+tubearchive --split-duration 1h --upload ~/Videos/
 ```
 
 #### 업로드 옵션
@@ -422,6 +636,7 @@ tubearchive --upload-only video.mp4 --upload-privacy public
 | `--upload-only FILE` | 지정된 파일을 YouTube에 업로드 (병합 없이) | - |
 | `--upload-title TITLE` | 영상 제목 | 파일명 또는 디렉토리명 |
 | `--upload-privacy` | 공개 설정 (public/unlisted/private) | unlisted |
+| `--upload-chunk MB` | 업로드 청크 크기 MB (1-256) | 32 |
 | `--playlist ID` | 업로드 후 플레이리스트에 추가 (여러 번 사용 가능) | - |
 | `--list-playlists` | 내 플레이리스트 목록 조회 | - |
 
@@ -468,75 +683,6 @@ tubearchive ~/Videos/ --upload
 3:45 clip3
 ```
 
-### 전체 옵션
-
-```
-usage: tubearchive [-h] [-V] [-o OUTPUT] [--output-dir DIR] [--no-resume]
-                   [--keep-temp] [--dry-run] [-v] [-j N]
-                   [--denoise] [--denoise-level {light,medium,heavy}]
-                   [--normalize-audio]
-                   [--thumbnail] [--thumbnail-at TIMESTAMP] [--thumbnail-quality Q]
-                   [--upload] [--upload-only FILE]
-                   [--upload-title TITLE] [--upload-privacy {public,unlisted,private}]
-                   [--upload-chunk MB]
-                   [--playlist ID] [--setup-youtube] [--youtube-auth] [--list-playlists]
-                   [--reset-build [PATH]] [--reset-upload [PATH]]
-                   [--project NAME] [--project-list] [--project-detail ID]
-                   [--status [STATUS]] [--status-detail ID]
-                   [--catalog] [--search [PATTERN]] [--device NAME]
-                   [--json | --csv]
-                   [--config PATH] [--init-config]
-                   [targets ...]
-
-다양한 기기의 4K 영상을 표준화하여 병합합니다.
-
-positional arguments:
-  targets               영상 파일 또는 디렉토리 (기본: 현재 디렉토리)
-
-options:
-  -h, --help            도움말 표시
-  -V, --version         버전 출력
-  -o, --output OUTPUT   출력 파일 경로 (기본: merged_output.mp4)
-  --output-dir DIR      출력 파일 저장 디렉토리 (환경변수: TUBEARCHIVE_OUTPUT_DIR)
-  --no-resume           Resume 기능 비활성화
-  --keep-temp           임시 파일 보존 (디버깅용)
-  --dry-run             실행 계획만 출력 (실제 실행 안 함)
-  -v, --verbose         상세 로그 출력
-  -j, --parallel N      병렬 트랜스코딩 수 (환경변수: TUBEARCHIVE_PARALLEL, 기본: 1)
-  --denoise             FFmpeg 오디오 노이즈 제거 활성화 (afftdn)
-  --denoise-level       노이즈 제거 강도 (light/medium/heavy, 기본: medium)
-  --normalize-audio     EBU R128 오디오 라우드니스 정규화 활성화 (loudnorm 2-pass)
-  --group               연속 파일 시퀀스 그룹핑 활성화 (환경변수: TUBEARCHIVE_GROUP_SEQUENCES)
-  --no-group            연속 파일 시퀀스 그룹핑 비활성화
-  --fade-duration SECONDS 기본 페이드 시간(초) (환경변수: TUBEARCHIVE_FADE_DURATION, 기본: 0.5)
-  --thumbnail           병합 영상에서 썸네일 자동 생성 (기본: 10%, 33%, 50% 지점)
-  --thumbnail-at TIME   특정 시점에서 썸네일 추출 (예: '00:01:30', 반복 가능)
-  --thumbnail-quality Q 썸네일 JPEG 품질 (1-31, 낮을수록 고품질, 기본: 2)
-  --upload              병합 완료 후 YouTube에 업로드
-  --upload-only FILE    지정된 파일을 YouTube에 업로드 (병합 없이)
-  --upload-title TITLE  YouTube 업로드 시 영상 제목
-  --upload-privacy      YouTube 공개 설정 (기본: unlisted)
-  --upload-chunk MB     업로드 청크 크기 MB (1-256, 환경변수: TUBEARCHIVE_UPLOAD_CHUNK_MB, 기본: 32)
-  --playlist ID         업로드 후 플레이리스트에 추가 (여러 번 사용 가능)
-  --setup-youtube       YouTube 인증 상태 확인 및 설정 가이드 출력
-  --youtube-auth        YouTube 브라우저 인증 실행
-  --list-playlists      내 플레이리스트 목록 조회
-  --project NAME        프로젝트에 병합 결과 연결 (없으면 자동 생성)
-  --project-list        프로젝트 목록 조회 (--json 옵션 지원)
-  --project-detail ID   프로젝트 상세 조회 (--json 옵션 지원)
-  --reset-build [PATH]  빌드 기록 초기화 (트랜스코딩/병합 다시 수행)
-  --reset-upload [PATH] 업로드 기록 초기화 (YouTube 다시 업로드)
-  --status [STATUS]     작업 현황 조회 (값 지정 시 메타데이터 검색 상태 필터)
-  --status-detail ID    특정 작업 상세 조회 (merge_job ID)
-  --catalog             영상 메타데이터 전체 목록 조회 (기기별 그룹핑)
-  --search [PATTERN]    영상 메타데이터 검색 (예: 2026-01)
-  --device NAME         메타데이터 검색 시 기기 필터 (예: GoPro)
-  --json                메타데이터 출력 형식을 JSON으로 지정
-  --csv                 메타데이터 출력 형식을 CSV로 지정
-  --config PATH         설정 파일 경로 (기본: ~/.tubearchive/config.toml)
-  --init-config         기본 설정 파일(config.toml) 생성
-```
-
 ### 환경 변수
 
 | 환경 변수 | 설명 | 기본값 |
@@ -544,11 +690,23 @@ options:
 | `TUBEARCHIVE_OUTPUT_DIR` | 기본 출력 디렉토리 | 출력 파일과 같은 위치 |
 | `TUBEARCHIVE_DB_PATH` | 데이터베이스 파일 경로 | `~/.tubearchive/tubearchive.db` |
 | `TUBEARCHIVE_PARALLEL` | 병렬 트랜스코딩 수 | 1 (순차 처리) |
-| `TUBEARCHIVE_DENOISE` | 오디오 노이즈 제거 기본 활성화 (true/false) | false |
+| `TUBEARCHIVE_DENOISE` | 오디오 노이즈 제거 (true/false) | false |
 | `TUBEARCHIVE_DENOISE_LEVEL` | 노이즈 제거 강도 (light/medium/heavy) | medium |
 | `TUBEARCHIVE_NORMALIZE_AUDIO` | EBU R128 loudnorm 정규화 (true/false) | false |
-| `TUBEARCHIVE_GROUP_SEQUENCES` | 연속 파일 시퀀스 그룹핑 여부 (true/false) | true |
+| `TUBEARCHIVE_STABILIZE` | 영상 안정화 vidstab (true/false) | false |
+| `TUBEARCHIVE_STABILIZE_STRENGTH` | 안정화 강도 (light/medium/heavy) | medium |
+| `TUBEARCHIVE_STABILIZE_CROP` | 안정화 크롭 모드 (crop/expand) | crop |
+| `TUBEARCHIVE_GROUP_SEQUENCES` | 연속 파일 시퀀스 그룹핑 (true/false) | true |
 | `TUBEARCHIVE_FADE_DURATION` | 기본 페이드 시간(초) | 0.5 |
+| `TUBEARCHIVE_TRIM_SILENCE` | 무음 구간 제거 (true/false) | false |
+| `TUBEARCHIVE_SILENCE_THRESHOLD` | 무음 기준 데시벨 | -30dB |
+| `TUBEARCHIVE_SILENCE_MIN_DURATION` | 최소 무음 길이(초) | 2.0 |
+| `TUBEARCHIVE_BGM_PATH` | 기본 BGM 파일 경로 | - |
+| `TUBEARCHIVE_BGM_VOLUME` | BGM 상대 볼륨 (0.0~1.0) | 0.2 |
+| `TUBEARCHIVE_BGM_LOOP` | BGM 루프 재생 (true/false) | false |
+| `TUBEARCHIVE_ARCHIVE_POLICY` | 아카이브 정책 (keep/move/delete) | keep |
+| `TUBEARCHIVE_ARCHIVE_DESTINATION` | move 정책 시 이동 경로 | - |
+| `TUBEARCHIVE_AUTO_LUT` | 기기별 자동 LUT 매칭 (true/false) | false |
 | `TUBEARCHIVE_YOUTUBE_CLIENT_SECRETS` | OAuth 클라이언트 시크릿 경로 | `~/.tubearchive/client_secrets.json` |
 | `TUBEARCHIVE_YOUTUBE_TOKEN` | OAuth 토큰 저장 경로 | `~/.tubearchive/youtube_token.json` |
 | `TUBEARCHIVE_YOUTUBE_PLAYLIST` | 기본 플레이리스트 ID (쉼표로 여러 개 지정) | - |
@@ -590,25 +748,30 @@ tubearchive/
 ├── __main__.py           # python -m 진입점
 ├── commands/
 │   ├── catalog.py        # 메타데이터 카탈로그/검색 CLI
-│   └── project.py        # 프로젝트 관리 CLI (목록/상세 조회)
+│   ├── project.py        # 프로젝트 관리 CLI (목록/상세 조회)
+│   └── stats.py          # 통계 대시보드 CLI
 ├── core/
 │   ├── scanner.py        # 파일 스캔 (3가지 케이스)
 │   ├── detector.py       # ffprobe 메타데이터 감지
 │   ├── grouper.py        # 연속 파일 시퀀스 그룹핑 (GoPro/DJI)
+│   ├── ordering.py       # 파일 정렬/필터링/수동 재배열
 │   ├── transcoder.py     # 트랜스코딩 엔진 (Resume 지원)
-│   └── merger.py         # concat 병합 (codec copy)
+│   ├── merger.py         # concat 병합 (codec copy)
+│   ├── splitter.py       # 영상 분할 (segment muxer, 재인코딩 없음)
+│   ├── timelapse.py      # 타임랩스 생성 (배속/해상도/오디오)
+│   └── archiver.py       # 원본 파일 아카이브 관리
 ├── database/
 │   ├── schema.py         # SQLite 스키마
-│   ├── repository.py     # CRUD Repository (Video/TranscodingJob/MergeJob/Project)
+│   ├── repository.py     # CRUD Repository (Video/TranscodingJob/MergeJob/Split/Archive/Project)
 │   └── resume.py         # Resume 상태 추적
 ├── ffmpeg/
 │   ├── executor.py       # FFmpeg 실행 및 진행률
-│   ├── effects.py        # 필터 (Portrait Layout, Fade, Loudnorm, Denoise)
+│   ├── effects.py        # 필터 (Portrait, Fade, Loudnorm, Denoise, Vidstab, BGM, LUT, Timelapse, Silence)
 │   ├── profiles.py       # 기기별 인코딩 프로파일
 │   └── thumbnail.py      # 썸네일 추출
 ├── models/
 │   ├── video.py          # VideoFile, VideoMetadata, FadeConfig
-│   └── job.py            # TranscodingJob, MergeJob, Project, JobStatus
+│   └── job.py            # TranscodingJob, MergeJob, SplitJob, Project, JobStatus
 ├── youtube/
 │   ├── __init__.py       # 모듈 exports
 │   ├── auth.py           # OAuth 2.0 인증
