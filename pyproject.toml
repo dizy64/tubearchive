@@ -1,6 +1,6 @@
 [project]
 name = "tubearchive"
-version = "0.2.32"
+version = "0.2.33"
 description = "4K 영상 표준화 및 병합 CLI 도구 (Project Komorebi)"
 authors = [
     {name = "Donggeun Lee", email = "i@dizy.me"}
