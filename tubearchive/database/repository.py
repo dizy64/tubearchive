@@ -103,6 +103,41 @@ class VideoRepository:
         cursor = self.conn.execute("SELECT COUNT(*) as cnt FROM videos")
         return int(cursor.fetchone()["cnt"])
 
+    def get_stats(self, period: str | None = None) -> dict[str, object]:
+        """영상 통계를 집계한다.
+
+        Args:
+            period: 기간 필터 (LIKE 패턴, 예: ``'2026-01'``). None이면 전체.
+
+        Returns:
+            ``total``, ``total_duration``, ``devices`` 키를 가진 딕셔너리.
+        """
+        where = ""
+        params: list[str] = []
+        if period:
+            where = "WHERE creation_time LIKE ?"
+            params.append(f"{period}%")
+
+        row = self.conn.execute(
+            "SELECT COUNT(*) as cnt, COALESCE(SUM(duration_seconds), 0) as dur"
+            f" FROM videos {where}",
+            params,
+        ).fetchone()
+
+        device_rows = self.conn.execute(
+            f"""SELECT COALESCE(device_model, '미상') as device, COUNT(*) as cnt
+                FROM videos {where}
+                GROUP BY COALESCE(device_model, '미상')
+                ORDER BY cnt DESC""",
+            params,
+        ).fetchall()
+
+        return {
+            "total": int(row["cnt"]),
+            "total_duration": float(row["dur"]),
+            "devices": [(r["device"], int(r["cnt"])) for r in device_rows],
+        }
+
     def delete_by_ids(self, video_ids: list[int]) -> int:
         """여러 영상을 ID 목록으로 일괄 삭제한다.
 
@@ -323,6 +358,66 @@ class TranscodingJobRepository:
         self.conn.commit()
         return cursor.rowcount
 
+    def get_stats(self, period: str | None = None) -> dict[str, object]:
+        """트랜스코딩 작업 통계를 집계한다.
+
+        Args:
+            period: 기간 필터 (LIKE 패턴). None이면 전체.
+
+        Returns:
+            ``status_counts``, ``avg_encoding_speed`` 키를 가진 딕셔너리.
+        """
+        where = ""
+        params: list[str] = []
+        if period:
+            where = "WHERE tj.created_at LIKE ?"
+            params.append(f"{period}%")
+
+        status_rows = self.conn.execute(
+            f"""SELECT tj.status, COUNT(*) as cnt
+                FROM transcoding_jobs tj {where}
+                GROUP BY tj.status""",
+            params,
+        ).fetchall()
+        status_counts = {r["status"]: int(r["cnt"]) for r in status_rows}
+
+        # 성공한 작업만 대상으로 인코딩 속도를 집계한다.
+        # failed 작업도 completed_at이 설정되므로 제외하지 않으면
+        # 평균 속도가 왜곡될 수 있다.
+        speed_where = (
+            "WHERE tj.started_at IS NOT NULL"
+            " AND tj.completed_at IS NOT NULL"
+            " AND tj.status IN ('completed', 'merged')"
+            " AND v.duration_seconds > 0"
+            " AND julianday(tj.completed_at)"
+            " > julianday(tj.started_at)"
+        )
+        speed_params: list[str] = []
+        if period:
+            speed_where += " AND tj.created_at LIKE ?"
+            speed_params.append(f"{period}%")
+
+        # 인코딩 속도 = 영상 길이(초) / 실제 처리 시간(초)
+        # julianday 차이(일) * 86400 = 초 변환
+        # MAX(…, 0.001) → 거의 즉시 완료된 경우 0 나누기 방지
+        # 결과: 2.5 = 재생 시간 대비 2.5배속으로 인코딩됨
+        speed_row = self.conn.execute(
+            f"""SELECT AVG(
+                    v.duration_seconds /
+                    MAX((julianday(tj.completed_at) - julianday(tj.started_at)) * 86400, 0.001)
+                ) as avg_speed
+                FROM transcoding_jobs tj
+                JOIN videos v ON tj.video_id = v.id
+                {speed_where}""",
+            speed_params,
+        ).fetchone()
+        avg_speed = float(speed_row["avg_speed"]) if speed_row["avg_speed"] else None
+
+        return {
+            "status_counts": status_counts,
+            "avg_encoding_speed": avg_speed,
+        }
+
     def _row_to_job(self, row: sqlite3.Row) -> TranscodingJob:
         """Row를 TranscodingJob으로 변환."""
         return TranscodingJob(
@@ -499,6 +594,49 @@ class MergeJobRepository:
             "SELECT COUNT(*) as cnt FROM merge_jobs WHERE youtube_id IS NOT NULL"
         )
         return int(cursor.fetchone()["cnt"])
+
+    def get_stats(self, period: str | None = None) -> dict[str, object]:
+        """병합 작업 통계를 집계한다.
+
+        Args:
+            period: 기간 필터 (LIKE 패턴). None이면 전체.
+
+        Returns:
+            ``total``, ``completed``, ``failed``, ``uploaded``,
+            ``total_size_bytes``, ``total_duration`` 키를 가진 딕셔너리.
+        """
+        where = ""
+        params: list[str] = []
+        if period:
+            where = "WHERE created_at LIKE ?"
+            params.append(f"{period}%")
+
+        row = self.conn.execute(
+            f"""SELECT
+                    COUNT(*) as total,
+                    COALESCE(SUM(
+                        CASE WHEN status = 'completed' THEN 1 ELSE 0 END
+                    ), 0) as completed,
+                    COALESCE(SUM(
+                        CASE WHEN status = 'failed' THEN 1 ELSE 0 END
+                    ), 0) as failed,
+                    COALESCE(SUM(
+                        CASE WHEN youtube_id IS NOT NULL THEN 1 ELSE 0 END
+                    ), 0) as uploaded,
+                    COALESCE(SUM(total_size_bytes), 0) as total_size,
+                    COALESCE(SUM(total_duration_seconds), 0) as total_dur
+                FROM merge_jobs {where}""",
+            params,
+        ).fetchone()
+
+        return {
+            "total": int(row["total"]),
+            "completed": int(row["completed"]),
+            "failed": int(row["failed"]),
+            "uploaded": int(row["uploaded"]),
+            "total_size_bytes": int(row["total_size"]),
+            "total_duration": float(row["total_dur"]),
+        }
 
     def delete(self, job_id: int) -> None:
         """병합 작업 삭제."""
@@ -746,3 +884,35 @@ class ArchiveHistoryRepository:
             (operation,),
         )
         return int(cursor.fetchone()["cnt"])
+
+    def get_stats(self, period: str | None = None) -> dict[str, int]:
+        """아카이브 작업 통계를 집계한다.
+
+        Args:
+            period: 기간 필터 (LIKE 패턴). None이면 전체.
+
+        Returns:
+            ``moved``, ``deleted`` 키를 가진 딕셔너리.
+        """
+        where = ""
+        params: list[str] = []
+        if period:
+            where = "WHERE archived_at LIKE ?"
+            params.append(f"{period}%")
+
+        row = self.conn.execute(
+            f"""SELECT
+                    COALESCE(SUM(
+                        CASE WHEN operation = 'move' THEN 1 ELSE 0 END
+                    ), 0) as moved,
+                    COALESCE(SUM(
+                        CASE WHEN operation = 'delete' THEN 1 ELSE 0 END
+                    ), 0) as deleted
+                FROM archive_history {where}""",
+            params,
+        ).fetchone()
+
+        return {
+            "moved": int(row["moved"]),
+            "deleted": int(row["deleted"]),
+        }

@@ -705,6 +705,20 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="전체 처리 통계 대시보드 조회",
+    )
+
+    parser.add_argument(
+        "--period",
+        type=str,
+        default=None,
+        metavar="PERIOD",
+        help="통계 기간 필터 (예: 2026-01, 2026). --stats와 함께 사용",
+    )
+
+    parser.add_argument(
         "--catalog",
         action="store_true",
         help="영상 메타데이터 전체 목록 조회 (기기별 그룹핑)",
@@ -2947,6 +2961,18 @@ def main() -> None:
         # --status 옵션 처리 (작업 현황 조회)
         if args.status == CATALOG_STATUS_SENTINEL:
             cmd_status()
+            return
+
+        # --period 단독 사용 경고
+        if args.period and not args.stats:
+            logger.warning("--period 옵션은 --stats와 함께 사용해야 합니다.")
+
+        # --stats 옵션 처리 (통계 대시보드)
+        if args.stats:
+            from tubearchive.commands.stats import cmd_stats as _cmd_stats
+
+            with database_session() as conn:
+                _cmd_stats(conn, period=args.period)
             return
 
         # --catalog / --search 옵션 처리 (메타데이터 조회)
