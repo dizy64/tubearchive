@@ -47,10 +47,10 @@ jobs:
             ~/Library/Caches/Homebrew/api
           key: brew-ffmpeg-${{ runner.os }}-${{ runner.arch }}
 
-      - name: Install vidstab and ffmpeg
+      - name: Install ffmpeg with vidstab
         run: |
-          brew install vid.stab
-          brew install ffmpeg
+          brew tap homebrew-ffmpeg/ffmpeg
+          brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvidstab
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4

@@ -9,16 +9,14 @@ E2E 파이프라인 테스트.
     uv run pytest tests/test_e2e.py -v -k transcode  # 트랜스코딩만
 """
 
-import json
 import shutil
-import subprocess
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from tubearchive.cli import ValidatedArgs, run_pipeline
-from tubearchive.database.schema import init_database
+
+from .conftest import create_test_video, probe_video
 
 # ffmpeg 없으면 전체 모듈 스킵
 pytestmark = [
@@ -26,98 +24,27 @@ pytestmark = [
     pytest.mark.e2e_shard1,
 ]
 
-# ---------- 테스트 영상 생성 헬퍼 ----------
-
-
-def _create_test_video(
-    path: Path,
-    *,
-    duration: float = 3.0,
-    width: int = 1920,
-    height: int = 1080,
-    fps: int = 30,
-    codec: str = "h264",
-    audio: bool = True,
-) -> Path:
-    """
-    ffmpeg로 테스트용 영상을 생성한다.
-
-    Args:
-        path: 출력 파일 경로
-        duration: 길이(초)
-        width: 가로 해상도
-        height: 세로 해상도
-        fps: 프레임 레이트
-        codec: 비디오 코덱
-        audio: 오디오 포함 여부
-    """
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        f"testsrc=duration={duration}:size={width}x{height}:rate={fps}",
-    ]
-    if audio:
-        cmd += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}"]
-        cmd += ["-c:a", "aac", "-b:a", "128k"]
-
-    cmd += ["-c:v", codec, "-pix_fmt", "yuv420p", str(path)]
-
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed: {result.stderr}")
-    return path
-
-
-def _probe_video(path: Path) -> dict[str, Any]:
-    """ffprobe로 영상 메타데이터를 조회한다."""
-    cmd = [
-        "ffprobe",
-        "-v",
-        "quiet",
-        "-print_format",
-        "json",
-        "-show_streams",
-        "-show_format",
-        str(path),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-    if result.returncode != 0:
-        raise RuntimeError(f"ffprobe failed: {result.stderr}")
-    return json.loads(result.stdout)  # type: ignore[no-any-return]
-
-
 # ---------- Fixtures ----------
-
-
-@pytest.fixture
-def e2e_video_dir(tmp_path: Path) -> Path:
-    """E2E 테스트용 영상이 담긴 디렉토리."""
-    video_dir = tmp_path / "2025-01-31_E2E-Test"
-    video_dir.mkdir()
-    return video_dir
 
 
 @pytest.fixture
 def single_landscape_video(e2e_video_dir: Path) -> Path:
     """가로 영상 1개."""
-    return _create_test_video(e2e_video_dir / "landscape.mov")
+    return create_test_video(e2e_video_dir / "landscape.mov")
 
 
 @pytest.fixture
 def two_landscape_videos(e2e_video_dir: Path) -> Path:
     """가로 영상 2개 (병합 테스트용). 디렉토리 경로 반환."""
-    _create_test_video(e2e_video_dir / "clip_001.mov", duration=2.0)
-    _create_test_video(e2e_video_dir / "clip_002.mov", duration=2.0)
+    create_test_video(e2e_video_dir / "clip_001.mov", duration=2.0)
+    create_test_video(e2e_video_dir / "clip_002.mov", duration=2.0)
     return e2e_video_dir
 
 
 @pytest.fixture
 def portrait_video(e2e_video_dir: Path) -> Path:
     """세로 영상 1개 (1080x1920)."""
-    return _create_test_video(
+    return create_test_video(
         e2e_video_dir / "portrait.mov",
         width=1080,
         height=1920,
@@ -128,31 +55,14 @@ def portrait_video(e2e_video_dir: Path) -> Path:
 @pytest.fixture
 def mixed_videos(e2e_video_dir: Path) -> Path:
     """가로 + 세로 영상 혼합. 디렉토리 경로 반환."""
-    _create_test_video(e2e_video_dir / "landscape.mov", duration=2.0)
-    _create_test_video(
+    create_test_video(e2e_video_dir / "landscape.mov", duration=2.0)
+    create_test_video(
         e2e_video_dir / "portrait.mov",
         width=1080,
         height=1920,
         duration=2.0,
     )
     return e2e_video_dir
-
-
-@pytest.fixture
-def e2e_output_dir(tmp_path: Path) -> Path:
-    """E2E 출력 디렉토리."""
-    out = tmp_path / "output"
-    out.mkdir()
-    return out
-
-
-@pytest.fixture
-def e2e_db(tmp_path: Path) -> Path:
-    """E2E 전용 DB (테스트 간 격리)."""
-    db_path = tmp_path / "e2e_test.db"
-    conn = init_database(db_path)
-    conn.close()
-    return db_path
 
 
 # ---------- 테스트 ----------
@@ -166,7 +76,7 @@ class TestVideoGeneration:
         assert single_landscape_video.exists()
         assert single_landscape_video.stat().st_size > 0
 
-        info = _probe_video(single_landscape_video)
+        info = probe_video(single_landscape_video)
         video_stream = next(s for s in info["streams"] if s["codec_type"] == "video")
         audio_stream = next(s for s in info["streams"] if s["codec_type"] == "audio")
 
@@ -178,7 +88,7 @@ class TestVideoGeneration:
         """세로 영상이 생성되고 메타데이터가 올바른지 확인."""
         assert portrait_video.exists()
 
-        info = _probe_video(portrait_video)
+        info = probe_video(portrait_video)
         video_stream = next(s for s in info["streams"] if s["codec_type"] == "video")
 
         assert int(video_stream["width"]) == 1080
@@ -215,7 +125,7 @@ class TestTranscodePipeline:
         assert result_path.stat().st_size > 0
 
         # 출력 메타데이터 검증
-        info = _probe_video(result_path)
+        info = probe_video(result_path)
         video_stream = next(s for s in info["streams"] if s["codec_type"] == "video")
 
         # HEVC 코덱이어야 함
@@ -248,7 +158,7 @@ class TestTranscodePipeline:
         assert result_path.exists()
 
         # 병합된 영상 길이 ≈ 2초 + 2초 (fade 때문에 약간 차이 가능)
-        info = _probe_video(result_path)
+        info = probe_video(result_path)
         duration = float(info["format"]["duration"])
         assert duration >= 3.0  # 최소 3초 이상 (fade overlap 고려)
 
@@ -276,7 +186,7 @@ class TestTranscodePipeline:
 
         assert result_path.exists()
 
-        info = _probe_video(result_path)
+        info = probe_video(result_path)
         video_stream = next(s for s in info["streams"] if s["codec_type"] == "video")
 
         # 3840x2160으로 표준화
@@ -389,7 +299,7 @@ class TestMixedInputs:
 
         assert result_path.exists()
 
-        info = _probe_video(result_path)
+        info = probe_video(result_path)
         video_stream = next(s for s in info["streams"] if s["codec_type"] == "video")
 
         assert int(video_stream["width"]) == 3840

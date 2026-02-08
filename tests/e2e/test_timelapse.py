@@ -93,6 +93,10 @@ class TestTimelapse:
         assert timelapse_out.exists()
         assert get_audio_stream_count(timelapse_out) >= 1
 
+        duration = get_video_duration(timelapse_out)
+        # 6s / 2x ≈ 3s (±0.5s tolerance)
+        assert abs(duration - 3.0) < 0.5
+
     def test_timelapse_resolution(
         self,
         e2e_video_dir: Path,

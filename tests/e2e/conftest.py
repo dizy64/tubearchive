@@ -4,7 +4,6 @@
 """
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -13,13 +12,6 @@ import pytest
 
 from tubearchive.cli import ValidatedArgs
 from tubearchive.database.schema import init_database
-
-# ffmpeg 없으면 전체 E2E 모듈 스킵
-pytestmark = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None,
-    reason="ffmpeg not installed",
-)
-
 
 # ---------- 영상/오디오 생성 헬퍼 ----------
 
@@ -31,7 +23,7 @@ def create_test_video(
     width: int = 1920,
     height: int = 1080,
     fps: int = 30,
-    codec: str = "h264",
+    codec: str = "libx264",
     audio: bool = True,
 ) -> Path:
     """ffmpeg로 테스트용 영상을 생성한다.
@@ -291,6 +283,9 @@ def make_pipeline_args(
     기본값으로 최소 파이프라인 인자를 생성하고, overrides로 필드를 덮어쓴다.
     db_path와 monkeypatch가 주어지면 환경변수도 설정한다.
     """
+    if (db_path is None) != (monkeypatch is None):
+        msg = "db_path and monkeypatch must both be provided or both be None"
+        raise ValueError(msg)
     if db_path is not None and monkeypatch is not None:
         monkeypatch.setenv("TUBEARCHIVE_DB_PATH", str(db_path))
 

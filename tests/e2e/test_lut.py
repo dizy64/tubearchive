@@ -76,5 +76,5 @@ class TestLUT:
             lut_path=Path("/nonexistent/fake.cube"),
         )
 
-        with pytest.raises((FileNotFoundError, RuntimeError, Exception)):
+        with pytest.raises((FileNotFoundError, RuntimeError)):
             run_pipeline(args)
