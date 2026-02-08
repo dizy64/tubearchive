@@ -16,7 +16,14 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from tubearchive.models.job import JobStatus, MergeJob, Project, SplitJob, TranscodingJob
+from tubearchive.models.job import (
+    JobStatus,
+    MergeJob,
+    Project,
+    ProjectDetail,
+    SplitJob,
+    TranscodingJob,
+)
 from tubearchive.models.video import VideoFile, VideoMetadata
 
 logger = logging.getLogger(__name__)
@@ -515,7 +522,8 @@ class MergeJobRepository:
         self.conn.commit()
         return cursor.rowcount
 
-    def _row_to_job(self, row: sqlite3.Row) -> MergeJob:
+    @staticmethod
+    def _row_to_job(row: sqlite3.Row) -> MergeJob:
         """Row를 MergeJob으로 변환."""
         return MergeJob(
             id=row["id"],
@@ -869,8 +877,7 @@ class ProjectRepository:
                ORDER BY m.date, m.created_at""",
             (project_id,),
         )
-        repo = MergeJobRepository(self.conn)
-        return [repo._row_to_job(row) for row in cursor.fetchall()]
+        return [MergeJobRepository._row_to_job(row) for row in cursor.fetchall()]
 
     def get_project_ids_for_merge_job(self, merge_job_id: int) -> list[int]:
         """특정 merge_job이 속한 프로젝트 ID 목록 조회."""
@@ -880,7 +887,7 @@ class ProjectRepository:
         )
         return [row["project_id"] for row in cursor.fetchall()]
 
-    def get_detail(self, project_id: int) -> dict[str, object] | None:
+    def get_detail(self, project_id: int) -> ProjectDetail | None:
         """프로젝트 상세 정보 조회.
 
         포함된 영상 목록, 총 시간, 업로드 상태 등을 집계하여 반환한다.
@@ -889,16 +896,7 @@ class ProjectRepository:
             project_id: 프로젝트 ID
 
         Returns:
-            상세 정보 딕셔너리 또는 프로젝트 미존재 시 None.
-
-            딕셔너리 키:
-                - ``project``: ``Project`` 인스턴스
-                - ``merge_jobs``: ``list[MergeJob]`` 날짜순 정렬
-                - ``total_duration_seconds``: ``float`` 총 재생 시간
-                - ``total_size_bytes``: ``int`` 총 파일 크기
-                - ``uploaded_count``: ``int`` YouTube 업로드 완료 수
-                - ``total_count``: ``int`` 전체 merge_job 수
-                - ``date_groups``: ``dict[str, list[MergeJob]]`` 날짜별 그룹
+            ProjectDetail 또는 프로젝트 미존재 시 None
         """
         project = self.get_by_id(project_id)
         if project is None:
@@ -906,31 +904,27 @@ class ProjectRepository:
 
         merge_jobs = self.get_merge_jobs(project_id)
 
-        total_duration = 0.0
-        total_size = 0
-        uploaded_count = 0
-        date_groups: dict[str, list[MergeJob]] = {}
+        total_duration = sum(
+            j.total_duration_seconds for j in merge_jobs if j.total_duration_seconds
+        )
+        total_size = sum(j.total_size_bytes for j in merge_jobs if j.total_size_bytes)
+        uploaded_count = sum(1 for j in merge_jobs if j.youtube_id)
 
+        # 날짜별 그룹핑 ("날짜 미상" 키는 date=None인 merge_job용)
+        date_groups: dict[str, list[MergeJob]] = {}
         for job in merge_jobs:
-            if job.total_duration_seconds:
-                total_duration += job.total_duration_seconds
-            if job.total_size_bytes:
-                total_size += job.total_size_bytes
-            if job.youtube_id:
-                uploaded_count += 1
-            # 날짜별 그룹핑
             date_key = job.date or "날짜 미상"
             date_groups.setdefault(date_key, []).append(job)
 
-        return {
-            "project": project,
-            "merge_jobs": merge_jobs,
-            "total_duration_seconds": total_duration,
-            "total_size_bytes": total_size,
-            "uploaded_count": uploaded_count,
-            "total_count": len(merge_jobs),
-            "date_groups": date_groups,
-        }
+        return ProjectDetail(
+            project=project,
+            merge_jobs=merge_jobs,
+            total_duration_seconds=total_duration,
+            total_size_bytes=total_size,
+            uploaded_count=uploaded_count,
+            total_count=len(merge_jobs),
+            date_groups=date_groups,
+        )
 
     def count_all(self) -> int:
         """전체 프로젝트 수를 반환한다."""

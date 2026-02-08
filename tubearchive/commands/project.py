@@ -11,13 +11,13 @@ import sqlite3
 import sys
 from typing import TextIO
 
+from tubearchive.cli import database_session
 from tubearchive.commands.catalog import (
     format_duration,
     render_table,
 )
 from tubearchive.database.repository import ProjectRepository
-from tubearchive.database.schema import init_database
-from tubearchive.models.job import MergeJob, Project
+from tubearchive.models.job import Project, ProjectDetail
 from tubearchive.utils import truncate_path
 from tubearchive.utils.progress import format_size
 
@@ -38,17 +38,15 @@ def _format_date_range(project: Project) -> str:
     return "-"
 
 
-def _format_project_status(detail: dict[str, object]) -> str:
+def _format_project_status(detail: ProjectDetail) -> str:
     """프로젝트 상태 요약 문자열 생성."""
-    total = int(detail["total_count"])  # type: ignore[call-overload]
-    uploaded = int(detail["uploaded_count"])  # type: ignore[call-overload]
-    if total == 0:
+    if detail.total_count == 0:
         return "빈 프로젝트"
-    if uploaded == total:
-        return f"전체 업로드 ({total}개)"
-    if uploaded > 0:
-        return f"부분 업로드 ({uploaded}/{total})"
-    return f"영상 {total}개"
+    if detail.uploaded_count == detail.total_count:
+        return f"전체 업로드 ({detail.total_count}개)"
+    if detail.uploaded_count > 0:
+        return f"부분 업로드 ({detail.uploaded_count}/{detail.total_count})"
+    return f"영상 {detail.total_count}개"
 
 
 def print_project_list(
@@ -78,9 +76,9 @@ def print_project_list(
                     "date_range_start": project.date_range_start,
                     "date_range_end": project.date_range_end,
                     "playlist_id": project.playlist_id,
-                    "merge_job_count": detail["total_count"] if detail else 0,
-                    "total_duration_seconds": detail["total_duration_seconds"] if detail else 0,
-                    "uploaded_count": detail["uploaded_count"] if detail else 0,
+                    "merge_job_count": detail.total_count if detail else 0,
+                    "total_duration_seconds": detail.total_duration_seconds if detail else 0,
+                    "uploaded_count": detail.uploaded_count if detail else 0,
                     "created_at": project.created_at.isoformat(),
                 }
             )
@@ -100,8 +98,8 @@ def print_project_list(
         if project.id is None:
             continue
         detail = repo.get_detail(project.id)
-        total_count = int(detail["total_count"]) if detail else 0  # type: ignore[call-overload]
-        total_duration = float(detail["total_duration_seconds"]) if detail else 0.0  # type: ignore[arg-type]
+        total_count = detail.total_count if detail else 0
+        total_duration = detail.total_duration_seconds if detail else 0.0
         status = _format_project_status(detail) if detail else "빈 프로젝트"
 
         rows.append(
@@ -147,13 +145,9 @@ def print_project_detail(
         print(f"프로젝트 ID {project_id}을(를) 찾을 수 없습니다.", file=sys.stderr)
         return
 
-    project: Project = detail["project"]  # type: ignore[assignment]
-    merge_jobs: list[MergeJob] = detail["merge_jobs"]  # type: ignore[assignment]
-    date_groups: dict[str, list[MergeJob]] = detail["date_groups"]  # type: ignore[assignment]
-    total_duration: float = detail["total_duration_seconds"]  # type: ignore[assignment]
-    total_size: int = detail["total_size_bytes"]  # type: ignore[assignment]
-    uploaded_count: int = detail["uploaded_count"]  # type: ignore[assignment]
-    total_count: int = detail["total_count"]  # type: ignore[assignment]
+    project = detail.project
+    merge_jobs = detail.merge_jobs
+    date_groups = detail.date_groups
 
     if output_format == "json":
         payload: dict[str, object] = {
@@ -168,10 +162,10 @@ def print_project_detail(
                 "updated_at": project.updated_at.isoformat(),
             },
             "summary": {
-                "total_count": total_count,
-                "uploaded_count": uploaded_count,
-                "total_duration_seconds": total_duration,
-                "total_size_bytes": total_size,
+                "total_count": detail.total_count,
+                "uploaded_count": detail.uploaded_count,
+                "total_duration_seconds": detail.total_duration_seconds,
+                "total_size_bytes": detail.total_size_bytes,
             },
             "merge_jobs": [
                 {
@@ -202,12 +196,14 @@ def print_project_detail(
 
     # 요약
     print(file=stream)
-    print(f"   총 영상: {total_count}개", file=stream)
-    if total_duration > 0:
-        print(f"   총 시간: {format_duration(total_duration)}", file=stream)
-    if total_size > 0:
-        print(f"   총 크기: {format_size(total_size)}", file=stream)
-    upload_status = f"{uploaded_count}/{total_count} 업로드됨" if total_count > 0 else "-"
+    print(f"   총 영상: {detail.total_count}개", file=stream)
+    if detail.total_duration_seconds > 0:
+        print(f"   총 시간: {format_duration(detail.total_duration_seconds)}", file=stream)
+    if detail.total_size_bytes > 0:
+        print(f"   총 크기: {format_size(detail.total_size_bytes)}", file=stream)
+    upload_status = (
+        f"{detail.uploaded_count}/{detail.total_count} 업로드됨" if detail.total_count > 0 else "-"
+    )
     print(f"   업로드: {upload_status}", file=stream)
 
     # 날짜별 그룹핑
@@ -248,17 +244,11 @@ def print_project_detail(
 
 def cmd_project_list(output_json: bool = False) -> None:
     """``--project-list`` CLI 옵션을 처리한다."""
-    conn = init_database()
-    try:
+    with database_session() as conn:
         print_project_list(conn, output_format="json" if output_json else "table")
-    finally:
-        conn.close()
 
 
 def cmd_project_detail(project_id: int, output_json: bool = False) -> None:
     """``--project-detail`` CLI 옵션을 처리한다."""
-    conn = init_database()
-    try:
+    with database_session() as conn:
         print_project_detail(conn, project_id, output_format="json" if output_json else "table")
-    finally:
-        conn.close()

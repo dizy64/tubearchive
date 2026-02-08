@@ -229,12 +229,10 @@ def db_conn(tmp_path: Path) -> Generator[sqlite3.Connection]:
 def _create_merge_job(
     conn: sqlite3.Connection,
     output_path: str = "/out/merged.mp4",
-    video_ids: str = "[1]",
     title: str | None = "테스트 영상",
     date: str | None = "2025-01-15",
     duration: float | None = 120.0,
     size: int | None = 1024000,
-    youtube_id: str | None = None,
 ) -> int:
     """테스트용 merge_job 생성 헬퍼."""
     repo = MergeJobRepository(conn)
@@ -620,10 +618,10 @@ class TestProjectDetail:
 
         detail = repo.get_detail(project_id)
         assert detail is not None
-        assert detail["total_count"] == 2
-        assert detail["total_duration_seconds"] == 1500.0
-        assert detail["total_size_bytes"] == 13_000_000
-        assert detail["uploaded_count"] == 0
+        assert detail.total_count == 2
+        assert detail.total_duration_seconds == 1500.0
+        assert detail.total_size_bytes == 13_000_000
+        assert detail.uploaded_count == 0
 
     def test_detail_date_groups(self, db_conn: sqlite3.Connection) -> None:
         """프로젝트 상세: 날짜별 자동 그룹핑."""
@@ -652,10 +650,8 @@ class TestProjectDetail:
 
         detail = repo.get_detail(project_id)
         assert detail is not None
-        date_groups = detail["date_groups"]
-        assert isinstance(date_groups, dict)
-        assert len(date_groups["2025-08-01"]) == 2
-        assert len(date_groups["2025-08-02"]) == 1
+        assert len(detail.date_groups["2025-08-01"]) == 2
+        assert len(detail.date_groups["2025-08-02"]) == 1
 
     def test_detail_uploaded_count(self, db_conn: sqlite3.Connection) -> None:
         """프로젝트 상세: 업로드 상태 집계."""
@@ -674,8 +670,8 @@ class TestProjectDetail:
 
         detail = repo.get_detail(project_id)
         assert detail is not None
-        assert detail["uploaded_count"] == 1
-        assert detail["total_count"] == 2
+        assert detail.uploaded_count == 1
+        assert detail.total_count == 2
 
     def test_detail_not_found(self, db_conn: sqlite3.Connection) -> None:
         """존재하지 않는 프로젝트 상세 조회."""
@@ -689,11 +685,11 @@ class TestProjectDetail:
 
         detail = repo.get_detail(project_id)
         assert detail is not None
-        assert detail["total_count"] == 0
-        assert detail["total_duration_seconds"] == 0.0
-        assert detail["total_size_bytes"] == 0
-        assert detail["uploaded_count"] == 0
-        assert detail["date_groups"] == {}
+        assert detail.total_count == 0
+        assert detail.total_duration_seconds == 0.0
+        assert detail.total_size_bytes == 0
+        assert detail.uploaded_count == 0
+        assert detail.date_groups == {}
 
     def test_detail_with_null_duration_and_size(self, db_conn: sqlite3.Connection) -> None:
         """duration/size가 NULL인 merge_job 포함 시 정상 집계."""
@@ -718,8 +714,8 @@ class TestProjectDetail:
 
         detail = repo.get_detail(project_id)
         assert detail is not None
-        assert detail["total_duration_seconds"] == 300.0
-        assert detail["total_size_bytes"] == 2_000_000
+        assert detail.total_duration_seconds == 300.0
+        assert detail.total_size_bytes == 2_000_000
 
     def test_detail_date_group_with_null_date(self, db_conn: sqlite3.Connection) -> None:
         """날짜 없는 merge_job은 '날짜 미상' 그룹."""
@@ -731,7 +727,7 @@ class TestProjectDetail:
 
         detail = repo.get_detail(project_id)
         assert detail is not None
-        assert "날짜 미상" in detail["date_groups"]
+        assert "날짜 미상" in detail.date_groups
 
 
 class TestProjectDeleteCascade:

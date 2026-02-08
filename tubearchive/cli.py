@@ -2880,7 +2880,7 @@ def _get_or_create_project_playlist(
                 return None
 
             project = repo.get_by_id(project_ids[0])
-            if project is None:
+            if project is None or project.id is None:
                 return None
 
             # 이미 플레이리스트가 있으면 재사용
@@ -2888,24 +2888,18 @@ def _get_or_create_project_playlist(
                 logger.info(f"Reusing project playlist: {project.playlist_id}")
                 return project.playlist_id
 
-        # 새 플레이리스트 생성
-        from tubearchive.youtube.auth import get_authenticated_service
-        from tubearchive.youtube.playlist import create_playlist
+            # 새 플레이리스트 생성 (YouTube API 호출은 DB 세션 내에서 수행)
+            from tubearchive.youtube.auth import get_authenticated_service
+            from tubearchive.youtube.playlist import create_playlist
 
-        service = get_authenticated_service()
-        playlist_id = create_playlist(
-            service,
-            title=project_name,
-            description=f"TubeArchive 프로젝트: {project_name}",
-            privacy=privacy,
-        )
+            service = get_authenticated_service()
+            playlist_id = create_playlist(
+                service,
+                title=project_name,
+                description=f"TubeArchive 프로젝트: {project_name}",
+                privacy=privacy,
+            )
 
-        # DB에 저장
-        with database_session() as conn:
-            repo = ProjectRepository(conn)
-            if project.id is None:
-                logger.warning("Project has no ID, cannot save playlist")
-                return None
             repo.update_playlist_id(project.id, playlist_id)
 
         print(f"  📋 프로젝트 플레이리스트 생성됨: {project_name}")
