@@ -80,6 +80,10 @@ uv run tubearchive --project-detail 1 --json             # JSON 형식 출력
 uv run tubearchive --status                         # 작업 현황 조회
 uv run tubearchive --status-detail 1                # 특정 작업 상세 조회
 
+# 통계 대시보드
+uv run tubearchive --stats                          # 전체 통계 대시보드
+uv run tubearchive --stats --period "2026-01"       # 특정 기간 통계 (연-월)
+
 # 설정 파일
 uv run tubearchive --init-config                    # ~/.tubearchive/config.toml 생성
 uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 지정
@@ -240,6 +244,14 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `cmd_search()`: 날짜/기기/상태 필터 검색
 - `STATUS_ICONS`: 작업 상태 아이콘 매핑
 - `format_duration()`: 초→분:초 변환
+
+**commands/stats.py**: 통계 대시보드 CLI
+- `cmd_stats()`: `--stats` CLI 진입점 (DB 집계 → 텍스트 대시보드 출력)
+- `fetch_stats()`: 4개 Repository의 `get_stats()` 호출 → `StatsData` 조합
+- `render_stats()`: 전체 요약, 트랜스코딩, 병합, 기기별 분포, 아카이브 섹션 렌더링
+- `render_bar_chart()`: 기기별 분포 텍스트 막대 차트
+- 데이터 모델: `StatsData`, `TranscodingStats`, `MergeStats`, `ArchiveStats`, `DeviceStat` (frozen dataclass)
+- `--period` 필터: SQL LIKE 패턴으로 연/월/일 모두 지원
 
 **utils/summary_generator.py**: Summary/챕터 생성
 - `generate_chapters()`: 클립 목록 → YouTube 챕터 타임스탬프
