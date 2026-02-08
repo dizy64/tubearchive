@@ -376,6 +376,21 @@ tests/
 - 새 테스트 추가 시 위 기준에 맞는 디렉토리에 배치
 - 모든 테스트는 임시 DB/디렉토리 사용
 
+### 입력 스트림 변형 테스트 체크리스트
+새 기능(특히 오디오/필터 관련)을 추가할 때 아래 케이스를 반드시 고려:
+
+| 케이스 | 발생 조건 | 테스트 포인트 |
+|--------|----------|--------------|
+| 비디오 + 정상 오디오 | Nikon, iPhone, GoPro 일반 촬영 | 기본 Happy Path |
+| 비디오만 (오디오 스트림 없음) | DJI/GoPro 타임랩스 모드 | `-map 0:a:0` 실패 방지, `has_audio=False` 분기 |
+| 비디오 + 무음 오디오 | DJI 드론 고고도 등 | loudnorm `-inf` 처리, FFmpeg 분석 결과 극단값 검증 |
+| 비디오 + 다중 오디오 트랙 | 외부 마이크 + 내장 마이크 | 스트림 선택 로직 |
+| 세로 영상 (`is_portrait`) | iPhone 세로 촬영 | blur background + overlay 필터 체인 |
+| HDR 영상 (HLG/PQ) | iPhone Dolby Vision, DJI D-Log | colorspace 변환 필터 |
+
+- FFmpeg 분석 출력(`loudnorm`, `silencedetect` 등)은 `float()` 변환 후 **유한성(`math.isinf`) 및 범위 검증** 필수
+- 새 기기 지원 추가 시 `ffprobe -show_streams`로 스트림 구성을 먼저 확인할 것
+
 ## 개발 규칙
 
 ### 버전 관리
