@@ -119,6 +119,7 @@ class FFmpegExecutor:
         filter_complex: str | None = None,
         overwrite: bool = True,
         seek_start: float | None = None,
+        has_audio: bool = True,
     ) -> list[str]:
         """
         트랜스코딩 FFmpeg 명령어 빌드.
@@ -132,6 +133,9 @@ class FFmpegExecutor:
             filter_complex: 복합 필터 (-filter_complex)
             overwrite: 덮어쓰기 여부
             seek_start: 시작 위치 (초)
+            has_audio: 입력 파일에 오디오 스트림 존재 여부.
+                False이면 anullsrc로 무음 오디오를 생성하여
+                concat 병합 호환성을 유지한다.
 
         Returns:
             FFmpeg 명령어 리스트
@@ -152,17 +156,33 @@ class FFmpegExecutor:
         # 입력 파일
         cmd.extend(["-i", str(input_path)])
 
+        # 오디오 스트림이 없으면 lavfi 무음 입력 추가 (concat 호환성)
+        # 입력 인덱스: 0=원본 비디오, 1=anullsrc 무음
+        if not has_audio and (filter_complex or video_filter):
+            cmd.extend(
+                [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "anullsrc=channel_layout=stereo:sample_rate=48000",
+                ]
+            )
+
+        # 오디오 매핑 소스: 입력에 오디오 있으면 0:a:0, 없으면 1:a:0 (anullsrc)
+        audio_map = "0:a:0" if has_audio else "1:a:0"
+
         # 필터 및 스트림 매핑
         if filter_complex:
             cmd.extend(["-filter_complex", filter_complex])
-            cmd.extend(["-map", "[v_out]", "-map", "0:a:0"])
+            cmd.extend(["-map", "[v_out]", "-map", audio_map])
         elif video_filter:
             # 명시적 매핑: 첫 번째 비디오/오디오 스트림만 선택
             # (iPhone 등 mebx data 스트림이 포함된 파일에서 디코더 오류 방지)
-            cmd.extend(["-map", "0:v:0", "-map", "0:a:0"])
+            cmd.extend(["-map", "0:v:0", "-map", audio_map])
             cmd.extend(["-vf", video_filter])
 
-        if audio_filter:
+        # 오디오 필터는 실제 오디오가 있을 때만 적용 (무음에는 불필요)
+        if audio_filter and has_audio:
             cmd.extend(["-af", audio_filter])
 
         # 인코딩 프로파일 적용
@@ -170,6 +190,10 @@ class FFmpegExecutor:
 
         # 음수 타임스탬프 방지 (concat 병합 시 PTS 불연속 해결)
         cmd.extend(["-avoid_negative_ts", "make_zero"])
+
+        # anullsrc는 무한 길이이므로 비디오 종료 시 같이 종료
+        if not has_audio and (filter_complex or video_filter):
+            cmd.append("-shortest")
 
         # 출력 파일
         cmd.append(str(output_path))

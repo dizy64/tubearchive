@@ -86,6 +86,9 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
     color_transfer = video_stream.get("color_transfer")
     color_primaries = video_stream.get("color_primaries")
 
+    # 오디오 스트림 존재 여부
+    has_audio = any(s.get("codec_type") == "audio" for s in probe_data.get("streams", []))
+
     return VideoMetadata(
         width=width,
         height=height,
@@ -99,6 +102,7 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
         color_space=color_space,
         color_transfer=color_transfer,
         color_primaries=color_primaries,
+        has_audio=has_audio,
     )
 
 

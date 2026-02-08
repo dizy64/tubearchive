@@ -311,3 +311,100 @@ class TestBuildVidstabDetectCommand:
 
         vf_idx = cmd.index("-vf")
         assert trf_path in cmd[vf_idx + 1]
+
+
+class TestBuildTranscodeNoAudio:
+    """오디오 스트림이 없는 영상의 트랜스코딩 명령 빌드 테스트."""
+
+    def test_no_audio_with_video_filter_generates_silent_audio(self) -> None:
+        """has_audio=False + video_filter 시 anullsrc로 무음 생성."""
+        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+
+        executor = FFmpegExecutor()
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+            has_audio=False,
+        )
+
+        # anullsrc 입력이 추가되어야 한다
+        assert "anullsrc" in " ".join(cmd)
+        # 0:a:0 매핑이 없어야 한다
+        assert "0:a:0" not in cmd
+        # 무음 입력에서 오디오를 매핑해야 한다
+        assert "1:a:0" in cmd
+        # -shortest 플래그로 비디오 길이에 맞춰야 한다
+        assert "-shortest" in cmd
+
+    def test_no_audio_with_filter_complex_generates_silent_audio(self) -> None:
+        """has_audio=False + filter_complex 시 anullsrc로 무음 생성."""
+        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+
+        executor = FFmpegExecutor()
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            filter_complex="[0:v]split=2[bg][fg];...[v_out]",
+            has_audio=False,
+        )
+
+        # anullsrc 입력이 추가되어야 한다
+        assert "anullsrc" in " ".join(cmd)
+        # 0:a:0 매핑이 없어야 한다
+        assert "0:a:0" not in cmd
+        # 무음 입력에서 오디오를 매핑해야 한다
+        assert "1:a:0" in cmd
+        # -shortest 플래그
+        assert "-shortest" in cmd
+
+    def test_has_audio_true_maps_input_audio(self) -> None:
+        """has_audio=True (기본값) 시 기존 방식대로 0:a:0 매핑."""
+        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+
+        executor = FFmpegExecutor()
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+            has_audio=True,
+        )
+
+        assert "0:a:0" in cmd
+        assert "anullsrc" not in " ".join(cmd)
+        assert "-shortest" not in cmd
+
+    def test_default_has_audio_is_true(self) -> None:
+        """has_audio 미지정 시 기본값 True (기존 동작 호환)."""
+        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+
+        executor = FFmpegExecutor()
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+        )
+
+        # 기존 동작: 0:a:0 매핑
+        assert "0:a:0" in cmd
+
+    def test_no_audio_no_audio_filter_applied(self) -> None:
+        """has_audio=False 시 -af 오디오 필터가 적용되지 않아야 한다."""
+        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+
+        executor = FFmpegExecutor()
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+            audio_filter="afade=t=in:st=0:d=0.5",
+            has_audio=False,
+        )
+
+        # 오디오 필터가 무음에 적용될 필요 없으므로 -af 없어야 한다
+        assert "-af" not in cmd

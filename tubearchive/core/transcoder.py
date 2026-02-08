@@ -196,6 +196,7 @@ class Transcoder:
                 filter_complex=video_filter,
                 audio_filter=audio_filter,
                 seek_start=seek_start,
+                has_audio=metadata.has_audio,
             )
         return self.executor.build_transcode_command(
             input_path=video_file.path,
@@ -204,6 +205,7 @@ class Transcoder:
             video_filter=video_filter,
             audio_filter=audio_filter,
             seek_start=seek_start,
+            has_audio=metadata.has_audio,
         )
 
     def _run_transcode(
@@ -401,8 +403,9 @@ class Transcoder:
         self.resume_mgr.set_temp_file(job_id, output_path)
 
         # 5. loudnorm 분석 (활성화된 경우, 트랜스코딩 전에 실행)
+        # 오디오 스트림이 없는 영상에서는 오디오 분석을 스킵한다
         loudnorm_analysis: LoudnormAnalysis | None = None
-        if normalize_audio:
+        if normalize_audio and metadata.has_audio:
             try:
                 loudnorm_analysis = self._run_loudnorm_analysis(video_file)
                 logger.info(
@@ -412,11 +415,15 @@ class Transcoder:
                 )
             except (FFmpegError, ValueError) as e:
                 logger.warning(f"Loudnorm analysis failed, skipping normalization: {e}")
+        elif normalize_audio and not metadata.has_audio:
+            logger.info("No audio stream, skipping loudnorm analysis")
 
         # 5.5 무음 구간 분석 (활성화된 경우)
         silence_segments: list[SilenceSegment] | None = None
         silence_remove_filter = ""
-        if trim_silence:
+        if trim_silence and not metadata.has_audio:
+            logger.info("No audio stream, skipping silence analysis")
+        elif trim_silence:
             try:
                 silence_segments = self._run_silence_analysis(
                     video_file,

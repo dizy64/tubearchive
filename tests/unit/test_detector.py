@@ -205,3 +205,95 @@ class TestDetector:
 
         # 회전 고려하여 세로 영상으로 인식
         assert metadata.is_portrait is True
+
+    def test_detect_has_audio_true(self, tmp_path: Path) -> None:
+        """오디오 스트림이 있는 영상은 has_audio=True."""
+        video_file = tmp_path / "test.mp4"
+        video_file.write_text("")
+
+        ffprobe_output = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 3840,
+                    "height": 2160,
+                    "pix_fmt": "yuv420p10le",
+                    "r_frame_rate": "30/1",
+                    "avg_frame_rate": "30/1",
+                    "duration": "60.0",
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "sample_rate": "48000",
+                    "channels": 2,
+                },
+            ],
+            "format": {
+                "duration": "60.0",
+                "tags": {},
+            },
+        }
+
+        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+            mock_ffprobe.return_value = ffprobe_output
+
+            metadata = detect_metadata(video_file)
+
+        assert metadata.has_audio is True
+
+    def test_detect_has_audio_false(self, tmp_path: Path) -> None:
+        """오디오 스트림이 없는 DJI 영상은 has_audio=False."""
+        video_file = tmp_path / "test.mp4"
+        video_file.write_text("")
+
+        # DJI 영상: 비디오 + data 스트림만, 오디오 없음
+        ffprobe_output = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 3840,
+                    "height": 2160,
+                    "pix_fmt": "yuv420p10le",
+                    "r_frame_rate": "30/1",
+                    "avg_frame_rate": "30/1",
+                    "duration": "120.0",
+                },
+                {
+                    "codec_type": "data",
+                    "codec_name": "none",
+                    "tags": {"handler_name": "CAM meta"},
+                },
+                {
+                    "codec_type": "data",
+                    "codec_name": "none",
+                    "tags": {"handler_name": "CAM dbgi"},
+                },
+            ],
+            "format": {
+                "duration": "120.0",
+                "tags": {},
+            },
+        }
+
+        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+            mock_ffprobe.return_value = ffprobe_output
+
+            metadata = detect_metadata(video_file)
+
+        assert metadata.has_audio is False
+
+    def test_video_only_no_audio_default(self, sample_ffprobe_output: dict, tmp_path: Path) -> None:
+        """비디오만 있고 오디오 스트림 없는 기본 fixture는 has_audio=False."""
+        video_file = tmp_path / "test.mp4"
+        video_file.write_text("")
+
+        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+            mock_ffprobe.return_value = sample_ffprobe_output
+
+            metadata = detect_metadata(video_file)
+
+        # sample_ffprobe_output에는 오디오 스트림이 없다
+        assert metadata.has_audio is False

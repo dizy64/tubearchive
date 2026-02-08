@@ -70,6 +70,7 @@ class VideoMetadata:
         color_space: 색 공간 (``bt709``, ``bt2020nc`` 등)
         color_transfer: 색 전달 함수 (``smpte2084``, ``arib-std-b67`` 등)
         color_primaries: 색 원색 (``bt709``, ``bt2020`` 등)
+        has_audio: 오디오 스트림 존재 여부 (기본 ``True``)
     """
 
     width: int
@@ -84,6 +85,7 @@ class VideoMetadata:
     color_space: str | None
     color_transfer: str | None
     color_primaries: str | None
+    has_audio: bool = True
 
     def __post_init__(self) -> None:
         """검증."""
