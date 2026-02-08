@@ -682,6 +682,46 @@ class TestParseLoudnormStats:
         with pytest.raises(ValueError, match="Invalid loudnorm analysis data"):
             parse_loudnorm_stats(output)
 
+    def test_raises_on_silent_audio_negative_inf(self) -> None:
+        """완전히 무음인 오디오는 -inf → ValueError (loudnorm 범위 밖)."""
+        output = (
+            "[Parsed_loudnorm_0 @ 0x000]\n"
+            "{\n"
+            '\t"input_i" : "-inf",\n'
+            '\t"input_tp" : "-inf",\n'
+            '\t"input_lra" : "0.00",\n'
+            '\t"input_thresh" : "-inf",\n'
+            '\t"output_i" : "-inf",\n'
+            '\t"output_tp" : "-inf",\n'
+            '\t"output_lra" : "0.00",\n'
+            '\t"output_thresh" : "-inf",\n'
+            '\t"normalization_type" : "dynamic",\n'
+            '\t"target_offset" : "inf"\n'
+            "}"
+        )
+        with pytest.raises(ValueError, match="silent audio"):
+            parse_loudnorm_stats(output)
+
+    def test_raises_on_partial_inf_measured_i(self) -> None:
+        """measured_I만 -inf인 경우에도 ValueError."""
+        output = (
+            "[Parsed_loudnorm_0 @ 0x000]\n"
+            "{\n"
+            '\t"input_i" : "-inf",\n'
+            '\t"input_tp" : "-3.00",\n'
+            '\t"input_lra" : "5.00",\n'
+            '\t"input_thresh" : "-40.00",\n'
+            '\t"output_i" : "-14.00",\n'
+            '\t"output_tp" : "-1.50",\n'
+            '\t"output_lra" : "3.00",\n'
+            '\t"output_thresh" : "-24.00",\n'
+            '\t"normalization_type" : "dynamic",\n'
+            '\t"target_offset" : "0.00"\n'
+            "}"
+        )
+        with pytest.raises(ValueError, match="silent audio"):
+            parse_loudnorm_stats(output)
+
 
 class TestAudioFilterChainWithLoudnorm:
     """create_audio_filter_chain + loudnorm 통합 테스트."""
