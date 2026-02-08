@@ -8,6 +8,8 @@
     - ``merge_jobs``: 병합 작업 이력 및 YouTube 업로드 상태
     - ``split_jobs``: 영상 분할 작업 이력
     - ``archive_history``: 원본 파일 아카이브(이동/삭제) 이력
+    - ``projects``: 프로젝트 관리 (여러 날의 촬영을 하나의 단위로 묶음)
+    - ``project_merge_jobs``: 프로젝트 ↔ merge_jobs 다대다 관계
 
 DB 위치:
     ``TUBEARCHIVE_DB_PATH`` 환경변수 > ``~/.tubearchive/tubearchive.db``
@@ -126,6 +128,29 @@ CREATE TABLE IF NOT EXISTS archive_history (
     archived_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
 );
+
+-- projects: 프로젝트 관리 (여러 날의 촬영을 하나의 단위로 묶음)
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    date_range_start TEXT,
+    date_range_end TEXT,
+    playlist_id TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- project_merge_jobs: 프로젝트 ↔ merge_jobs 다대다 관계
+CREATE TABLE IF NOT EXISTS project_merge_jobs (
+    project_id INTEGER NOT NULL,
+    merge_job_id INTEGER NOT NULL,
+    added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project_id, merge_job_id),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (merge_job_id) REFERENCES merge_jobs(id) ON DELETE CASCADE
+);
+
 -- 인덱스
 CREATE INDEX IF NOT EXISTS idx_transcoding_status ON transcoding_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_transcoding_video_id ON transcoding_jobs(video_id);
@@ -133,6 +158,8 @@ CREATE INDEX IF NOT EXISTS idx_videos_path ON videos(original_path);
 CREATE INDEX IF NOT EXISTS idx_split_merge_job ON split_jobs(merge_job_id);
 CREATE INDEX IF NOT EXISTS idx_archive_video_id ON archive_history(video_id);
 CREATE INDEX IF NOT EXISTS idx_archive_operation ON archive_history(operation);
+CREATE INDEX IF NOT EXISTS idx_project_merge_jobs_merge ON project_merge_jobs(merge_job_id);
+CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
 """
 
 
@@ -181,6 +208,39 @@ def _migrate_split_jobs_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE split_jobs ADD COLUMN error_message TEXT")
 
 
+def _migrate_add_projects_tables(conn: sqlite3.Connection) -> None:
+    """기존 DB에 projects, project_merge_jobs 테이블 추가."""
+    cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'")
+    if cursor.fetchone() is not None:
+        return
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            date_range_start TEXT,
+            date_range_end TEXT,
+            playlist_id TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS project_merge_jobs (
+            project_id INTEGER NOT NULL,
+            merge_job_id INTEGER NOT NULL,
+            added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (project_id, merge_job_id),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+            FOREIGN KEY (merge_job_id) REFERENCES merge_jobs(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_project_merge_jobs_merge
+            ON project_merge_jobs(merge_job_id);
+        CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+    """)
+
+
 def init_database(db_path: Path | None = None) -> sqlite3.Connection:
     """
     데이터베이스 초기화.
@@ -207,6 +267,7 @@ def init_database(db_path: Path | None = None) -> sqlite3.Connection:
     # 기존 DB 마이그레이션
     _migrate_add_merged_status(conn)
     _migrate_split_jobs_columns(conn)
+    _migrate_add_projects_tables(conn)
 
     conn.commit()
 
