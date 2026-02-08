@@ -161,6 +161,20 @@ def _parse_int(data: dict[str, object], key: str, section: str) -> int | None:
     return None
 
 
+def _parse_enum_str(
+    data: dict[str, object],
+    key: str,
+    section: str,
+    allowed: tuple[str, ...],
+) -> str | None:
+    """허용된 문자열 값만 통과시키는 파서. 유효하지 않으면 경고 후 None."""
+    value = _parse_str(data, key, section)
+    if value is not None and value not in allowed:
+        logger.warning("config: %s.%s 값 오류: %r", section, key, value)
+        return None
+    return value
+
+
 def get_default_config_path() -> Path:
     """기본 설정 파일 경로 반환."""
     return Path.home() / ".tubearchive" / "config.toml"
@@ -171,10 +185,7 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
     section = "general"
 
     # denoise_level: 허용값 검증이 필요한 문자열
-    denoise_level = _parse_str(data, "denoise_level", section)
-    if denoise_level is not None and denoise_level not in ("light", "medium", "heavy"):
-        logger.warning("config: general.denoise_level 값 오류: %r", denoise_level)
-        denoise_level = None
+    denoise_level = _parse_enum_str(data, "denoise_level", section, ("light", "medium", "heavy"))
 
     # fade_duration: 음수가 아닌 실수 (int도 허용)
     fade_duration: float | None = None
@@ -198,17 +209,19 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
     elif raw_silence_dur is not None:
         _warn_type(f"{section}.silence_min_duration", "float", raw_silence_dur)
 
-    # stabilize_strength: 허용값 검증
-    stabilize_strength = _parse_str(data, "stabilize_strength", section)
-    if stabilize_strength is not None and stabilize_strength not in ("light", "medium", "heavy"):
-        logger.warning("config: general.stabilize_strength 값 오류: %r", stabilize_strength)
-        stabilize_strength = None
-
-    # stabilize_crop: 허용값 검증
-    stabilize_crop = _parse_str(data, "stabilize_crop", section)
-    if stabilize_crop is not None and stabilize_crop not in ("crop", "expand"):
-        logger.warning("config: general.stabilize_crop 값 오류: %r", stabilize_crop)
-        stabilize_crop = None
+    # stabilize_strength / stabilize_crop: 허용값 검증
+    stabilize_strength = _parse_enum_str(
+        data,
+        "stabilize_strength",
+        section,
+        ("light", "medium", "heavy"),
+    )
+    stabilize_crop = _parse_enum_str(
+        data,
+        "stabilize_crop",
+        section,
+        ("crop", "expand"),
+    )
 
     return GeneralConfig(
         output_dir=_parse_str(data, "output_dir", section),

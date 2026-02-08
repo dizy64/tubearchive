@@ -281,19 +281,20 @@ class FFmpegExecutor:
 
         logger.info("FFmpeg completed successfully")
 
-    def build_loudness_analysis_command(
+    def _build_analysis_command(
         self,
         input_path: Path,
-        audio_filter: str,
+        filter_flag: str,
+        filter_str: str,
+        suppress_flag: str,
     ) -> list[str]:
-        """
-        loudnorm 1st pass 분석용 FFmpeg 명령어 빌드.
-
-        오디오만 분석하므로 -vn (비디오 무시), 출력은 os.devnull.
+        """1st pass 분석용 공통 FFmpeg 명령어 빌드.
 
         Args:
             input_path: 입력 파일 경로
-            audio_filter: 오디오 분석 필터 (loudnorm=I=...:print_format=json)
+            filter_flag: 필터 플래그 ("-af" 또는 "-vf")
+            filter_str: 필터 문자열
+            suppress_flag: 미사용 스트림 억제 플래그 ("-vn" 또는 "-an")
 
         Returns:
             FFmpeg 명령어 리스트
@@ -302,71 +303,37 @@ class FFmpegExecutor:
             self.ffmpeg_path,
             "-i",
             str(input_path),
-            "-af",
-            audio_filter,
-            "-vn",
+            filter_flag,
+            filter_str,
+            suppress_flag,
             "-f",
             "null",
             os.devnull,
         ]
+
+    def build_loudness_analysis_command(
+        self,
+        input_path: Path,
+        audio_filter: str,
+    ) -> list[str]:
+        """loudnorm 1st pass 분석용 FFmpeg 명령어 빌드."""
+        return self._build_analysis_command(input_path, "-af", audio_filter, "-vn")
 
     def build_silence_detection_command(
         self,
         input_path: Path,
         audio_filter: str,
     ) -> list[str]:
-        """
-        무음 구간 감지용 FFmpeg 명령어 빌드.
-
-        오디오만 분석하므로 -vn (비디오 무시), 출력은 os.devnull.
-
-        Args:
-            input_path: 입력 파일 경로
-            audio_filter: 무음 감지 필터 (silencedetect=noise=...:d=...)
-
-        Returns:
-            FFmpeg 명령어 리스트
-        """
-        return [
-            self.ffmpeg_path,
-            "-i",
-            str(input_path),
-            "-af",
-            audio_filter,
-            "-vn",
-            "-f",
-            "null",
-            os.devnull,
-        ]
+        """무음 구간 감지용 FFmpeg 명령어 빌드."""
+        return self._build_analysis_command(input_path, "-af", audio_filter, "-vn")
 
     def build_vidstab_detect_command(
         self,
         input_path: Path,
         video_filter: str,
     ) -> list[str]:
-        """
-        vidstab detect (1st pass) 분석용 FFmpeg 명령어 빌드.
-
-        비디오만 분석하므로 -an (오디오 무시), 출력은 os.devnull.
-
-        Args:
-            input_path: 입력 파일 경로
-            video_filter: vidstabdetect 필터 문자열
-
-        Returns:
-            FFmpeg 명령어 리스트
-        """
-        return [
-            self.ffmpeg_path,
-            "-i",
-            str(input_path),
-            "-vf",
-            video_filter,
-            "-an",
-            "-f",
-            "null",
-            os.devnull,
-        ]
+        """vidstab detect (1st pass) 분석용 FFmpeg 명령어 빌드."""
+        return self._build_analysis_command(input_path, "-vf", video_filter, "-an")
 
     def run_analysis(self, cmd: list[str]) -> str:
         """

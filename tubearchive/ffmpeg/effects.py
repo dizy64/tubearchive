@@ -19,6 +19,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import Enum
+from typing import NamedTuple
 
 # HDR 색공간 식별자 (FFmpeg color_transfer 값)
 HDR_TRANSFER_HLG = "arib-std-b67"
@@ -86,11 +87,25 @@ class StabilizeCrop(Enum):
     EXPAND = "expand"
 
 
+class VidstabParams(NamedTuple):
+    """vidstab 필터 파라미터.
+
+    Attributes:
+        shakiness: 흔들림 감지 민감도 (1-10, 높을수록 민감)
+        accuracy: 모션 벡터 추정 정확도 (1-15, 높을수록 정확)
+        smoothing: 보정 윈도우 프레임 수 (높을수록 부드러움)
+    """
+
+    shakiness: int
+    accuracy: int
+    smoothing: int
+
+
 # vidstab 강도별 파라미터 매핑
-_VIDSTAB_PARAMS: dict[StabilizeStrength, dict[str, int]] = {
-    StabilizeStrength.LIGHT: {"shakiness": 4, "accuracy": 9, "smoothing": 10},
-    StabilizeStrength.MEDIUM: {"shakiness": 6, "accuracy": 12, "smoothing": 15},
-    StabilizeStrength.HEAVY: {"shakiness": 8, "accuracy": 15, "smoothing": 30},
+_VIDSTAB_PARAMS: dict[StabilizeStrength, VidstabParams] = {
+    StabilizeStrength.LIGHT: VidstabParams(shakiness=4, accuracy=9, smoothing=10),
+    StabilizeStrength.MEDIUM: VidstabParams(shakiness=6, accuracy=12, smoothing=15),
+    StabilizeStrength.HEAVY: VidstabParams(shakiness=8, accuracy=15, smoothing=30),
 }
 
 # vidstab crop 모드 매핑
@@ -571,9 +586,7 @@ def create_vidstab_detect_filter(
     """
     params = _VIDSTAB_PARAMS[strength]
     return (
-        f"vidstabdetect=shakiness={params['shakiness']}"
-        f":accuracy={params['accuracy']}"
-        f":result={trf_path}"
+        f"vidstabdetect=shakiness={params.shakiness}:accuracy={params.accuracy}:result={trf_path}"
     )
 
 
@@ -595,7 +608,7 @@ def create_vidstab_transform_filter(
     """
     params = _VIDSTAB_PARAMS[strength]
     crop_value = _VIDSTAB_CROP[crop]
-    return f"vidstabtransform=input={trf_path}:smoothing={params['smoothing']}:crop={crop_value}"
+    return f"vidstabtransform=input={trf_path}:smoothing={params.smoothing}:crop={crop_value}"
 
 
 def create_timelapse_video_filter(speed: int) -> str:
