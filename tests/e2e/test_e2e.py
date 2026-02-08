@@ -21,10 +21,10 @@ from tubearchive.cli import ValidatedArgs, run_pipeline
 from tubearchive.database.schema import init_database
 
 # ffmpeg 없으면 전체 모듈 스킵
-pytestmark = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None,
-    reason="ffmpeg not installed",
-)
+pytestmark = [
+    pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed"),
+    pytest.mark.e2e_shard1,
+]
 
 # ---------- 테스트 영상 생성 헬퍼 ----------
 

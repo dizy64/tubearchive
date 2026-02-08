@@ -19,10 +19,10 @@ from tubearchive.ffmpeg.effects import parse_silence_segments
 from tubearchive.ffmpeg.executor import FFmpegExecutor
 
 # ffmpeg 없으면 전체 모듈 스킵
-pytestmark = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None,
-    reason="ffmpeg not installed",
-)
+pytestmark = [
+    pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed"),
+    pytest.mark.e2e_shard2,
+]
 
 
 @pytest.fixture

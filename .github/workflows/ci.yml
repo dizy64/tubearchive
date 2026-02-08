@@ -29,8 +29,12 @@ jobs:
         run: uv run pytest tests/unit/ -v --tb=short
 
   e2e-test:
-    name: E2E Tests
+    name: E2E Tests (${{ matrix.shard }})
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [shard1, shard2, shard3]
     steps:
       - uses: actions/checkout@v4
 
@@ -43,8 +47,10 @@ jobs:
             ~/Library/Caches/Homebrew/api
           key: brew-ffmpeg-${{ runner.os }}-${{ runner.arch }}
 
-      - name: Install ffmpeg
-        run: brew install ffmpeg
+      - name: Install vidstab and ffmpeg
+        run: |
+          brew install vid.stab
+          brew install ffmpeg
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -58,8 +64,8 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      - name: Run E2E tests
-        run: uv run pytest tests/e2e/ -v --tb=short
+      - name: Run E2E tests (shard)
+        run: uv run pytest tests/e2e/ -v --tb=short -m "e2e_${{ matrix.shard }}"
 
   ruff-lint:
     name: Ruff Lint

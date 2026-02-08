@@ -67,3 +67,8 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --cov=tubearchive --cov-report=term-missing"
+markers = [
+    "e2e_shard1: Core pipeline E2E tests",
+    "e2e_shard2: Audio/effects E2E tests",
+    "e2e_shard3: Post-processing E2E tests",
+]
