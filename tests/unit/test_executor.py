@@ -1,5 +1,6 @@
 """FFmpeg 실행기 테스트."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -244,3 +245,69 @@ class TestRunAnalysis:
             )
             with pytest.raises(FFmpegError, match="exit code 1"):
                 executor.run_analysis(["ffmpeg", "-i", "test.mp4"])
+
+
+class TestBuildVidstabDetectCommand:
+    """vidstab detect 명령 빌드 테스트."""
+
+    def test_command_structure(self) -> None:
+        """기본 명령 구조 검증 (-vf, -an, -f null)."""
+        executor = FFmpegExecutor()
+        cmd = executor.build_vidstab_detect_command(
+            input_path=Path("/tmp/input.mp4"),
+            video_filter="vidstabdetect=shakiness=5:accuracy=9:result=/tmp/test.trf",
+        )
+
+        assert cmd[0] == "ffmpeg"
+        assert "-i" in cmd
+        assert "/tmp/input.mp4" in cmd
+        assert "-vf" in cmd
+        assert "-an" in cmd
+        assert "-f" in cmd
+        assert "null" in cmd
+
+    def test_video_filter_value(self) -> None:
+        """비디오 필터 값이 올바르게 전달된다."""
+        executor = FFmpegExecutor()
+        vf = "vidstabdetect=shakiness=8:accuracy=15:result=/tmp/vid.trf"
+        cmd = executor.build_vidstab_detect_command(
+            input_path=Path("/tmp/test.mp4"),
+            video_filter=vf,
+        )
+
+        vf_idx = cmd.index("-vf")
+        assert cmd[vf_idx + 1] == vf
+
+    def test_custom_ffmpeg_path(self) -> None:
+        """커스텀 ffmpeg 경로 사용."""
+        executor = FFmpegExecutor(ffmpeg_path="/usr/local/bin/ffmpeg")
+        cmd = executor.build_vidstab_detect_command(
+            input_path=Path("/tmp/input.mp4"),
+            video_filter="vidstabdetect",
+        )
+
+        assert cmd[0] == "/usr/local/bin/ffmpeg"
+
+    def test_no_audio_flag_present(self) -> None:
+        """-an 플래그 존재 (오디오 무시)."""
+        executor = FFmpegExecutor()
+        cmd = executor.build_vidstab_detect_command(
+            input_path=Path("/tmp/input.mp4"),
+            video_filter="vidstabdetect",
+        )
+
+        assert "-an" in cmd
+        assert "-vn" not in cmd  # 비디오 분석이므로 -vn은 없어야 함
+
+    def test_trf_path_in_filter(self) -> None:
+        """trf 경로가 필터 문자열에 포함된다."""
+        executor = FFmpegExecutor()
+        trf_path = "/tmp/vidstab_test.trf"
+        vf = f"vidstabdetect=result={trf_path}"
+        cmd = executor.build_vidstab_detect_command(
+            input_path=Path("/tmp/input.mp4"),
+            video_filter=vf,
+        )
+
+        vf_idx = cmd.index("-vf")
+        assert trf_path in cmd[vf_idx + 1]

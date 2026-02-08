@@ -35,6 +35,12 @@ uv run tubearchive --dry-run ~/Videos/
 uv run tubearchive --normalize-audio ~/Videos/      # EBU R128 loudnorm 2-pass
 uv run tubearchive --denoise ~/Videos/              # 오디오 노이즈 제거
 
+# 영상 안정화 (vidstab 2-pass)
+uv run tubearchive --stabilize ~/Videos/                             # 기본 안정화 (medium strength, crop)
+uv run tubearchive --stabilize --stabilize-strength heavy ~/Videos/  # 강한 안정화
+uv run tubearchive --stabilize --stabilize-crop expand ~/Videos/     # 가장자리 확장 (crop 대신)
+uv run tubearchive --stabilize-strength light ~/Videos/              # strength 지정 시 암묵적 활성화
+
 # BGM 믹싱
 uv run tubearchive --bgm ~/Music/bgm.mp3 ~/Videos/                        # BGM 믹싱
 uv run tubearchive --bgm ~/Music/bgm.mp3 --bgm-volume 0.3 ~/Videos/      # 볼륨 조절 (0.0~1.0)
@@ -105,6 +111,9 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 # denoise = false                           # TUBEARCHIVE_DENOISE
 # denoise_level = "medium"                  # light/medium/heavy (TUBEARCHIVE_DENOISE_LEVEL)
 # normalize_audio = true                    # EBU R128 loudnorm (TUBEARCHIVE_NORMALIZE_AUDIO)
+# stabilize = false                         # 영상 안정화 (TUBEARCHIVE_STABILIZE)
+# stabilize_strength = "medium"             # light/medium/heavy (TUBEARCHIVE_STABILIZE_STRENGTH)
+# stabilize_crop = "crop"                   # crop/expand (TUBEARCHIVE_STABILIZE_CROP)
 # group_sequences = true                    # 연속 파일 시퀀스 그룹핑 (TUBEARCHIVE_GROUP_SEQUENCES)
 # fade_duration = 0.5                       # 기본 페이드 시간 (초, TUBEARCHIVE_FADE_DURATION)
 
@@ -134,6 +143,7 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 scan_videos() → group_sequences() → reorder_with_groups()
   → TranscodeOptions 생성
   → Transcoder.transcode_video() (순차 또는 병렬)
+    → [_run_vidstab_analysis()]  ← 영상 안정화 1st pass (--stabilize 시)
   → Merger.merge()
   → [_apply_bgm_mixing()]  ← BGM 믹싱 (--bgm 옵션 시)
   → [TimelapseGenerator.generate()]
@@ -149,7 +159,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 **cli.py**: CLI 인터페이스 및 파이프라인 오케스트레이터
 - `run_pipeline()`: 메인 파이프라인 (스캔→그룹핑→트랜스코딩→병합→저장→[분할])
 - `ValidatedArgs`: 검증된 CLI 인자 데이터클래스
-- `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, normalize_audio, fade_map 등)
+- `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, normalize_audio, stabilize, fade_map 등)
 - `TranscodeResult`: 단일 트랜스코딩 결과 (frozen dataclass)
 - `ClipInfo`: NamedTuple (name, duration, device, shot_time) — 클립 메타데이터
 - `_link_merge_job_to_project()`: 병합 결과를 프로젝트에 연결 (없으면 자동 생성, 날짜 범위 갱신)
@@ -190,9 +200,21 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - VideoToolbox 실패 시 `_transcode_with_fallback()` (libx265)
 - Resume: `ResumeManager`가 진행률 추적, 재시작 시 이어서 처리
 - Loudnorm: `_run_loudnorm_analysis()` → 1st pass 분석 → 2nd pass 적용 (normalize_audio=True일 때)
+- Vidstab: `_run_vidstab_analysis()` → 1st pass detect → 2nd pass transform (stabilize=True일 때, 실패 시 graceful skip)
+
+**ffmpeg/executor.py**: FFmpeg 명령 실행 및 진행률 추적
+- `FFmpegExecutor`: 명령 빌드(`build_*`) 및 실행(`run`, `run_analysis`) 오케스트레이터
+- `build_transcode_command()`: 트랜스코딩 명령 빌드
+- `build_concat_command()`: concat 병합 명령 빌드
+- `build_loudness_analysis_command()`: loudnorm 1st pass 분석 명령 빌드 (`-af -vn`)
+- `build_vidstab_detect_command()`: vidstab 1st pass 분석 명령 빌드 (`-vf -an`)
+- `build_silence_detection_command()`: 무음 감지 명령 빌드
+- `run()`: 진행률 파싱 + 콜백 실행, `run_analysis()`: stderr 반환
+- `parse_progress_line()`: FFmpeg stderr에서 time/frame/fps/bitrate 파싱
+- `FFmpegError`: 실패 시 stderr 포함 예외
 
 **ffmpeg/effects.py**: 필터 생성기
-- `create_combined_filter()`: 세로/가로 영상 → 3840x2160 표준화
+- `create_combined_filter()`: 세로/가로 영상 → 3840x2160 표준화 (`stabilize_filter` 파라미터로 안정화 적용)
 - 세로: split → blur background (`PORTRAIT_BLUR_RADIUS=20`) → overlay foreground
 - HDR→SDR: `colorspace=all=bt709:iall=bt2020` (color_transfer가 HLG/PQ인 경우)
 - Dip-to-Black: fade in/out 0.5초
@@ -202,6 +224,10 @@ scan_videos() → group_sequences() → reorder_with_groups()
   - `create_loudnorm_analysis_filter()` (1st pass) → `parse_loudnorm_stats()` → `create_loudnorm_filter()` (2nd pass)
 - `create_audio_filter_chain()`: denoise → silence_remove → fade → loudnorm 오디오 필터 체인 통합
 - BGM 믹싱: `create_bgm_filter()` — aloop(무한루프)+atrim / atrim+afade / volume → amix 필터 생성
+- Vidstab: 영상 안정화 2-pass (vidstabdetect → vidstabtransform)
+  - `StabilizeStrength` (light/medium/heavy), `StabilizeCrop` (crop/expand) 열거형
+  - `create_vidstab_detect_filter()` (1st pass) → `create_vidstab_transform_filter()` (2nd pass)
+  - `_VIDSTAB_PARAMS`: strength별 shakiness/accuracy/stepsize/smoothing 매핑
 - Timelapse: `setpts=PTS/{speed}` 비디오 배속, `atempo` 체인 오디오 가속 (0.5~2.0 범위 자동 분할)
   - `create_timelapse_video_filter()`, `create_timelapse_audio_filter()`
   - 상수: `TIMELAPSE_MIN_SPEED=2`, `TIMELAPSE_MAX_SPEED=60`, `ATEMPO_MAX=2.0`
@@ -222,7 +248,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - 확인 프롬프트는 CLI 계층(`_prompt_archive_delete_confirmation`)에서 처리
 
 **config.py**: TOML 설정 파일 관리
-- `GeneralConfig`: output_dir, parallel, db_path, denoise, denoise_level, normalize_audio, group_sequences, fade_duration
+- `GeneralConfig`: output_dir, parallel, db_path, denoise, denoise_level, normalize_audio, stabilize, stabilize_strength, stabilize_crop, group_sequences, fade_duration
 - `BGMConfig`: bgm_path, bgm_volume, bgm_loop
 - `ArchiveConfig`: policy (keep/move/delete), destination
 - `YouTubeConfig`: client_secrets, token, playlist, upload_chunk_mb, upload_privacy
@@ -294,6 +320,9 @@ scan_videos() → group_sequences() → reorder_with_groups()
 | `TUBEARCHIVE_DENOISE` | 오디오 노이즈 제거 (true/false) | false |
 | `TUBEARCHIVE_DENOISE_LEVEL` | 노이즈 제거 강도 (light/medium/heavy) | medium |
 | `TUBEARCHIVE_NORMALIZE_AUDIO` | EBU R128 loudnorm (true/false) | true |
+| `TUBEARCHIVE_STABILIZE` | 영상 안정화 vidstab (true/false) | false |
+| `TUBEARCHIVE_STABILIZE_STRENGTH` | 안정화 강도 (light/medium/heavy) | medium |
+| `TUBEARCHIVE_STABILIZE_CROP` | 안정화 크롭 모드 (crop/expand) | crop |
 | `TUBEARCHIVE_GROUP_SEQUENCES` | 연속 파일 시퀀스 그룹핑 (true/false) | true |
 | `TUBEARCHIVE_FADE_DURATION` | 기본 페이드 시간(초) | 0.5 |
 | `TUBEARCHIVE_TRIM_SILENCE` | 무음 구간 제거 (true/false) | false |

@@ -27,8 +27,12 @@ from tubearchive.database.schema import init_database
 from tubearchive.ffmpeg.effects import (
     LoudnormAnalysis,
     SilenceSegment,
+    StabilizeCrop,
+    StabilizeStrength,
     create_combined_filter,
     create_loudnorm_analysis_filter,
+    create_vidstab_detect_filter,
+    create_vidstab_transform_filter,
     parse_loudnorm_stats,
 )
 from tubearchive.ffmpeg.executor import FFmpegError, FFmpegExecutor
@@ -244,6 +248,31 @@ class Transcoder:
         stderr = self.executor.run_analysis(cmd)
         return parse_silence_segments(stderr)
 
+    def _run_vidstab_analysis(
+        self,
+        video_file: VideoFile,
+        strength: StabilizeStrength,
+        trf_path: Path,
+    ) -> None:
+        """vidstab 1st pass — 흔들림 감지 분석.
+
+        FFmpeg의 ``vidstabdetect`` 필터를 실행하여 입력 영상의
+        흔들림 데이터를 ``.trf`` 파일에 기록한다.
+        이 결과는 2nd pass(``vidstabtransform``)에서 사용된다.
+
+        Args:
+            video_file: 분석 대상 영상 파일.
+            strength: 안정화 강도.
+            trf_path: transform 데이터 저장 경로.
+        """
+        detect_filter = create_vidstab_detect_filter(strength, str(trf_path))
+        cmd = self.executor.build_vidstab_detect_command(
+            input_path=video_file.path,
+            video_filter=detect_filter,
+        )
+        logger.info("Running vidstab detection pass (strength=%s)", strength.value)
+        self.executor.run_analysis(cmd)
+
     def transcode_video(
         self,
         video_file: VideoFile,
@@ -258,6 +287,9 @@ class Transcoder:
         trim_silence: bool = False,
         silence_threshold: str = "-30dB",
         silence_min_duration: float = 2.0,
+        stabilize: bool = False,
+        stabilize_strength: str = "medium",
+        stabilize_crop: str = "crop",
         progress_info_callback: Callable[[ProgressInfo], None] | None = None,
     ) -> tuple[Path, int, list[SilenceSegment] | None]:
         """
@@ -276,6 +308,9 @@ class Transcoder:
             trim_silence: 무음 구간 제거 활성화 여부
             silence_threshold: 무음 기준 데시벨 (예: "-30dB")
             silence_min_duration: 최소 무음 길이 (초)
+            stabilize: 영상 안정화(vidstab) 활성화 여부
+            stabilize_strength: 안정화 강도 (light/medium/heavy)
+            stabilize_crop: 안정화 후 크롭 모드 (crop/expand)
             progress_info_callback: 상세 진행률 콜백 (UI 업데이트용)
 
         Returns:
@@ -347,6 +382,32 @@ class Transcoder:
             except (FFmpegError, ValueError) as e:
                 logger.warning(f"Silence analysis failed, skipping trim: {e}")
 
+        # 5.7 vidstab 영상 안정화 (2-pass)
+        # 1st pass: vidstabdetect로 손떨림 분석 → trf 파일에 모션 벡터 기록
+        # 2nd pass: vidstabtransform 필터가 trf를 읽어 트랜스코딩 중 보정 적용
+        # stabilize_filter=""이면 안정화 비활성 (create_combined_filter에서 무시)
+        stabilize_filter = ""
+        trf_path: Path | None = None
+        if stabilize:
+            strength_enum = StabilizeStrength(stabilize_strength)
+            crop_enum = StabilizeCrop(stabilize_crop)
+            trf_path = self.temp_dir / f"vidstab_{video_id}.trf"
+            try:
+                self._run_vidstab_analysis(video_file, strength_enum, trf_path)
+                stabilize_filter = create_vidstab_transform_filter(
+                    strength=strength_enum,
+                    crop=crop_enum,
+                    trf_path=str(trf_path),
+                )
+                logger.info(
+                    "Vidstab: strength=%s, crop=%s",
+                    stabilize_strength,
+                    stabilize_crop,
+                )
+            except (FFmpegError, ValueError) as e:
+                logger.warning(f"Vidstab analysis failed, skipping stabilization: {e}")
+                stabilize_filter = ""
+
         # 6. 프로파일 및 필터 준비 (항상 SDR, HDR은 필터에서 변환)
         profile = PROFILE_SDR
         logger.info(f"Using profile: {profile.name}")
@@ -362,13 +423,16 @@ class Transcoder:
             fade_in_duration=fade_in_duration,
             fade_out_duration=fade_out_duration,
             color_transfer=metadata.color_transfer,
+            stabilize_filter=stabilize_filter,
             denoise=denoise,
             denoise_level=denoise_level,
             silence_remove=silence_remove_filter,
             loudnorm_analysis=loudnorm_analysis,
         )
 
-        # 6. 실행: VideoToolbox → (실패 시) libx265 폴백
+        # 7. 실행: VideoToolbox → (실패 시) libx265 폴백
+        # Note: vidstab trf 파일은 vidstabtransform 필터가 트랜스코딩 중 참조하므로
+        # 트랜스코딩 완료(성공/실패 모두) 후 finally에서 정리한다.
         try:
             cmd = self._build_transcode_cmd(
                 video_file,
@@ -413,6 +477,12 @@ class Transcoder:
             except FFmpegError as fallback_error:
                 self.job_repo.mark_failed(job_id, str(fallback_error))
                 raise
+
+        finally:
+            # vidstab trf 임시 파일 정리 (트랜스코딩 성공/실패 후)
+            if trf_path and trf_path.exists():
+                trf_path.unlink()
+                logger.debug("Cleaned up vidstab trf: %s", trf_path)
 
     def close(self) -> None:
         """리소스 정리."""

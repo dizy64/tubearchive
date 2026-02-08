@@ -1140,3 +1140,172 @@ class TestSaveMergeJobToDb:
 
         result = save_merge_job_to_db(tmp_path / "out.mp4", clips, [tmp_path], [1])
         assert result == (None, None)
+
+
+class TestStabilizeCLI:
+    """영상 안정화 CLI 인자 테스트."""
+
+    def test_stabilize_flag_parsed(self) -> None:
+        """--stabilize 플래그 파싱."""
+        parser = create_parser()
+        args = parser.parse_args(["--stabilize", "/tmp"])
+        assert args.stabilize is True
+
+    def test_stabilize_strength_parsed(self) -> None:
+        """--stabilize-strength 파싱."""
+        parser = create_parser()
+        args = parser.parse_args(["--stabilize-strength", "heavy", "/tmp"])
+        assert args.stabilize_strength == "heavy"
+
+    def test_stabilize_crop_parsed(self) -> None:
+        """--stabilize-crop 파싱."""
+        parser = create_parser()
+        args = parser.parse_args(["--stabilize-crop", "expand", "/tmp"])
+        assert args.stabilize_crop == "expand"
+
+    def test_stabilize_strength_choices(self) -> None:
+        """--stabilize-strength 유효 선택지만 허용."""
+        parser = create_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--stabilize-strength", "extreme", "/tmp"])
+
+    def test_stabilize_crop_choices(self) -> None:
+        """--stabilize-crop 유효 선택지만 허용."""
+        parser = create_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--stabilize-crop", "zoom", "/tmp"])
+
+    def test_stabilize_flag_enables_in_validate_args(self, tmp_path: Path) -> None:
+        """--stabilize → ValidatedArgs.stabilize=True."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            stabilize=True,
+            stabilize_strength=None,
+            stabilize_crop=None,
+        )
+
+        result = validate_args(args)
+
+        assert result.stabilize is True
+        assert result.stabilize_strength == "medium"  # 기본값
+        assert result.stabilize_crop == "crop"  # 기본값
+
+    def test_strength_implicit_activation(self, tmp_path: Path) -> None:
+        """--stabilize-strength만 지정 시 stabilize 암묵적 활성화."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            stabilize=False,
+            stabilize_strength="heavy",
+            stabilize_crop=None,
+        )
+
+        result = validate_args(args)
+
+        assert result.stabilize is True
+        assert result.stabilize_strength == "heavy"
+
+    def test_crop_implicit_activation(self, tmp_path: Path) -> None:
+        """--stabilize-crop만 지정 시 stabilize 암묵적 활성화."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            stabilize=False,
+            stabilize_strength=None,
+            stabilize_crop="expand",
+        )
+
+        result = validate_args(args)
+
+        assert result.stabilize is True
+        assert result.stabilize_crop == "expand"
+
+    def test_env_stabilize_enables(self, tmp_path: Path) -> None:
+        """환경변수 TUBEARCHIVE_STABILIZE=true로 활성화."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            stabilize=False,
+            stabilize_strength=None,
+            stabilize_crop=None,
+        )
+
+        with patch.dict("os.environ", {"TUBEARCHIVE_STABILIZE": "true"}):
+            result = validate_args(args)
+
+        assert result.stabilize is True
+        assert result.stabilize_strength == "medium"
+
+    def test_cli_overrides_env(self, tmp_path: Path) -> None:
+        """CLI 인자가 환경변수를 오버라이드."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            stabilize=True,
+            stabilize_strength="heavy",
+            stabilize_crop="expand",
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "TUBEARCHIVE_STABILIZE_STRENGTH": "light",
+                "TUBEARCHIVE_STABILIZE_CROP": "crop",
+            },
+        ):
+            result = validate_args(args)
+
+        assert result.stabilize_strength == "heavy"
+        assert result.stabilize_crop == "expand"
+
+    def test_transcode_options_contains_stabilize(self) -> None:
+        """TranscodeOptions에 stabilize 필드가 있다."""
+        opts = TranscodeOptions(
+            stabilize=True,
+            stabilize_strength="heavy",
+            stabilize_crop="expand",
+        )
+        assert opts.stabilize is True
+        assert opts.stabilize_strength == "heavy"
+        assert opts.stabilize_crop == "expand"

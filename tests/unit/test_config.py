@@ -3,16 +3,23 @@
 import os
 import tomllib
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from tubearchive.config import (
+    ENV_STABILIZE,
+    ENV_STABILIZE_CROP,
+    ENV_STABILIZE_STRENGTH,
     AppConfig,
     GeneralConfig,
     YouTubeConfig,
     apply_config_to_env,
     generate_default_config,
     get_default_config_path,
+    get_default_stabilize,
+    get_default_stabilize_crop,
+    get_default_stabilize_strength,
     load_config,
 )
 
@@ -756,3 +763,140 @@ class TestDataclassFrozen:
         config = AppConfig()
         with pytest.raises(AttributeError):
             config.general = GeneralConfig()  # type: ignore[misc]
+
+
+class TestStabilizeConfig:
+    """영상 안정화(stabilize) 설정 테스트."""
+
+    # --- get_default_stabilize ---
+
+    def test_get_default_stabilize_false_when_unset(self) -> None:
+        """환경변수 미설정 시 False."""
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop(ENV_STABILIZE, None)
+            assert get_default_stabilize() is False
+
+    def test_get_default_stabilize_true(self) -> None:
+        """TUBEARCHIVE_STABILIZE=true → True."""
+        with patch.dict(os.environ, {ENV_STABILIZE: "true"}):
+            assert get_default_stabilize() is True
+
+    def test_get_default_stabilize_false_string(self) -> None:
+        """TUBEARCHIVE_STABILIZE=false → False."""
+        with patch.dict(os.environ, {ENV_STABILIZE: "false"}):
+            assert get_default_stabilize() is False
+
+    # --- get_default_stabilize_strength ---
+
+    def test_get_default_stabilize_strength_unset(self) -> None:
+        """환경변수 미설정 시 None."""
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop(ENV_STABILIZE_STRENGTH, None)
+            assert get_default_stabilize_strength() is None
+
+    def test_get_default_stabilize_strength_valid(self) -> None:
+        """유효값(light/medium/heavy) 정상 반환."""
+        for val in ("light", "medium", "heavy"):
+            with patch.dict(os.environ, {ENV_STABILIZE_STRENGTH: val}):
+                assert get_default_stabilize_strength() == val
+
+    def test_get_default_stabilize_strength_uppercase(self) -> None:
+        """대문자 → 소문자 변환."""
+        with patch.dict(os.environ, {ENV_STABILIZE_STRENGTH: "HEAVY"}):
+            assert get_default_stabilize_strength() == "heavy"
+
+    def test_get_default_stabilize_strength_invalid(self) -> None:
+        """유효하지 않은 값 → None + warning."""
+        with patch.dict(os.environ, {ENV_STABILIZE_STRENGTH: "extreme"}):
+            assert get_default_stabilize_strength() is None
+
+    # --- get_default_stabilize_crop ---
+
+    def test_get_default_stabilize_crop_unset(self) -> None:
+        """환경변수 미설정 시 None."""
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop(ENV_STABILIZE_CROP, None)
+            assert get_default_stabilize_crop() is None
+
+    def test_get_default_stabilize_crop_valid(self) -> None:
+        """유효값(crop/expand) 정상 반환."""
+        for val in ("crop", "expand"):
+            with patch.dict(os.environ, {ENV_STABILIZE_CROP: val}):
+                assert get_default_stabilize_crop() == val
+
+    def test_get_default_stabilize_crop_uppercase(self) -> None:
+        """대문자 → 소문자 변환."""
+        with patch.dict(os.environ, {ENV_STABILIZE_CROP: "EXPAND"}):
+            assert get_default_stabilize_crop() == "expand"
+
+    def test_get_default_stabilize_crop_invalid(self) -> None:
+        """유효하지 않은 값 → None + warning."""
+        with patch.dict(os.environ, {ENV_STABILIZE_CROP: "zoom"}):
+            assert get_default_stabilize_crop() is None
+
+    # --- TOML 파싱 ---
+
+    def test_toml_parses_stabilize_fields(self, tmp_path: Path) -> None:
+        """TOML에서 stabilize 관련 필드 파싱."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            '[general]\nstabilize = true\nstabilize_strength = "heavy"\nstabilize_crop = "expand"\n'
+        )
+        config = load_config(config_file)
+        assert config.general.stabilize is True
+        assert config.general.stabilize_strength == "heavy"
+        assert config.general.stabilize_crop == "expand"
+
+    def test_toml_invalid_stabilize_strength_ignored(self, tmp_path: Path) -> None:
+        """TOML에서 유효하지 않은 stabilize_strength → None."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[general]\nstabilize_strength = "extreme"\n')
+        config = load_config(config_file)
+        assert config.general.stabilize_strength is None
+
+    def test_toml_invalid_stabilize_crop_ignored(self, tmp_path: Path) -> None:
+        """TOML에서 유효하지 않은 stabilize_crop → None."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[general]\nstabilize_crop = "zoom"\n')
+        config = load_config(config_file)
+        assert config.general.stabilize_crop is None
+
+    def test_toml_stabilize_type_error_ignored(self, tmp_path: Path) -> None:
+        """TOML에서 stabilize 타입 오류 → 기본값."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[general]\nstabilize = "not_a_bool"\n')
+        config = load_config(config_file)
+        assert config.general.stabilize is None
+
+    # --- apply_config_to_env ---
+
+    def test_apply_config_to_env_stabilize(self) -> None:
+        """apply_config_to_env가 stabilize 환경변수를 설정한다."""
+        config = AppConfig(
+            general=GeneralConfig(
+                stabilize=True,
+                stabilize_strength="heavy",
+                stabilize_crop="expand",
+            )
+        )
+        with patch.dict(os.environ, {}, clear=True):
+            apply_config_to_env(config)
+            assert os.environ.get(ENV_STABILIZE) == "true"
+            assert os.environ.get(ENV_STABILIZE_STRENGTH) == "heavy"
+            assert os.environ.get(ENV_STABILIZE_CROP) == "expand"
+
+    def test_apply_config_to_env_skips_none_stabilize(self) -> None:
+        """stabilize 값이 None이면 환경변수를 설정하지 않는다."""
+        config = AppConfig(general=GeneralConfig())
+        with patch.dict(os.environ, {}, clear=True):
+            apply_config_to_env(config)
+            assert ENV_STABILIZE not in os.environ
+            assert ENV_STABILIZE_STRENGTH not in os.environ
+            assert ENV_STABILIZE_CROP not in os.environ
+
+    # --- generate_default_config ---
+
+    def test_generate_default_config_contains_stabilize(self) -> None:
+        """기본 설정 템플릿에 stabilize 관련 주석이 포함된다."""
+        content = generate_default_config()
+        assert "stabilize" in content
