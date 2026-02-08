@@ -7,7 +7,6 @@
     uv run pytest tests/e2e/test_silence.py -v
 """
 
-import json
 import shutil
 import subprocess
 from datetime import datetime
@@ -18,11 +17,13 @@ import pytest
 from tubearchive.ffmpeg.effects import parse_silence_segments
 from tubearchive.ffmpeg.executor import FFmpegExecutor
 
+from .conftest import get_video_duration
+
 # ffmpeg 없으면 전체 모듈 스킵
-pytestmark = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None,
-    reason="ffmpeg not installed",
-)
+pytestmark = [
+    pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed"),
+    pytest.mark.e2e_shard2,
+]
 
 
 @pytest.fixture
@@ -210,8 +211,8 @@ class TestSilenceRemoval:
             assert result_path.exists()
 
             # 출력 영상의 길이 확인
-            original_duration = _get_video_duration(sample_video_with_silence)
-            trimmed_duration = _get_video_duration(result_path)
+            original_duration = get_video_duration(sample_video_with_silence)
+            trimmed_duration = get_video_duration(result_path)
 
             # silenceremove 필터의 동작 특성상 완벽하게 제거되지 않을 수 있고,
             # 트랜스코딩 과정에서 프레임 정렬 등으로 약간의 길이 변화가 있을 수 있음
@@ -247,27 +248,3 @@ class TestSilenceRemoval:
 
             # 출력 영상이 생성되었는지 확인
             assert result_path.exists()
-
-
-# ---------- 헬퍼 함수 ----------
-
-
-def _get_video_duration(video_path: Path) -> float:
-    """ffprobe로 영상 길이 확인."""
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "json",
-        str(video_path),
-    ]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        pytest.fail(f"Failed to get video duration: {result.stderr}")
-
-    data = json.loads(result.stdout)
-    return float(data["format"]["duration"])
