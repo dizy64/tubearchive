@@ -99,13 +99,16 @@ class TestArchive:
 
         db_path = tmp_path / "test.db"
         conn = init_database(db_path)
+
+        video_id = _register_video(conn, video_file)
+
         repo = ArchiveHistoryRepository(conn)
         archiver = Archiver(
             repo=repo,
             policy=ArchivePolicy.KEEP,
         )
 
-        stats = archiver.archive_files([(1, video_file)])
+        stats = archiver.archive_files([(video_id, video_file)])
         conn.close()
 
         # 원본 파일 그대로
