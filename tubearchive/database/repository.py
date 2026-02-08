@@ -21,6 +21,7 @@ from tubearchive.models.job import (
     MergeJob,
     Project,
     ProjectDetail,
+    ProjectSummary,
     SplitJob,
     TranscodingJob,
 )
@@ -810,6 +811,42 @@ class ProjectRepository:
         """모든 프로젝트 조회 (최신순)."""
         cursor = self.conn.execute("SELECT * FROM projects ORDER BY updated_at DESC")
         return [self._row_to_project(row) for row in cursor.fetchall()]
+
+    def get_all_with_stats(self) -> list[tuple[Project, ProjectSummary]]:
+        """모든 프로젝트를 집계 통계와 함께 조회한다 (단일 쿼리).
+
+        N+1 쿼리를 방지하기 위해 LEFT JOIN + GROUP BY로
+        프로젝트 목록과 통계를 한번에 가져온다.
+
+        Returns:
+            (Project, ProjectSummary) 튜플 리스트 (최신순)
+        """
+        cursor = self.conn.execute(
+            """SELECT p.*,
+                      COUNT(pmj.merge_job_id) AS total_count,
+                      COALESCE(SUM(m.total_duration_seconds), 0.0)
+                          AS total_duration_seconds,
+                      COALESCE(SUM(m.total_size_bytes), 0)
+                          AS total_size_bytes,
+                      COUNT(CASE WHEN m.youtube_id IS NOT NULL THEN 1 END)
+                          AS uploaded_count
+               FROM projects p
+               LEFT JOIN project_merge_jobs pmj ON p.id = pmj.project_id
+               LEFT JOIN merge_jobs m ON pmj.merge_job_id = m.id
+               GROUP BY p.id
+               ORDER BY p.updated_at DESC"""
+        )
+        results: list[tuple[Project, ProjectSummary]] = []
+        for row in cursor.fetchall():
+            project = self._row_to_project(row)
+            summary = ProjectSummary(
+                total_count=int(row["total_count"]),
+                total_duration_seconds=float(row["total_duration_seconds"]),
+                total_size_bytes=int(row["total_size_bytes"]),
+                uploaded_count=int(row["uploaded_count"]),
+            )
+            results.append((project, summary))
+        return results
 
     def update_description(self, project_id: int, description: str) -> None:
         """프로젝트 설명 업데이트."""

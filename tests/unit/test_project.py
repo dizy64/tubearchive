@@ -588,6 +588,72 @@ class TestProjectDateRange:
         assert project.date_range_end is None
 
 
+class TestProjectAllWithStats:
+    """get_all_with_stats 배치 조회 테스트."""
+
+    def test_all_with_stats_single_query(self, db_conn: sqlite3.Connection) -> None:
+        """여러 프로젝트의 통계를 단일 쿼리로 정확하게 집계."""
+        repo = ProjectRepository(db_conn)
+        p1 = repo.create("프로젝트A")
+        p2 = repo.create("프로젝트B")
+
+        mj1 = _create_merge_job(db_conn, output_path="/out/a1.mp4", duration=600.0, size=5_000_000)
+        mj2 = _create_merge_job(db_conn, output_path="/out/a2.mp4", duration=900.0, size=8_000_000)
+        mj3 = _create_merge_job(db_conn, output_path="/out/b1.mp4", duration=300.0, size=2_000_000)
+
+        repo.add_merge_job(p1, mj1)
+        repo.add_merge_job(p1, mj2)
+        repo.add_merge_job(p2, mj3)
+
+        results = repo.get_all_with_stats()
+        stats_map = {project.id: stats for project, stats in results}
+
+        assert stats_map[p1].total_count == 2
+        assert stats_map[p1].total_duration_seconds == 1500.0
+        assert stats_map[p1].total_size_bytes == 13_000_000
+        assert stats_map[p1].uploaded_count == 0
+
+        assert stats_map[p2].total_count == 1
+        assert stats_map[p2].total_duration_seconds == 300.0
+        assert stats_map[p2].total_size_bytes == 2_000_000
+
+    def test_all_with_stats_empty_project(self, db_conn: sqlite3.Connection) -> None:
+        """빈 프로젝트의 통계는 모두 0."""
+        repo = ProjectRepository(db_conn)
+        repo.create("빈 프로젝트")
+
+        results = repo.get_all_with_stats()
+        assert len(results) == 1
+        _, stats = results[0]
+        assert stats.total_count == 0
+        assert stats.total_duration_seconds == 0.0
+        assert stats.total_size_bytes == 0
+        assert stats.uploaded_count == 0
+
+    def test_all_with_stats_uploaded_count(self, db_conn: sqlite3.Connection) -> None:
+        """업로드된 merge_job만 uploaded_count에 집계."""
+        repo = ProjectRepository(db_conn)
+        p1 = repo.create("업로드 테스트")
+        mj1 = _create_merge_job(db_conn, output_path="/out/u1.mp4")
+        mj2 = _create_merge_job(db_conn, output_path="/out/u2.mp4")
+
+        merge_repo = MergeJobRepository(db_conn)
+        merge_repo.update_youtube_id(mj1, "yt123")
+
+        repo.add_merge_job(p1, mj1)
+        repo.add_merge_job(p1, mj2)
+
+        results = repo.get_all_with_stats()
+        _, stats = results[0]
+        assert stats.uploaded_count == 1
+        assert stats.total_count == 2
+
+    def test_all_with_stats_no_projects(self, db_conn: sqlite3.Connection) -> None:
+        """프로젝트 없을 때 빈 리스트."""
+        repo = ProjectRepository(db_conn)
+        assert repo.get_all_with_stats() == []
+
+
 class TestProjectDetail:
     """프로젝트 상세 조회 테스트."""
 

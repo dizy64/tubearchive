@@ -17,7 +17,7 @@ from tubearchive.commands.catalog import (
     render_table,
 )
 from tubearchive.database.repository import ProjectRepository
-from tubearchive.models.job import Project, ProjectDetail
+from tubearchive.models.job import Project
 from tubearchive.utils import truncate_path
 from tubearchive.utils.progress import format_size
 
@@ -38,15 +38,15 @@ def _format_date_range(project: Project) -> str:
     return "-"
 
 
-def _format_project_status(detail: ProjectDetail) -> str:
+def _format_project_status(total_count: int, uploaded_count: int) -> str:
     """프로젝트 상태 요약 문자열 생성."""
-    if detail.total_count == 0:
+    if total_count == 0:
         return "빈 프로젝트"
-    if detail.uploaded_count == detail.total_count:
-        return f"전체 업로드 ({detail.total_count}개)"
-    if detail.uploaded_count > 0:
-        return f"부분 업로드 ({detail.uploaded_count}/{detail.total_count})"
-    return f"영상 {detail.total_count}개"
+    if uploaded_count == total_count:
+        return f"전체 업로드 ({total_count}개)"
+    if uploaded_count > 0:
+        return f"부분 업로드 ({uploaded_count}/{total_count})"
+    return f"영상 {total_count}개"
 
 
 def print_project_list(
@@ -62,12 +62,12 @@ def print_project_list(
         stream: 출력 대상
     """
     repo = ProjectRepository(conn)
-    projects = repo.get_all()
+    # 단일 쿼리로 모든 프로젝트와 통계를 조회 (N+1 방지)
+    projects_with_stats = repo.get_all_with_stats()
 
     if output_format == "json":
         items = []
-        for project in projects:
-            detail = repo.get_detail(project.id) if project.id else None
+        for project, stats in projects_with_stats:
             items.append(
                 {
                     "id": project.id,
@@ -76,16 +76,16 @@ def print_project_list(
                     "date_range_start": project.date_range_start,
                     "date_range_end": project.date_range_end,
                     "playlist_id": project.playlist_id,
-                    "merge_job_count": detail.total_count if detail else 0,
-                    "total_duration_seconds": detail.total_duration_seconds if detail else 0,
-                    "uploaded_count": detail.uploaded_count if detail else 0,
+                    "merge_job_count": stats.total_count,
+                    "total_duration_seconds": stats.total_duration_seconds,
+                    "uploaded_count": stats.uploaded_count,
                     "created_at": project.created_at.isoformat(),
                 }
             )
         print(json.dumps(items, ensure_ascii=False, indent=2), file=stream)
         return
 
-    if not projects:
+    if not projects_with_stats:
         print("📋 프로젝트 없음", file=stream)
         print('  "tubearchive --project 이름" 으로 프로젝트를 생성하세요.', file=stream)
         return
@@ -94,26 +94,24 @@ def print_project_list(
     aligns = ["right", "left", "left", "right", "right", "left"]
     rows: list[list[str]] = []
 
-    for project in projects:
+    for project, stats in projects_with_stats:
         if project.id is None:
             continue
-        detail = repo.get_detail(project.id)
-        total_count = detail.total_count if detail else 0
-        total_duration = detail.total_duration_seconds if detail else 0.0
-        status = _format_project_status(detail) if detail else "빈 프로젝트"
-
+        status = _format_project_status(stats.total_count, stats.uploaded_count)
         rows.append(
             [
                 str(project.id),
                 project.name,
                 _format_date_range(project),
-                str(total_count),
-                format_duration(total_duration) if total_duration > 0 else "-",
+                str(stats.total_count),
+                format_duration(stats.total_duration_seconds)
+                if stats.total_duration_seconds > 0
+                else "-",
                 status,
             ]
         )
 
-    print(f"\n📁 프로젝트 목록 ({len(projects)}개)\n", file=stream)
+    print(f"\n📁 프로젝트 목록 ({len(projects_with_stats)}개)\n", file=stream)
     render_table(headers, rows, aligns)
 
 

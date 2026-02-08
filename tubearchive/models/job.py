@@ -9,6 +9,7 @@ SQLite에 저장되는 작업 상태·이력을 표현하는 데이터클래스 
     - :class:`SplitJob`: 영상 분할 작업 레코드
     - :class:`Project`: 프로젝트 레코드 (여러 merge_job을 그룹으로 관리)
     - :class:`ProjectDetail`: 프로젝트 상세 집계 (get_detail 반환 타입)
+    - :class:`ProjectSummary`: 프로젝트 목록 조회용 경량 집계 통계
 """
 
 from dataclasses import dataclass, field
@@ -165,6 +166,27 @@ class Project:
     playlist_id: str | None
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass
+class ProjectSummary:
+    """프로젝트 목록 조회용 경량 집계 통계.
+
+    :meth:`ProjectRepository.get_all_with_stats` 에서 반환되며,
+    단일 SQL 쿼리로 모든 프로젝트의 통계를 한번에 조회한다.
+    ``ProjectDetail`` 과 달리 merge_job 개별 목록은 포함하지 않는다.
+
+    Attributes:
+        total_count: 전체 merge_job 수
+        total_duration_seconds: 전체 재생 시간 (초)
+        total_size_bytes: 전체 파일 크기 (바이트)
+        uploaded_count: YouTube 업로드 완료 수
+    """
+
+    total_count: int
+    total_duration_seconds: float
+    total_size_bytes: int
+    uploaded_count: int
 
 
 @dataclass
