@@ -842,9 +842,9 @@ class TestScheduleUpload:
         # privacy가 private로 변경되었는지 확인
         assert body["status"]["privacyStatus"] == "private"
 
-        # snippet에 publishAt이 포함되었는지 확인
-        assert "publishAt" in body["snippet"]
-        assert body["snippet"]["publishAt"] == "2050-12-31T18:00:00+09:00"
+        # status에 publishAt이 포함되었는지 확인 (YouTube API 명세)
+        assert "publishAt" in body["status"]
+        assert body["status"]["publishAt"] == "2050-12-31T18:00:00+09:00"
 
     def test_validated_args_includes_schedule(self) -> None:
         """ValidatedArgs에 schedule 필드 포함."""

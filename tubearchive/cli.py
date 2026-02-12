@@ -3200,7 +3200,11 @@ def _get_or_create_project_playlist(
         return None
 
 
-def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
+def _upload_after_pipeline(
+    output_path: Path,
+    args: argparse.Namespace,
+    publish_at: str | None = None,
+) -> None:
     """파이프라인 완료 후 YouTube 업로드를 수행한다.
 
     DB에서 최신 merge_job을 조회하여 제목·설명을 가져온 뒤,
@@ -3209,6 +3213,7 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
     Args:
         output_path: 업로드할 병합 영상 파일 경로
         args: 원본 CLI 인자 (playlist, upload_privacy, upload_chunk 등)
+        publish_at: 예약 공개 시간 (이미 검증된 값, 재파싱하지 않음)
     """
     print("\n📤 YouTube 업로드 시작...")
 
@@ -3229,11 +3234,6 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
         logger.warning(f"Failed to get merge job: {e}")
 
     playlist_ids = resolve_playlist_ids(args.playlist)
-
-    # 스케줄 처리
-    publish_at: str | None = None
-    if hasattr(args, "schedule") and args.schedule:
-        publish_at = parse_schedule_datetime(args.schedule)
 
     # 프로젝트 플레이리스트 자동 생성/사용
     project_name = getattr(args, "project", None)
@@ -3432,7 +3432,7 @@ def main() -> None:
         print(f"📹 출력 파일: {output_path}")
 
         if validated_args.upload:
-            _upload_after_pipeline(output_path, args)
+            _upload_after_pipeline(output_path, args, publish_at=validated_args.schedule)
 
     except FileNotFoundError as e:
         logger.error(str(e))

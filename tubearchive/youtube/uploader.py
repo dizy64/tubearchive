@@ -374,16 +374,19 @@ class YouTubeUploader:
             "categoryId": YOUTUBE_CATEGORY_PEOPLE_BLOGS,
         }
 
-        # 예약 공개 시간 추가
+        # status 설정
+        status: dict[str, Any] = {
+            "privacyStatus": privacy,
+            "selfDeclaredMadeForKids": False,
+        }
+
+        # 예약 공개 시간 추가 (YouTube API: status에 위치)
         if publish_at:
-            snippet["publishAt"] = publish_at
+            status["publishAt"] = publish_at
 
         body = {
             "snippet": snippet,
-            "status": {
-                "privacyStatus": privacy,
-                "selfDeclaredMadeForKids": False,
-            },
+            "status": status,
         }
 
         # 미디어 파일 설정 (resumable upload)
