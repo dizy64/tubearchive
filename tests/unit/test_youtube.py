@@ -743,6 +743,119 @@ class TestAddToPlaylist:
         assert body["snippet"]["resourceId"]["videoId"] == "VIDEO1"
 
 
+class TestScheduleUpload:
+    """스케줄 업로드 기능 테스트."""
+
+    def test_parse_schedule_datetime_valid_iso8601(self) -> None:
+        """유효한 ISO 8601 형식 파싱."""
+        from tubearchive.cli import parse_schedule_datetime
+
+        # 미래 시간 (2050년)
+        result = parse_schedule_datetime("2050-12-31T23:59:59+09:00")
+        assert result == "2050-12-31T23:59:59+09:00"
+
+    def test_parse_schedule_datetime_without_timezone(self) -> None:
+        """타임존 없는 형식 (로컬 타임존 자동 추가)."""
+        from tubearchive.cli import parse_schedule_datetime
+
+        # 미래 시간 (2050년)
+        with patch("tubearchive.cli.logger") as mock_logger:
+            result = parse_schedule_datetime("2050-12-31T23:59:59")
+            # 로컬 타임존이 추가되어야 함
+            assert result.startswith("2050-12-31T23:59:59")
+            # info 로그 확인 (타임존 추가 알림)
+            mock_logger.info.assert_called()
+            assert "timezone" in str(mock_logger.info.call_args).lower()
+
+    def test_parse_schedule_datetime_space_format(self) -> None:
+        """공백 구분 형식 자동 변환."""
+        from tubearchive.cli import parse_schedule_datetime
+
+        # 공백 형식도 지원 ("2050-12-31 23:59:59" → "2050-12-31T23:59:59")
+        result = parse_schedule_datetime("2050-12-31 23:59:59+09:00")
+        assert result == "2050-12-31T23:59:59+09:00"
+
+    def test_parse_schedule_datetime_past_time_raises(self) -> None:
+        """과거 시간은 상세한 에러 메시지와 함께 ValueError 발생."""
+        from tubearchive.cli import parse_schedule_datetime
+
+        with pytest.raises(ValueError) as exc_info:
+            parse_schedule_datetime("2020-01-01T00:00:00+09:00")
+
+        # 에러 메시지에 "future"와 시간 차이 정보 포함 확인
+        error_msg = str(exc_info.value)
+        assert "future" in error_msg.lower()
+        # 과거 시간이므로 "일 전" 또는 "시간 전" 등의 정보 포함
+        assert any(word in error_msg for word in ["전", "ago", "Current time"])
+
+    def test_parse_schedule_datetime_invalid_format_raises(self) -> None:
+        """잘못된 형식은 ValueError 발생."""
+        from tubearchive.cli import parse_schedule_datetime
+
+        with pytest.raises(ValueError, match="Invalid datetime format"):
+            parse_schedule_datetime("not-a-date")
+
+    def test_schedule_option_in_parser(self) -> None:
+        """--schedule 옵션이 파서에 존재."""
+        from tubearchive.cli import create_parser
+
+        parser = create_parser()
+        args = parser.parse_args(["--schedule", "2050-12-31T18:00:00+09:00"])
+        assert args.schedule == "2050-12-31T18:00:00+09:00"
+
+    def test_upload_result_with_schedule(self) -> None:
+        """UploadResult에 scheduled_publish_at 포함."""
+        from tubearchive.youtube.uploader import UploadResult
+
+        result = UploadResult.from_video_id(
+            "xyz789", "My Title", scheduled_publish_at="2050-12-31T18:00:00+09:00"
+        )
+        assert result.scheduled_publish_at == "2050-12-31T18:00:00+09:00"
+
+    def test_upload_with_schedule_sets_private(self, tmp_path: Path) -> None:
+        """publish_at 설정 시 privacy가 private로 자동 변경."""
+        from tubearchive.youtube.uploader import YouTubeUploader
+
+        video_file = tmp_path / "test.mp4"
+        video_file.write_bytes(b"fake video content")
+
+        mock_service = MagicMock()
+        mock_insert = MagicMock()
+        mock_service.videos.return_value.insert.return_value = mock_insert
+        mock_insert.next_chunk.return_value = (None, {"id": "test_id"})
+
+        uploader = YouTubeUploader(mock_service)
+
+        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
+            mock_media_upload.return_value = MagicMock()
+            uploader.upload(
+                video_file,
+                title="Test",
+                privacy="unlisted",
+                publish_at="2050-12-31T18:00:00+09:00",
+            )
+
+        # insert 호출 시 body 확인
+        call_args = mock_service.videos.return_value.insert.call_args
+        body = call_args.kwargs.get("body") or call_args[1].get("body")
+
+        # privacy가 private로 변경되었는지 확인
+        assert body["status"]["privacyStatus"] == "private"
+
+        # status에 publishAt이 포함되었는지 확인 (YouTube API 명세)
+        assert "publishAt" in body["status"]
+        assert body["status"]["publishAt"] == "2050-12-31T18:00:00+09:00"
+
+    def test_validated_args_includes_schedule(self) -> None:
+        """ValidatedArgs에 schedule 필드 포함."""
+        import dataclasses
+
+        from tubearchive.cli import ValidatedArgs
+
+        fields = {f.name for f in dataclasses.fields(ValidatedArgs)}
+        assert "schedule" in fields
+
+
 class TestSelectPlaylistInteractive:
     """select_playlist_interactive 인터랙션 테스트."""
 

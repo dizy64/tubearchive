@@ -31,7 +31,7 @@ from collections.abc import Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
 from typing import NamedTuple
@@ -287,6 +287,7 @@ class ValidatedArgs:
     auto_lut: bool = False
     lut_before_hdr: bool = False
     device_luts: dict[str, str] | None = None
+    schedule: str | None = None
 
 
 @dataclass(frozen=True)
@@ -446,6 +447,17 @@ def create_parser() -> argparse.ArgumentParser:
         default=None,
         choices=["public", "unlisted", "private"],
         help="YouTube 공개 설정 (기본: unlisted)",
+    )
+
+    parser.add_argument(
+        "--schedule",
+        type=str,
+        default=None,
+        metavar="DATETIME",
+        help=(
+            "YouTube 예약 공개 시간 (ISO 8601 형식, "
+            "예: 2026-02-01T18:00 또는 2026-02-01T18:00:00+09:00)"
+        ),
     )
 
     parser.add_argument(
@@ -872,6 +884,78 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def parse_schedule_datetime(schedule_str: str) -> str:
+    """ISO 8601 형식의 날짜/시간 문자열을 파싱하고 검증한다.
+
+    공백 구분 형식(``2026-02-01 18:00``)은 자동으로 T로 변환된다.
+    타임존이 없으면 로컬 타임존이 자동으로 추가된다.
+
+    Args:
+        schedule_str: ISO 8601 형식 날짜/시간 문자열
+
+    Returns:
+        YouTube API가 요구하는 RFC 3339 형식 문자열
+
+    Raises:
+        ValueError: 형식이 잘못되었거나 과거 시간일 때
+    """
+    # 공백 구분 형식을 T 구분으로 변환 (예: "2026-02-01 18:00" → "2026-02-01T18:00")
+    normalized = schedule_str.strip()
+    if " " in normalized and "T" not in normalized:
+        normalized = normalized.replace(" ", "T", 1)
+
+    try:
+        # Python 3.11+는 fromisoformat이 대부분 ISO 8601 형식 지원
+        parsed_dt = datetime.fromisoformat(normalized)
+    except ValueError as e:
+        raise ValueError(
+            f"Invalid datetime format: {schedule_str}. "
+            "Expected ISO 8601 format (e.g., 2026-02-01T18:00, "
+            "2026-02-01 18:00, or 2026-02-01T18:00:00+09:00)"
+        ) from e
+
+    # 타임존 없으면 로컬 타임존 자동 추가
+    if parsed_dt.tzinfo is None:
+        try:
+            # 시스템 로컬 타임존 가져오기
+            local_tz = datetime.now().astimezone().tzinfo
+            if local_tz is not None:
+                parsed_dt = parsed_dt.replace(tzinfo=local_tz)
+                tz_name = local_tz.tzname(parsed_dt) or "local"
+                logger.info(f"Local timezone automatically added: {tz_name}")
+        except Exception:
+            # 타임존 가져오기 실패 시 경고만 출력
+            logger.warning(
+                "Could not determine local timezone. "
+                "YouTube will interpret the time as UTC. "
+                "Consider specifying timezone explicitly (e.g., +09:00)."
+            )
+
+    # 과거 시간 검증
+    now = datetime.now(parsed_dt.tzinfo)
+    if parsed_dt < now:
+        # 얼마나 과거인지 계산
+        time_diff = now - parsed_dt
+        hours_ago = time_diff.total_seconds() / 3600
+
+        if hours_ago < 1:
+            time_desc = f"{int(time_diff.total_seconds() / 60)}분 전"
+        elif hours_ago < 24:
+            time_desc = f"{int(hours_ago)}시간 전"
+        else:
+            time_desc = f"{int(hours_ago / 24)}일 전"
+
+        raise ValueError(
+            f"Schedule time must be in the future. "
+            f"Specified time is {time_desc}. "
+            f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}"
+        )
+
+    # YouTube API는 RFC 3339 형식 요구 (ISO 8601의 엄격한 서브셋)
+    # isoformat()이 RFC 3339 호환 형식 반환
+    return parsed_dt.isoformat()
+
+
 def validate_args(
     args: argparse.Namespace,
     device_luts: dict[str, str] | None = None,
@@ -1088,6 +1172,13 @@ def validate_args(
 
     lut_before_hdr: bool = getattr(args, "lut_before_hdr", False)
 
+    # 스케줄 옵션 검증
+    schedule_arg: str | None = getattr(args, "schedule", None)
+    schedule: str | None = None
+    if schedule_arg:
+        schedule = parse_schedule_datetime(schedule_arg)
+        logger.info(f"Parsed schedule time: {schedule}")
+
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -1131,6 +1222,7 @@ def validate_args(
         auto_lut=auto_lut,
         lut_before_hdr=lut_before_hdr,
         device_luts=device_luts if device_luts else None,
+        schedule=schedule,
     )
 
 
@@ -2251,6 +2343,7 @@ def upload_to_youtube(
     title: str | None = None,
     description: str = "",
     privacy: str = "unlisted",
+    publish_at: str | None = None,
     merge_job_id: int | None = None,
     playlist_ids: list[str] | None = None,
     chunk_mb: int | None = None,
@@ -2263,6 +2356,7 @@ def upload_to_youtube(
         title: 영상 제목 (None이면 파일명 사용)
         description: 영상 설명
         privacy: 공개 설정 (public, unlisted, private)
+        publish_at: 예약 공개 시간 (ISO 8601 형식, 설정 시 privacy는 private로 자동 변경)
         merge_job_id: DB에 저장할 MergeJob ID
         playlist_ids: 추가할 플레이리스트 ID 리스트 (None이면 추가 안 함)
         chunk_mb: 업로드 청크 크기 MB (None이면 환경변수/기본값)
@@ -2363,11 +2457,14 @@ def upload_to_youtube(
             title=video_title,
             description=description,
             privacy=privacy,
+            publish_at=publish_at,
             on_progress=on_progress,
         )
 
         print("\n✅ YouTube 업로드 완료!")
         print(f"🎬 URL: {result.url}")
+        if result.scheduled_publish_at:
+            print(f"📅 예약 공개: {result.scheduled_publish_at}")
 
         # 플레이리스트에 추가
         if playlist_ids:
@@ -2763,12 +2860,18 @@ def cmd_upload_only(args: argparse.Namespace) -> None:
     # 플레이리스트 처리
     playlist_ids = resolve_playlist_ids(args.playlist)
 
+    # 스케줄 처리
+    publish_at: str | None = None
+    if hasattr(args, "schedule") and args.schedule:
+        publish_at = parse_schedule_datetime(args.schedule)
+
     # 업로드 실행
     upload_to_youtube(
         file_path=file_path,
         title=args.upload_title,
         description=description,
         privacy=args.upload_privacy,
+        publish_at=publish_at,
         merge_job_id=merge_job_id,
         playlist_ids=playlist_ids,
         chunk_mb=args.upload_chunk,
@@ -2949,6 +3052,7 @@ def _upload_split_files(
     playlist_ids: list[str] | None,
     chunk_mb: int | None,
     split_job_id: int | None = None,
+    publish_at: str | None = None,
 ) -> None:
     """분할 파일을 순차적으로 YouTube에 업로드한다.
 
@@ -2964,6 +3068,7 @@ def _upload_split_files(
         playlist_ids: 플레이리스트 ID 목록
         chunk_mb: 업로드 청크 크기 MB
         split_job_id: SplitJob DB ID (파트별 youtube_id 저장용)
+        publish_at: 예약 공개 시간 (ISO 8601 형식, 설정 시 privacy는 private로 자동 변경)
     """
     from tubearchive.utils.summary_generator import (
         generate_split_youtube_description,
@@ -3013,6 +3118,7 @@ def _upload_split_files(
                 title=part_title,
                 description=description,
                 privacy=privacy,
+                publish_at=publish_at,
                 merge_job_id=None,
                 playlist_ids=playlist_ids,
                 chunk_mb=chunk_mb,
@@ -3094,7 +3200,11 @@ def _get_or_create_project_playlist(
         return None
 
 
-def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
+def _upload_after_pipeline(
+    output_path: Path,
+    args: argparse.Namespace,
+    publish_at: str | None = None,
+) -> None:
     """파이프라인 완료 후 YouTube 업로드를 수행한다.
 
     DB에서 최신 merge_job을 조회하여 제목·설명을 가져온 뒤,
@@ -3103,6 +3213,7 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
     Args:
         output_path: 업로드할 병합 영상 파일 경로
         args: 원본 CLI 인자 (playlist, upload_privacy, upload_chunk 등)
+        publish_at: 예약 공개 시간 (이미 검증된 값, 재파싱하지 않음)
     """
     print("\n📤 YouTube 업로드 시작...")
 
@@ -3159,6 +3270,7 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
             playlist_ids=playlist_ids,
             chunk_mb=args.upload_chunk,
             split_job_id=split_job_id,
+            publish_at=publish_at,
         )
     else:
         upload_to_youtube(
@@ -3166,6 +3278,7 @@ def _upload_after_pipeline(output_path: Path, args: argparse.Namespace) -> None:
             title=title,
             description=description,
             privacy=args.upload_privacy,
+            publish_at=publish_at,
             merge_job_id=merge_job_id,
             playlist_ids=playlist_ids,
             chunk_mb=args.upload_chunk,
@@ -3319,7 +3432,7 @@ def main() -> None:
         print(f"📹 출력 파일: {output_path}")
 
         if validated_args.upload:
-            _upload_after_pipeline(output_path, args)
+            _upload_after_pipeline(output_path, args, publish_at=validated_args.schedule)
 
     except FileNotFoundError as e:
         logger.error(str(e))
