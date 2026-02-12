@@ -887,6 +887,9 @@ def create_parser() -> argparse.ArgumentParser:
 def parse_schedule_datetime(schedule_str: str) -> str:
     """ISO 8601 형식의 날짜/시간 문자열을 파싱하고 검증한다.
 
+    공백 구분 형식(``2026-02-01 18:00``)은 자동으로 T로 변환된다.
+    타임존이 없으면 로컬 타임존이 자동으로 추가된다.
+
     Args:
         schedule_str: ISO 8601 형식 날짜/시간 문자열
 
@@ -896,33 +899,61 @@ def parse_schedule_datetime(schedule_str: str) -> str:
     Raises:
         ValueError: 형식이 잘못되었거나 과거 시간일 때
     """
+    # 공백 구분 형식을 T 구분으로 변환 (예: "2026-02-01 18:00" → "2026-02-01T18:00")
+    normalized = schedule_str.strip()
+    if " " in normalized and "T" not in normalized:
+        normalized = normalized.replace(" ", "T", 1)
+
     try:
         # Python 3.11+는 fromisoformat이 대부분 ISO 8601 형식 지원
-        parsed_dt = datetime.fromisoformat(schedule_str)
+        parsed_dt = datetime.fromisoformat(normalized)
     except ValueError as e:
         raise ValueError(
             f"Invalid datetime format: {schedule_str}. "
-            "Expected ISO 8601 format (e.g., 2026-02-01T18:00 or "
-            "2026-02-01T18:00:00+09:00)"
+            "Expected ISO 8601 format (e.g., 2026-02-01T18:00, "
+            "2026-02-01 18:00, or 2026-02-01T18:00:00+09:00)"
         ) from e
 
-    # 과거 시간 검증 (timezone-naive는 로컬 시간으로 간주)
+    # 타임존 없으면 로컬 타임존 자동 추가
+    if parsed_dt.tzinfo is None:
+        try:
+            # 시스템 로컬 타임존 가져오기
+            local_tz = datetime.now().astimezone().tzinfo
+            if local_tz is not None:
+                parsed_dt = parsed_dt.replace(tzinfo=local_tz)
+                tz_name = local_tz.tzname(parsed_dt) or "local"
+                logger.info(f"Local timezone automatically added: {tz_name}")
+        except Exception:
+            # 타임존 가져오기 실패 시 경고만 출력
+            logger.warning(
+                "Could not determine local timezone. "
+                "YouTube will interpret the time as UTC. "
+                "Consider specifying timezone explicitly (e.g., +09:00)."
+            )
+
+    # 과거 시간 검증
     now = datetime.now(parsed_dt.tzinfo)
     if parsed_dt < now:
-        raise ValueError(f"Schedule time must be in the future: {schedule_str}")
+        # 얼마나 과거인지 계산
+        time_diff = now - parsed_dt
+        hours_ago = time_diff.total_seconds() / 3600
+
+        if hours_ago < 1:
+            time_desc = f"{int(time_diff.total_seconds() / 60)}분 전"
+        elif hours_ago < 24:
+            time_desc = f"{int(hours_ago)}시간 전"
+        else:
+            time_desc = f"{int(hours_ago / 24)}일 전"
+
+        raise ValueError(
+            f"Schedule time must be in the future. "
+            f"Specified time is {time_desc}. "
+            f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}"
+        )
 
     # YouTube API는 RFC 3339 형식 요구 (ISO 8601의 엄격한 서브셋)
     # isoformat()이 RFC 3339 호환 형식 반환
-    rfc3339_str = parsed_dt.isoformat()
-
-    # timezone 없으면 경고 (YouTube는 UTC 기준으로 해석)
-    if parsed_dt.tzinfo is None:
-        logger.warning(
-            f"Timezone not specified in schedule time, "
-            f"YouTube will interpret as UTC: {schedule_str}"
-        )
-
-    return rfc3339_str
+    return parsed_dt.isoformat()
 
 
 def validate_args(

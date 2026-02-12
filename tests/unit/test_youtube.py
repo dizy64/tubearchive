@@ -755,23 +755,38 @@ class TestScheduleUpload:
         assert result == "2050-12-31T23:59:59+09:00"
 
     def test_parse_schedule_datetime_without_timezone(self) -> None:
-        """타임존 없는 형식 (경고 발생)."""
+        """타임존 없는 형식 (로컬 타임존 자동 추가)."""
         from tubearchive.cli import parse_schedule_datetime
 
         # 미래 시간 (2050년)
         with patch("tubearchive.cli.logger") as mock_logger:
             result = parse_schedule_datetime("2050-12-31T23:59:59")
-            assert result == "2050-12-31T23:59:59"
-            # 경고 로그 확인
-            mock_logger.warning.assert_called_once()
-            assert "UTC" in str(mock_logger.warning.call_args)
+            # 로컬 타임존이 추가되어야 함
+            assert result.startswith("2050-12-31T23:59:59")
+            # info 로그 확인 (타임존 추가 알림)
+            mock_logger.info.assert_called()
+            assert "timezone" in str(mock_logger.info.call_args).lower()
 
-    def test_parse_schedule_datetime_past_time_raises(self) -> None:
-        """과거 시간은 ValueError 발생."""
+    def test_parse_schedule_datetime_space_format(self) -> None:
+        """공백 구분 형식 자동 변환."""
         from tubearchive.cli import parse_schedule_datetime
 
-        with pytest.raises(ValueError, match="future"):
+        # 공백 형식도 지원 ("2050-12-31 23:59:59" → "2050-12-31T23:59:59")
+        result = parse_schedule_datetime("2050-12-31 23:59:59+09:00")
+        assert result == "2050-12-31T23:59:59+09:00"
+
+    def test_parse_schedule_datetime_past_time_raises(self) -> None:
+        """과거 시간은 상세한 에러 메시지와 함께 ValueError 발생."""
+        from tubearchive.cli import parse_schedule_datetime
+
+        with pytest.raises(ValueError) as exc_info:
             parse_schedule_datetime("2020-01-01T00:00:00+09:00")
+
+        # 에러 메시지에 "future"와 시간 차이 정보 포함 확인
+        error_msg = str(exc_info.value)
+        assert "future" in error_msg.lower()
+        # 과거 시간이므로 "일 전" 또는 "시간 전" 등의 정보 포함
+        assert any(word in error_msg for word in ["전", "ago", "Current time"])
 
     def test_parse_schedule_datetime_invalid_format_raises(self) -> None:
         """잘못된 형식은 ValueError 발생."""
