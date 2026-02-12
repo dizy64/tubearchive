@@ -12,6 +12,7 @@ import subprocess
 import urllib.error
 import urllib.request
 from typing import Protocol
+from urllib.parse import urlparse
 
 from tubearchive.notification.events import NotificationEvent
 
@@ -90,10 +91,15 @@ class MacOSProvider:
             logger.exception("macOS 알림 전송 중 예외 발생")
             return False
 
+    @staticmethod
+    def _escape_applescript(text: str) -> str:
+        """AppleScript 문자열에서 위험 문자를 이스케이프한다."""
+        return text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").replace("\r", "")
+
     def _build_script(self, event: NotificationEvent) -> str:
         """AppleScript 명령 생성."""
-        title = event.title.replace('"', '\\"')
-        message = event.message.replace('"', '\\"')
+        title = self._escape_applescript(event.title)
+        message = self._escape_applescript(event.message)
         sound_clause = ' sound name "default"' if self._sound else ""
         return (
             f'display notification "{message}" '
@@ -124,11 +130,10 @@ class TelegramProvider:
     def send(self, event: NotificationEvent) -> bool:
         """Telegram Bot API sendMessage 호출."""
         url = TELEGRAM_API_URL.format(token=self._bot_token)
-        text = f"*{event.title}*\n{event.message}"
+        text = f"{event.title}\n{event.message}"
         payload = {
             "chat_id": self._chat_id,
             "text": text,
-            "parse_mode": "Markdown",
         }
         return _post_json(url, payload, provider_name=self.name)
 
@@ -139,6 +144,7 @@ class DiscordProvider:
     def __init__(self, *, webhook_url: str) -> None:
         if not webhook_url:
             raise ValueError("Discord webhook_url이 비어 있습니다")
+        _validate_url_scheme(webhook_url, "Discord")
         self._webhook_url = webhook_url
 
     @property
@@ -159,6 +165,7 @@ class SlackProvider:
     def __init__(self, *, webhook_url: str) -> None:
         if not webhook_url:
             raise ValueError("Slack webhook_url이 비어 있습니다")
+        _validate_url_scheme(webhook_url, "Slack")
         self._webhook_url = webhook_url
 
     @property
@@ -171,6 +178,13 @@ class SlackProvider:
             "text": f"*{event.title}*\n{event.message}",
         }
         return _post_json(self._webhook_url, payload, provider_name=self.name)
+
+
+def _validate_url_scheme(url: str, provider_name: str) -> None:
+    """URL 스킴이 http(s)인지 검증한다."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("https", "http"):
+        raise ValueError(f"{provider_name} webhook URL 스킴이 올바르지 않습니다: {parsed.scheme}")
 
 
 def _post_json(url: str, payload: dict[str, str], *, provider_name: str) -> bool:
@@ -214,5 +228,5 @@ def _post_json(url: str, payload: dict[str, str], *, provider_name: str) -> bool
         logger.warning("%s 알림 네트워크 오류: %s", provider_name, e.reason)
         return False
     except Exception:
-        logger.exception("%s 알림 전송 중 예외 발생", provider_name)
+        logger.warning("%s 알림 전송 중 예외 발생", provider_name)
         return False

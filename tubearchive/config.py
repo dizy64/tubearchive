@@ -673,14 +673,18 @@ def apply_config_to_env(config: AppConfig) -> None:
         mappings.append((ENV_NOTIFY_MACOS_SOUND, str(notif.macos.sound).lower()))
     if notif.telegram.enabled is not None:
         mappings.append((ENV_NOTIFY_TELEGRAM, str(notif.telegram.enabled).lower()))
-    mappings.append((ENV_TELEGRAM_BOT_TOKEN, notif.telegram.bot_token))
-    mappings.append((ENV_TELEGRAM_CHAT_ID, notif.telegram.chat_id))
+    if notif.telegram.bot_token is not None:
+        mappings.append((ENV_TELEGRAM_BOT_TOKEN, notif.telegram.bot_token))
+    if notif.telegram.chat_id is not None:
+        mappings.append((ENV_TELEGRAM_CHAT_ID, notif.telegram.chat_id))
     if notif.discord.enabled is not None:
         mappings.append((ENV_NOTIFY_DISCORD, str(notif.discord.enabled).lower()))
-    mappings.append((ENV_DISCORD_WEBHOOK_URL, notif.discord.webhook_url))
+    if notif.discord.webhook_url is not None:
+        mappings.append((ENV_DISCORD_WEBHOOK_URL, notif.discord.webhook_url))
     if notif.slack.enabled is not None:
         mappings.append((ENV_NOTIFY_SLACK, str(notif.slack.enabled).lower()))
-    mappings.append((ENV_SLACK_WEBHOOK_URL, notif.slack.webhook_url))
+    if notif.slack.webhook_url is not None:
+        mappings.append((ENV_SLACK_WEBHOOK_URL, notif.slack.webhook_url))
 
     for env_key, value in mappings:
         if value is not None and env_key not in os.environ:

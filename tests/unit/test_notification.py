@@ -211,6 +211,32 @@ class TestMacOSProvider:
         # 큰따옴표가 이스케이프되어야 함
         assert '\\"' in script
 
+    def test_build_script_escapes_backslash(self) -> None:
+        """백슬래시가 이중 이스케이프되어야 함."""
+        event = NotificationEvent(
+            event_type=EventType.MERGE_COMPLETE,
+            title="C:\\Users\\test",
+            message='path\\";do shell script "evil',
+        )
+        provider = MacOSProvider()
+        script = provider._build_script(event)
+        # 백슬래시가 이스케이프되어야 함
+        assert "C:\\\\Users\\\\test" in script
+        # 주입 시도가 무력화되어야 함
+        assert "do shell script" not in script or '\\\\"' in script
+
+    def test_build_script_escapes_newline(self) -> None:
+        """줄바꿈이 공백으로 치환되어야 함."""
+        event = NotificationEvent(
+            event_type=EventType.MERGE_COMPLETE,
+            title="줄1\n줄2",
+            message="메시지\r\n개행",
+        )
+        provider = MacOSProvider()
+        script = provider._build_script(event)
+        assert "\n" not in script.split("display notification")[1] or "줄1 줄2" in script
+        assert "\r" not in script
+
     def test_name_property(self) -> None:
         assert MacOSProvider().name == "macos"
 
@@ -254,6 +280,10 @@ class TestDiscordProvider:
         with pytest.raises(ValueError, match="webhook_url"):
             DiscordProvider(webhook_url="")
 
+    def test_init_invalid_scheme_raises(self) -> None:
+        with pytest.raises(ValueError, match="스킴"):
+            DiscordProvider(webhook_url="ftp://evil.com/hook")
+
     @patch("tubearchive.notification.providers._post_json", return_value=True)
     def test_send_success(self, mock_post: MagicMock) -> None:
         provider = DiscordProvider(webhook_url="https://discord.com/hook")
@@ -273,6 +303,10 @@ class TestSlackProvider:
     def test_init_empty_url_raises(self) -> None:
         with pytest.raises(ValueError, match="webhook_url"):
             SlackProvider(webhook_url="")
+
+    def test_init_invalid_scheme_raises(self) -> None:
+        with pytest.raises(ValueError, match="스킴"):
+            SlackProvider(webhook_url="file:///etc/passwd")
 
     @patch("tubearchive.notification.providers._post_json", return_value=True)
     def test_send_success(self, mock_post: MagicMock) -> None:
@@ -510,6 +544,18 @@ class TestBuildProviders:
             telegram=TelegramConfig(enabled=False),
             discord=DiscordConfig(enabled=False),
             slack=SlackConfig(enabled=False),
+        )
+        notifier = Notifier(config)
+        assert notifier.provider_count == 0
+
+    def test_global_enabled_false_disables_all(self) -> None:
+        """전역 enabled=False이면 개별 provider 설정과 무관하게 모두 비활성."""
+        config = _make_config(
+            enabled=False,
+            macos=MacOSNotifyConfig(enabled=True),
+            telegram=TelegramConfig(enabled=True, bot_token="t", chat_id="c"),
+            discord=DiscordConfig(enabled=True, webhook_url="https://hook"),
+            slack=SlackConfig(enabled=True, webhook_url="https://hook"),
         )
         notifier = Notifier(config)
         assert notifier.provider_count == 0

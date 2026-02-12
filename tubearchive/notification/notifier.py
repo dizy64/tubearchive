@@ -109,6 +109,9 @@ class Notifier:
 
     def _build_providers(self) -> list[NotificationProvider]:
         """설정에 따라 활성화된 Provider 인스턴스를 생성한다."""
+        if self._config.enabled is False:
+            return []
+
         providers: list[NotificationProvider] = []
 
         # macOS (기본 활성화)

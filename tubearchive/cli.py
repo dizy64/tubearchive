@@ -3310,6 +3310,8 @@ def main() -> None:
 
     setup_logging(args.verbose)
 
+    notifier: Notifier | None = None
+
     try:
         # --setup-youtube 옵션 처리 (설정 가이드)
         if args.setup_youtube:
@@ -3404,7 +3406,6 @@ def main() -> None:
             return
 
         # Notifier 초기화
-        notifier: Notifier | None = None
         if validated_args.notify:
             from tubearchive.notification import Notifier as _Notifier
 
@@ -3430,7 +3431,7 @@ def main() -> None:
         sys.exit(130)
     except Exception as e:
         # 에러 알림
-        if "notifier" in locals() and notifier:
+        if notifier is not None:
             from tubearchive.notification import error_event
 
             notifier.notify(error_event(error_message=str(e), stage="pipeline"))
