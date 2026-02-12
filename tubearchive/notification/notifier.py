@@ -75,7 +75,7 @@ class Notifier:
                 else:
                     logger.warning("%s 알림 전송 실패", provider.name)
             except Exception:
-                logger.exception(
+                logger.warning(
                     "%s 알림 전송 중 예외 발생",
                     provider.name,
                 )
@@ -96,14 +96,19 @@ class Notifier:
             try:
                 results[provider.name] = provider.send(test_event)
             except Exception:
-                logger.exception("%s 테스트 알림 실패", provider.name)
+                logger.warning("%s 테스트 알림 실패", provider.name)
                 results[provider.name] = False
         return results
 
     def _is_event_enabled(self, event_type: EventType) -> bool:
         """이벤트 타입이 설정에서 활성화되어 있는지 확인한다."""
-        field_name = event_type.value  # e.g. "on_transcode_complete"
-        value = getattr(self._config, field_name, None)
+        event_config_map: dict[EventType, bool | None] = {
+            EventType.TRANSCODE_COMPLETE: self._config.on_transcode_complete,
+            EventType.MERGE_COMPLETE: self._config.on_merge_complete,
+            EventType.UPLOAD_COMPLETE: self._config.on_upload_complete,
+            EventType.ERROR: self._config.on_error,
+        }
+        value = event_config_map.get(event_type)
         # None이면 기본 True (활성화)
         return value is not False
 

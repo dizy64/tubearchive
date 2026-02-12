@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import urllib.error
-from datetime import datetime
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -70,6 +70,7 @@ class TestNotificationEvent:
         assert event.title == "테스트"
         assert event.message == "본문"
         assert isinstance(event.timestamp, datetime)
+        assert event.timestamp.tzinfo is not None  # UTC timezone-aware
         assert event.metadata == {}
 
     def test_frozen_enforcement(self) -> None:
@@ -149,6 +150,31 @@ class TestEventFactories:
         assert "오류 발생" in event.title
         assert event.metadata["stage"] == ""
 
+    def test_error_event_truncates_long_message(self) -> None:
+        """500자 초과 메시지는 잘라내야 함 (민감 정보 유출 방지)."""
+        from tubearchive.notification.events import ERROR_MESSAGE_MAX_LENGTH
+
+        long_msg = "x" * (ERROR_MESSAGE_MAX_LENGTH + 100)
+        event = error_event(error_message=long_msg)
+        assert len(event.message) == ERROR_MESSAGE_MAX_LENGTH + 3  # "..." 포함
+        assert event.message.endswith("...")
+        assert event.metadata["error"].endswith("...")
+
+    def test_error_event_short_message_not_truncated(self) -> None:
+        """짧은 메시지는 잘라내지 않아야 함."""
+        event = error_event(error_message="짧은 에러")
+        assert event.message == "짧은 에러"
+        assert not event.message.endswith("...")
+
+    def test_timestamp_is_utc(self) -> None:
+        """타임스탬프가 UTC timezone-aware여야 함."""
+        event = NotificationEvent(
+            event_type=EventType.MERGE_COMPLETE,
+            title="t",
+            message="m",
+        )
+        assert event.timestamp.tzinfo == UTC
+
 
 # =========================================================================
 # MacOSProvider
@@ -222,8 +248,8 @@ class TestMacOSProvider:
         script = provider._build_script(event)
         # 백슬래시가 이스케이프되어야 함
         assert "C:\\\\Users\\\\test" in script
-        # 주입 시도가 무력화되어야 함
-        assert "do shell script" not in script or '\\\\"' in script
+        # 주입 시도가 무력화되어야 함: 큰따옴표가 이스케이프되어 문자열 밖으로 탈출 불가
+        assert '\\\\"' in script
 
     def test_build_script_escapes_newline(self) -> None:
         """줄바꿈이 공백으로 치환되어야 함."""
@@ -234,7 +260,9 @@ class TestMacOSProvider:
         )
         provider = MacOSProvider()
         script = provider._build_script(event)
-        assert "\n" not in script.split("display notification")[1] or "줄1 줄2" in script
+        # 줄바꿈이 공백으로 치환됨
+        assert "줄1 줄2" in script
+        # \r 제거됨
         assert "\r" not in script
 
     def test_name_property(self) -> None:
@@ -284,11 +312,33 @@ class TestDiscordProvider:
         with pytest.raises(ValueError, match="스킴"):
             DiscordProvider(webhook_url="ftp://evil.com/hook")
 
+    def test_init_http_url_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """HTTP URL은 경고를 남기되 초기화는 성공해야 함."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="tubearchive.notification.providers"):
+            provider = DiscordProvider(webhook_url="http://insecure.com/hook")
+        assert provider.name == "discord"
+        assert "HTTPS" in caplog.text
+
     @patch("tubearchive.notification.providers._post_json", return_value=True)
     def test_send_success(self, mock_post: MagicMock) -> None:
         provider = DiscordProvider(webhook_url="https://discord.com/hook")
         event = NotificationEvent(event_type=EventType.MERGE_COMPLETE, title="t", message="m")
         assert provider.send(event) is True
+
+    @patch("tubearchive.notification.providers._post_json", return_value=True)
+    def test_send_uses_embed_format(self, mock_post: MagicMock) -> None:
+        """Discord는 Embed 포맷으로 전송해야 함."""
+        provider = DiscordProvider(webhook_url="https://discord.com/hook")
+        event = NotificationEvent(event_type=EventType.MERGE_COMPLETE, title="제목", message="본문")
+        provider.send(event)
+        payload = mock_post.call_args[0][1]
+        assert "embeds" in payload
+        embed = payload["embeds"][0]
+        assert embed["title"] == "제목"
+        assert embed["description"] == "본문"
+        assert "color" in embed
 
     def test_name_property(self) -> None:
         assert DiscordProvider(webhook_url="https://x").name == "discord"
@@ -313,6 +363,22 @@ class TestSlackProvider:
         provider = SlackProvider(webhook_url="https://hooks.slack.com/x")
         event = NotificationEvent(event_type=EventType.MERGE_COMPLETE, title="t", message="m")
         assert provider.send(event) is True
+
+    @patch("tubearchive.notification.providers._post_json", return_value=True)
+    def test_send_uses_block_kit_format(self, mock_post: MagicMock) -> None:
+        """Slack은 Block Kit 포맷으로 전송해야 함."""
+        provider = SlackProvider(webhook_url="https://hooks.slack.com/x")
+        event = NotificationEvent(event_type=EventType.MERGE_COMPLETE, title="제목", message="본문")
+        provider.send(event)
+        payload = mock_post.call_args[0][1]
+        assert "blocks" in payload
+        assert "text" in payload  # 폴백 텍스트
+        header_block = payload["blocks"][0]
+        assert header_block["type"] == "header"
+        assert header_block["text"]["text"] == "제목"
+        section_block = payload["blocks"][1]
+        assert section_block["type"] == "section"
+        assert section_block["text"]["text"] == "본문"
 
     def test_name_property(self) -> None:
         assert SlackProvider(webhook_url="https://x").name == "slack"
@@ -637,6 +703,29 @@ enabled = "not_a_bool"
         config = load_config(config_file)
         # 타입 오류 시 None (무시)
         assert config.notification.enabled is None
+
+    def test_malformed_sub_config_ignored(self, tmp_path: Path) -> None:
+        """서브 설정에 잘못된 타입이 있어도 다른 설정은 정상 파싱."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[notification]
+enabled = true
+
+[notification.macos]
+enabled = "yes_please"
+
+[notification.telegram]
+enabled = true
+bot_token = "valid_token"
+chat_id = "valid_id"
+""")
+        config = load_config(config_file)
+        n = config.notification
+        assert n.enabled is True
+        # macos.enabled는 타입 오류로 None
+        assert n.macos.enabled is None
+        # telegram은 정상
+        assert n.telegram.bot_token == "valid_token"
 
 
 # =========================================================================

@@ -11,7 +11,7 @@ import logging
 import subprocess
 import urllib.error
 import urllib.request
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from tubearchive.notification.events import NotificationEvent
@@ -23,6 +23,9 @@ TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
 # HTTP 요청 타임아웃 (초)
 WEBHOOK_TIMEOUT_SECONDS = 10
+
+# Discord Embed 색상 (TubeArchive 브랜드 컬러, 파란색 계열)
+DISCORD_EMBED_COLOR = 0x5865F2
 
 
 class NotificationProvider(Protocol):
@@ -152,9 +155,15 @@ class DiscordProvider:
         return "discord"
 
     def send(self, event: NotificationEvent) -> bool:
-        """Discord Webhook POST."""
-        payload = {
-            "content": f"**{event.title}**\n{event.message}",
+        """Discord Webhook POST (Embed 포맷)."""
+        payload: dict[str, Any] = {
+            "embeds": [
+                {
+                    "title": event.title,
+                    "description": event.message,
+                    "color": DISCORD_EMBED_COLOR,
+                }
+            ],
         }
         return _post_json(self._webhook_url, payload, provider_name=self.name)
 
@@ -173,9 +182,19 @@ class SlackProvider:
         return "slack"
 
     def send(self, event: NotificationEvent) -> bool:
-        """Slack Webhook POST."""
-        payload = {
-            "text": f"*{event.title}*\n{event.message}",
+        """Slack Webhook POST (Block Kit 포맷)."""
+        payload: dict[str, Any] = {
+            "text": f"{event.title}: {event.message}",
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": event.title},
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": event.message},
+                },
+            ],
         }
         return _post_json(self._webhook_url, payload, provider_name=self.name)
 
@@ -185,9 +204,14 @@ def _validate_url_scheme(url: str, provider_name: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in ("https", "http"):
         raise ValueError(f"{provider_name} webhook URL 스킴이 올바르지 않습니다: {parsed.scheme}")
+    if parsed.scheme == "http":
+        logger.warning(
+            "%s webhook URL이 HTTPS가 아닙니다 — 보안 위험이 있을 수 있습니다",
+            provider_name,
+        )
 
 
-def _post_json(url: str, payload: dict[str, str], *, provider_name: str) -> bool:
+def _post_json(url: str, payload: dict[str, Any], *, provider_name: str) -> bool:
     """JSON POST 요청 전송.
 
     Args:

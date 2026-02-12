@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
+
+# error_event 메시지 최대 길이 (외부 웹훅으로 민감 정보 유출 방지)
+ERROR_MESSAGE_MAX_LENGTH = 500
 
 
 class EventType(Enum):
@@ -35,7 +38,7 @@ class NotificationEvent:
     event_type: EventType
     title: str
     message: str
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     metadata: dict[str, str] = field(default_factory=dict)
 
 
@@ -101,13 +104,20 @@ def error_event(
     error_message: str,
     stage: str = "",
 ) -> NotificationEvent:
-    """에러 이벤트 생성."""
+    """에러 이벤트 생성.
+
+    error_message가 ERROR_MESSAGE_MAX_LENGTH를 초과하면 잘라낸다.
+    외부 웹훅으로 스택 트레이스·경로 등 민감 정보가 전송되는 것을 방지한다.
+    """
+    truncated = error_message[:ERROR_MESSAGE_MAX_LENGTH]
+    if len(error_message) > ERROR_MESSAGE_MAX_LENGTH:
+        truncated += "..."
     return NotificationEvent(
         event_type=EventType.ERROR,
         title=f"오류 발생{f' ({stage})' if stage else ''}",
-        message=error_message,
+        message=truncated,
         metadata={
             "stage": stage,
-            "error": error_message,
+            "error": truncated,
         },
     )
