@@ -274,20 +274,24 @@ class YouTubeUploadError(Exception):
 
 @dataclass
 class UploadResult:
-    """업로드 완료 결과 (YouTube 영상 ID, URL, 제목)."""
+    """업로드 완료 결과 (YouTube 영상 ID, URL, 제목, 예약 공개 시간)."""
 
     video_id: str
     url: str
     title: str
+    scheduled_publish_at: str | None = None
 
     @classmethod
-    def from_video_id(cls, video_id: str, title: str) -> UploadResult:
+    def from_video_id(
+        cls, video_id: str, title: str, scheduled_publish_at: str | None = None
+    ) -> UploadResult:
         """
         video_id로 UploadResult 생성.
 
         Args:
             video_id: YouTube 영상 ID
             title: 영상 제목
+            scheduled_publish_at: 예약 공개 시간 (ISO 8601 형식, optional)
 
         Returns:
             UploadResult 인스턴스
@@ -296,6 +300,7 @@ class UploadResult:
             video_id=video_id,
             url=f"https://youtu.be/{video_id}",
             title=title,
+            scheduled_publish_at=scheduled_publish_at,
         )
 
 
@@ -322,6 +327,7 @@ class YouTubeUploader:
         title: str,
         description: str = "",
         privacy: str = "unlisted",
+        publish_at: str | None = None,
         on_progress: Callable[[int], None] | None = None,
     ) -> UploadResult:
         """
@@ -334,6 +340,7 @@ class YouTubeUploader:
             title: 영상 제목
             description: 영상 설명
             privacy: 공개 설정 (public, unlisted, private)
+            publish_at: 예약 공개 시간 (ISO 8601 형식, 설정 시 privacy는 private로 자동 변경)
             on_progress: 진행률 콜백 (0-100)
 
         Returns:
@@ -348,18 +355,31 @@ class YouTubeUploader:
 
         logger.info(f"Uploading {file_path} to YouTube...")
         logger.info(f"  Title: {title}")
-        logger.info(f"  Privacy: {privacy}")
+
+        # 예약 공개 설정 시 privacy를 private로 자동 변경
+        if publish_at:
+            privacy = "private"
+            logger.info(f"  Scheduled publish: {publish_at}")
+            logger.info(f"  Privacy: {privacy} (auto-set for scheduled upload)")
+        else:
+            logger.info(f"  Privacy: {privacy}")
 
         # description 정제 (길이 제한 + 금지 문자 제거)
         description = sanitize_description(description)
 
         # 메타데이터 설정
+        snippet: dict[str, Any] = {
+            "title": title,
+            "description": description,
+            "categoryId": YOUTUBE_CATEGORY_PEOPLE_BLOGS,
+        }
+
+        # 예약 공개 시간 추가
+        if publish_at:
+            snippet["publishAt"] = publish_at
+
         body = {
-            "snippet": {
-                "title": title,
-                "description": description,
-                "categoryId": YOUTUBE_CATEGORY_PEOPLE_BLOGS,
-            },
+            "snippet": snippet,
             "status": {
                 "privacyStatus": privacy,
                 "selfDeclaredMadeForKids": False,
@@ -387,9 +407,11 @@ class YouTubeUploader:
         response = self._execute_upload(request, on_progress)
 
         video_id = response["id"]
-        result = UploadResult.from_video_id(video_id, title)
+        result = UploadResult.from_video_id(video_id, title, publish_at)
 
         logger.info(f"Upload complete: {result.url}")
+        if publish_at:
+            logger.info(f"Scheduled to publish at: {publish_at}")
         return result
 
     def _execute_upload(
