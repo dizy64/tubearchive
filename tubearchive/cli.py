@@ -34,9 +34,12 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from tubearchive import __version__
+
+if TYPE_CHECKING:
+    from tubearchive.notification.notifier import Notifier
 from tubearchive.commands.catalog import (
     CATALOG_STATUS_SENTINEL,
     STATUS_ICONS,
@@ -59,6 +62,7 @@ from tubearchive.config import (
     get_default_fade_duration,
     get_default_group_sequences,
     get_default_normalize_audio,
+    get_default_notify,
     get_default_output_dir,
     get_default_parallel,
     get_default_stabilize,
@@ -287,6 +291,7 @@ class ValidatedArgs:
     auto_lut: bool = False
     lut_before_hdr: bool = False
     device_luts: dict[str, str] | None = None
+    notify: bool = False
     schedule: str | None = None
 
 
@@ -869,6 +874,18 @@ def create_parser() -> argparse.ArgumentParser:
         help="원본 파일 삭제(delete 정책) 시 확인 프롬프트 우회",
     )
 
+    # 알림 옵션
+    parser.add_argument(
+        "--notify",
+        action="store_true",
+        help="파이프라인 완료/에러 시 알림 전송 (config.toml [notification] 설정 필요)",
+    )
+    parser.add_argument(
+        "--notify-test",
+        action="store_true",
+        help="설정된 알림 채널에 테스트 알림 전송 후 종료",
+    )
+
     output_format_group = parser.add_mutually_exclusive_group()
     output_format_group.add_argument(
         "--json",
@@ -1222,6 +1239,7 @@ def validate_args(
         auto_lut=auto_lut,
         lut_before_hdr=lut_before_hdr,
         device_luts=device_luts if device_luts else None,
+        notify=bool(getattr(args, "notify", False)) or get_default_notify(),
         schedule=schedule,
     )
 
@@ -1801,7 +1819,10 @@ def _print_summary(summary_markdown: str | None) -> None:
     print("=" * 60 + "\n")
 
 
-def run_pipeline(validated_args: ValidatedArgs) -> Path:
+def run_pipeline(
+    validated_args: ValidatedArgs,
+    notifier: Notifier | None = None,
+) -> Path:
     """
     전체 파이프라인 실행.
 
@@ -1809,6 +1830,7 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
 
     Args:
         validated_args: 검증된 인자
+        notifier: 알림 오케스트레이터 (None이면 알림 비활성화)
 
     Returns:
         최종 출력 파일 경로
@@ -1893,6 +1915,17 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         logger.info("Starting transcoding...")
         results = _transcode_sequential(video_files, temp_dir, transcode_opts)
 
+    # 알림: 트랜스코딩 완료
+    if notifier:
+        from tubearchive.notification import transcode_complete_event
+
+        notifier.notify(
+            transcode_complete_event(
+                file_count=len(results),
+                total_duration=sum(r.clip_info.duration for r in results),
+            )
+        )
+
     # 3. 병합
     logger.info("Merging videos...")
     output_path = _resolve_output_path(validated_args)
@@ -1901,6 +1934,18 @@ def run_pipeline(validated_args: ValidatedArgs) -> Path:
         output_path,
     )
     logger.info(f"Final output: {final_path}")
+
+    # 알림: 병합 완료
+    if notifier:
+        from tubearchive.notification import merge_complete_event
+
+        notifier.notify(
+            merge_complete_event(
+                output_path=str(final_path),
+                file_count=len(results),
+                total_size_bytes=final_path.stat().st_size if final_path.exists() else 0,
+            )
+        )
 
     # 3.5 BGM 믹싱 (옵션)
     if validated_args.bgm_path:
@@ -3203,6 +3248,7 @@ def _get_or_create_project_playlist(
 def _upload_after_pipeline(
     output_path: Path,
     args: argparse.Namespace,
+    notifier: Notifier | None = None,
     publish_at: str | None = None,
 ) -> None:
     """파이프라인 완료 후 YouTube 업로드를 수행한다.
@@ -3213,6 +3259,7 @@ def _upload_after_pipeline(
     Args:
         output_path: 업로드할 병합 영상 파일 경로
         args: 원본 CLI 인자 (playlist, upload_privacy, upload_chunk 등)
+        notifier: 알림 오케스트레이터 (None이면 알림 비활성화)
         publish_at: 예약 공개 시간 (이미 검증된 값, 재파싱하지 않음)
     """
     print("\n📤 YouTube 업로드 시작...")
@@ -3284,6 +3331,28 @@ def _upload_after_pipeline(
             chunk_mb=args.upload_chunk,
         )
 
+    # 알림: 업로드 완료
+    if notifier:
+        from tubearchive.notification import upload_complete_event
+
+        # DB에서 youtube_id 조회
+        youtube_id = ""
+        if merge_job_id is not None:
+            try:
+                with database_session() as conn:
+                    repo = MergeJobRepository(conn)
+                    job = repo.get_by_id(merge_job_id)
+                    if job and job.youtube_id:
+                        youtube_id = job.youtube_id
+            except Exception:
+                logger.debug("알림용 youtube_id 조회 실패", exc_info=True)
+        notifier.notify(
+            upload_complete_event(
+                video_title=title or output_path.stem,
+                youtube_id=youtube_id,
+            )
+        )
+
 
 def cmd_init_config() -> None:
     """
@@ -3328,11 +3397,30 @@ def main() -> None:
     config = load_config(config_path)
     apply_config_to_env(config)
 
+    # --notify-test 처리 (서브커맨드 전)
+    if getattr(args, "notify_test", False):
+        setup_logging(args.verbose)
+        from tubearchive.notification import Notifier as _Notifier
+
+        test_notifier = _Notifier(config.notification)
+        if not test_notifier.has_providers:
+            print("활성화된 알림 채널이 없습니다.")
+            print("config.toml의 [notification] 섹션을 확인하세요.")
+            return
+        results = test_notifier.test_notification()
+        for provider_name, success in results.items():
+            icon = "OK" if success else "FAIL"
+            status = "성공" if success else "실패"
+            print(f"  [{icon}] {provider_name}: {status}")
+        return
+
     # upload_privacy: CLI > config > "unlisted"
     if args.upload_privacy is None:
         args.upload_privacy = config.youtube.upload_privacy or "unlisted"
 
     setup_logging(args.verbose)
+
+    notifier: Notifier | None = None
 
     try:
         # --setup-youtube 옵션 처리 (설정 가이드)
@@ -3427,12 +3515,22 @@ def main() -> None:
             _cmd_dry_run(validated_args)
             return
 
-        output_path = run_pipeline(validated_args)
+        # Notifier 초기화
+        if validated_args.notify:
+            from tubearchive.notification import Notifier as _Notifier
+
+            notifier = _Notifier(config.notification)
+            if notifier.has_providers:
+                logger.info("알림 시스템 활성화 (%d개 채널)", notifier.provider_count)
+
+        output_path = run_pipeline(validated_args, notifier=notifier)
         print("\n✅ 완료!")
         print(f"📹 출력 파일: {output_path}")
 
         if validated_args.upload:
-            _upload_after_pipeline(output_path, args, publish_at=validated_args.schedule)
+            _upload_after_pipeline(
+                output_path, args, notifier=notifier, publish_at=validated_args.schedule
+            )
 
     except FileNotFoundError as e:
         logger.error(str(e))
@@ -3444,6 +3542,11 @@ def main() -> None:
         logger.info("\nInterrupted by user")
         sys.exit(130)
     except Exception as e:
+        # 에러 알림
+        if notifier is not None:
+            from tubearchive.notification import error_event
+
+            notifier.notify(error_event(error_message=str(e), stage="pipeline"))
         logger.exception(f"Unexpected error: {e}")
         sys.exit(1)
 

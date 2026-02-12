@@ -48,6 +48,18 @@ ENV_STABILIZE_STRENGTH = "TUBEARCHIVE_STABILIZE_STRENGTH"
 ENV_STABILIZE_CROP = "TUBEARCHIVE_STABILIZE_CROP"
 ENV_AUTO_LUT = "TUBEARCHIVE_AUTO_LUT"
 
+# 알림 설정
+ENV_NOTIFY = "TUBEARCHIVE_NOTIFY"
+ENV_NOTIFY_MACOS = "TUBEARCHIVE_NOTIFY_MACOS"
+ENV_NOTIFY_MACOS_SOUND = "TUBEARCHIVE_NOTIFY_MACOS_SOUND"
+ENV_NOTIFY_TELEGRAM = "TUBEARCHIVE_NOTIFY_TELEGRAM"
+ENV_TELEGRAM_BOT_TOKEN = "TUBEARCHIVE_TELEGRAM_BOT_TOKEN"
+ENV_TELEGRAM_CHAT_ID = "TUBEARCHIVE_TELEGRAM_CHAT_ID"
+ENV_NOTIFY_DISCORD = "TUBEARCHIVE_NOTIFY_DISCORD"
+ENV_DISCORD_WEBHOOK_URL = "TUBEARCHIVE_DISCORD_WEBHOOK_URL"
+ENV_NOTIFY_SLACK = "TUBEARCHIVE_NOTIFY_SLACK"
+ENV_SLACK_WEBHOOK_URL = "TUBEARCHIVE_SLACK_WEBHOOK_URL"
+
 
 @dataclass(frozen=True)
 class GeneralConfig:
@@ -130,10 +142,61 @@ class ColorGradingConfig:
 
 
 @dataclass(frozen=True)
+class MacOSNotifyConfig:
+    """``[notification.macos]`` 하위 설정."""
+
+    enabled: bool | None = None  # None이면 기본 True
+    sound: bool | None = None  # None이면 기본 True
+
+
+@dataclass(frozen=True)
+class TelegramConfig:
+    """``[notification.telegram]`` 하위 설정."""
+
+    enabled: bool | None = None
+    bot_token: str | None = None
+    chat_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DiscordConfig:
+    """``[notification.discord]`` 하위 설정."""
+
+    enabled: bool | None = None
+    webhook_url: str | None = None
+
+
+@dataclass(frozen=True)
+class SlackConfig:
+    """``[notification.slack]`` 하위 설정."""
+
+    enabled: bool | None = None
+    webhook_url: str | None = None
+
+
+@dataclass(frozen=True)
+class NotificationConfig:
+    """``config.toml`` 의 ``[notification]`` 섹션.
+
+    macOS 알림센터 및 외부 웹훅(Telegram, Discord, Slack) 설정을 관리한다.
+    """
+
+    enabled: bool | None = None
+    on_transcode_complete: bool | None = None
+    on_merge_complete: bool | None = None
+    on_upload_complete: bool | None = None
+    on_error: bool | None = None
+    macos: MacOSNotifyConfig = field(default_factory=MacOSNotifyConfig)
+    telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    discord: DiscordConfig = field(default_factory=DiscordConfig)
+    slack: SlackConfig = field(default_factory=SlackConfig)
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """애플리케이션 전체 설정.
 
-    [general] + [bgm] + [youtube] + [archive] + [color_grading] 통합.
+    [general] + [bgm] + [youtube] + [archive] + [color_grading] + [notification] 통합.
     """
 
     general: GeneralConfig = field(default_factory=GeneralConfig)
@@ -141,6 +204,7 @@ class AppConfig:
     youtube: YouTubeConfig = field(default_factory=YouTubeConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
     color_grading: ColorGradingConfig = field(default_factory=ColorGradingConfig)
+    notification: NotificationConfig = field(default_factory=NotificationConfig)
 
 
 def _warn_type(field_name: str, expected: str, value: object) -> None:
@@ -366,6 +430,70 @@ def _parse_color_grading(data: dict[str, object]) -> ColorGradingConfig:
     )
 
 
+def _parse_notification(data: dict[str, object]) -> NotificationConfig:
+    """[notification] 섹션 파싱. 타입 오류 시 해당 필드 무시."""
+    section = "notification"
+
+    enabled = _parse_bool(data, "enabled", section)
+    on_transcode_complete = _parse_bool(data, "on_transcode_complete", section)
+    on_merge_complete = _parse_bool(data, "on_merge_complete", section)
+    on_upload_complete = _parse_bool(data, "on_upload_complete", section)
+    on_error = _parse_bool(data, "on_error", section)
+
+    # macos 하위 테이블
+    raw_macos = data.get("macos", {})
+    if isinstance(raw_macos, dict):
+        macos = MacOSNotifyConfig(
+            enabled=_parse_bool(raw_macos, "enabled", f"{section}.macos"),
+            sound=_parse_bool(raw_macos, "sound", f"{section}.macos"),
+        )
+    else:
+        macos = MacOSNotifyConfig()
+
+    # telegram 하위 테이블
+    raw_telegram = data.get("telegram", {})
+    if isinstance(raw_telegram, dict):
+        telegram = TelegramConfig(
+            enabled=_parse_bool(raw_telegram, "enabled", f"{section}.telegram"),
+            bot_token=_parse_str(raw_telegram, "bot_token", f"{section}.telegram"),
+            chat_id=_parse_str(raw_telegram, "chat_id", f"{section}.telegram"),
+        )
+    else:
+        telegram = TelegramConfig()
+
+    # discord 하위 테이블
+    raw_discord = data.get("discord", {})
+    if isinstance(raw_discord, dict):
+        discord = DiscordConfig(
+            enabled=_parse_bool(raw_discord, "enabled", f"{section}.discord"),
+            webhook_url=_parse_str(raw_discord, "webhook_url", f"{section}.discord"),
+        )
+    else:
+        discord = DiscordConfig()
+
+    # slack 하위 테이블
+    raw_slack = data.get("slack", {})
+    if isinstance(raw_slack, dict):
+        slack = SlackConfig(
+            enabled=_parse_bool(raw_slack, "enabled", f"{section}.slack"),
+            webhook_url=_parse_str(raw_slack, "webhook_url", f"{section}.slack"),
+        )
+    else:
+        slack = SlackConfig()
+
+    return NotificationConfig(
+        enabled=enabled,
+        on_transcode_complete=on_transcode_complete,
+        on_merge_complete=on_merge_complete,
+        on_upload_complete=on_upload_complete,
+        on_error=on_error,
+        macos=macos,
+        telegram=telegram,
+        discord=discord,
+        slack=slack,
+    )
+
+
 def load_config(path: Path | None = None) -> AppConfig:
     """
     TOML 설정 파일 로드.
@@ -396,6 +524,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     youtube_data = raw.get("youtube", {})
     archive_data = raw.get("archive", {})
     color_grading_data = raw.get("color_grading", {})
+    notification_data = raw.get("notification", {})
 
     if isinstance(general_data, dict):
         general = _parse_general(general_data)
@@ -447,12 +576,23 @@ def load_config(path: Path | None = None) -> AppConfig:
             )
         color_grading = ColorGradingConfig()
 
+    if isinstance(notification_data, dict):
+        notification = _parse_notification(notification_data)
+    else:
+        if notification_data:
+            logger.warning(
+                "config: [notification] 섹션이 테이블이 아닙니다 (got %s)",
+                type(notification_data).__name__,
+            )
+        notification = NotificationConfig()
+
     return AppConfig(
         general=general,
         bgm=bgm,
         youtube=youtube,
         archive=archive,
         color_grading=color_grading,
+        notification=notification,
     )
 
 
@@ -523,6 +663,29 @@ def apply_config_to_env(config: AppConfig) -> None:
     if config.color_grading.auto_lut is not None:
         mappings.append((ENV_AUTO_LUT, str(config.color_grading.auto_lut).lower()))
 
+    # notification
+    notif = config.notification
+    if notif.enabled is not None:
+        mappings.append((ENV_NOTIFY, str(notif.enabled).lower()))
+    if notif.macos.enabled is not None:
+        mappings.append((ENV_NOTIFY_MACOS, str(notif.macos.enabled).lower()))
+    if notif.macos.sound is not None:
+        mappings.append((ENV_NOTIFY_MACOS_SOUND, str(notif.macos.sound).lower()))
+    if notif.telegram.enabled is not None:
+        mappings.append((ENV_NOTIFY_TELEGRAM, str(notif.telegram.enabled).lower()))
+    if notif.telegram.bot_token is not None:
+        mappings.append((ENV_TELEGRAM_BOT_TOKEN, notif.telegram.bot_token))
+    if notif.telegram.chat_id is not None:
+        mappings.append((ENV_TELEGRAM_CHAT_ID, notif.telegram.chat_id))
+    if notif.discord.enabled is not None:
+        mappings.append((ENV_NOTIFY_DISCORD, str(notif.discord.enabled).lower()))
+    if notif.discord.webhook_url is not None:
+        mappings.append((ENV_DISCORD_WEBHOOK_URL, notif.discord.webhook_url))
+    if notif.slack.enabled is not None:
+        mappings.append((ENV_NOTIFY_SLACK, str(notif.slack.enabled).lower()))
+    if notif.slack.webhook_url is not None:
+        mappings.append((ENV_SLACK_WEBHOOK_URL, notif.slack.webhook_url))
+
     for env_key, value in mappings:
         if value is not None and env_key not in os.environ:
             os.environ[env_key] = value
@@ -574,6 +737,30 @@ def generate_default_config() -> str:
 # [color_grading.device_luts]
 # nikon = "~/LUTs/nikon_nlog_to_rec709.cube"
 # gopro = "~/LUTs/gopro_flat_to_rec709.cube"
+
+[notification]
+# enabled = false                         # 전역 알림 활성화 (TUBEARCHIVE_NOTIFY)
+# on_transcode_complete = true            # 트랜스코딩 완료 알림
+# on_merge_complete = true                # 병합 완료 알림
+# on_upload_complete = true               # 업로드 완료 알림
+# on_error = true                         # 에러 알림
+
+[notification.macos]
+# enabled = true                          # macOS 알림센터 (TUBEARCHIVE_NOTIFY_MACOS)
+# sound = true                            # 알림음 재생 (TUBEARCHIVE_NOTIFY_MACOS_SOUND)
+
+[notification.telegram]
+# enabled = false                         # Telegram Bot (TUBEARCHIVE_NOTIFY_TELEGRAM)
+# bot_token = ""                          # Bot 토큰 (TUBEARCHIVE_TELEGRAM_BOT_TOKEN)
+# chat_id = ""                            # 채팅 ID (TUBEARCHIVE_TELEGRAM_CHAT_ID)
+
+[notification.discord]
+# enabled = false                         # Discord Webhook (TUBEARCHIVE_NOTIFY_DISCORD)
+# webhook_url = ""                        # Webhook URL (TUBEARCHIVE_DISCORD_WEBHOOK_URL)
+
+[notification.slack]
+# enabled = false                         # Slack Webhook (TUBEARCHIVE_NOTIFY_SLACK)
+# webhook_url = ""                        # Webhook URL (TUBEARCHIVE_SLACK_WEBHOOK_URL)
 """
 
 
@@ -820,3 +1007,8 @@ def get_default_stabilize_crop() -> str | None:
 def get_default_auto_lut() -> bool:
     """환경변수 ``TUBEARCHIVE_AUTO_LUT`` 에서 자동 LUT 적용 여부를 가져온다."""
     return _get_env_bool(ENV_AUTO_LUT)
+
+
+def get_default_notify() -> bool:
+    """환경변수 ``TUBEARCHIVE_NOTIFY`` 에서 알림 활성화 여부를 가져온다."""
+    return _get_env_bool(ENV_NOTIFY)
