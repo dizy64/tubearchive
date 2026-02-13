@@ -635,7 +635,11 @@ def create_vidstab_detect_filter(
     """
     params = _VIDSTAB_PARAMS[strength]
     return (
-        f"vidstabdetect=shakiness={params.shakiness}:accuracy={params.accuracy}:result={trf_path}"
+        "vidstabdetect="
+        f"shakiness={params.shakiness}:"
+        f"accuracy={params.accuracy}:"
+        f"result={trf_path}:"
+        "fileformat=ascii"
     )
 
 
