@@ -398,6 +398,11 @@ tests/
 - **버전 올리기**: 안정적인 기능 추가/변경 완료 시 **반드시 마이너 버전 증가** (예: 0.2.1 → 0.2.2)
 - **이유**: uv가 버전 기반으로 wheel 캐시를 재사용하므로, 버전 미변경 시 이전 빌드가 설치될 수 있음
 
+### 에이전트 문서 일원화
+- 공통 지침은 `CLAUDE.md`를 단일 소스로 관리한다.
+- 저장소의 `AGENTS.md`는 `CLAUDE.md`를 가리키는 심볼릭 링크(`AGENTS.md -> CLAUDE.md`)로 유지한다.
+- 새 worktree 생성 후 `AGENTS.md`가 일반 파일로 생기거나 누락되면 즉시 심볼릭 링크 상태를 복구한다.
+
 ```bash
 # 버전 확인
 grep -E "^version|^__version__" pyproject.toml tubearchive/__init__.py
