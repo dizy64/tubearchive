@@ -153,12 +153,16 @@ class TestScheduleUploadIntegration:
         assert output_path.exists()
         assert output_path.stat().st_size > 0
 
+    @patch("tubearchive.youtube.auth.get_authenticated_service")
+    @patch("tubearchive.youtube.auth.check_auth_status")
     @patch("tubearchive.youtube.uploader.validate_upload")
     @patch("tubearchive.youtube.uploader.YouTubeUploader")
     def test_upload_passes_publish_at_correctly(
         self,
         mock_uploader_class: MagicMock,
         mock_validate: MagicMock,
+        mock_check_auth_status: MagicMock,
+        mock_get_authenticated_service: MagicMock,
         tmp_path: Path,
         future_schedule: str,
     ) -> None:
@@ -174,6 +178,11 @@ class TestScheduleUploadIntegration:
             errors=[],
             warnings=[],
         )
+        mock_check_auth_status.return_value = MagicMock(
+            has_client_secrets=True,
+            has_valid_token=True,
+        )
+        mock_get_authenticated_service.return_value = MagicMock()
 
         # Mock 인스턴스 설정
         mock_uploader = MagicMock()
