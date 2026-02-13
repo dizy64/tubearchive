@@ -286,6 +286,54 @@ class TestTranscoderVidstab:
             stabilize_arg = mock_combined.call_args.kwargs.get("stabilize_filter", "")
             assert "vidstabtransform" in stabilize_arg
 
+    def test_vidstab_retries_without_fileformat_on_unsupported_option(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """fileformat 옵션 미지원 시 1회 재시도 후 안정화를 계속 진행한다."""
+        from tubearchive.ffmpeg.executor import FFmpegError
+
+        with (
+            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
+            patch("tubearchive.core.transcoder.create_vidstab_detect_filter") as mock_detect,
+            patch("tubearchive.core.transcoder.create_vidstab_transform_filter") as mock_transform,
+        ):
+            mock_detect.side_effect = [
+                "vidstabdetect=shakiness=8:accuracy=15:result=/tmp/test.trf:fileformat=ascii",
+                "vidstabdetect=shakiness=8:accuracy=15:result=/tmp/test.trf",
+            ]
+            mock_transform.return_value = "vidstabtransform=smoothing=30:crop=black"
+            mock_transcoder.executor.run.return_value = None
+            mock_transcoder.executor.run_analysis.side_effect = [
+                FFmpegError(
+                    "FFmpeg analysis failed with exit code 8",
+                    stderr="Error applying option 'fileformat' to filter 'vidstabdetect':"
+                    " Option not found",
+                ),
+                "",
+            ]
+            mock_transcoder.executor.build_vidstab_detect_command.side_effect = [
+                ["ffmpeg", "-vf", "with_fileformat"],
+                ["ffmpeg", "-vf", "without_fileformat"],
+            ]
+            with contextlib.suppress(Exception):
+                mock_transcoder.transcode_video(
+                    video_file,
+                    stabilize=True,
+                    stabilize_strength="heavy",
+                    stabilize_crop="crop",
+                )
+
+        assert mock_detect.call_count == 2
+        first_call_kwargs = mock_detect.call_args_list[0].kwargs
+        second_call_kwargs = mock_detect.call_args_list[1].kwargs
+        assert first_call_kwargs["include_fileformat"] is True
+        assert second_call_kwargs["include_fileformat"] is False
+        assert mock_transcoder.executor.run_analysis.call_count == 2
+        mock_transform.assert_called_once()
+
     def test_vidstab_analysis_failure_skips_stabilization(
         self,
         mock_transcoder: MagicMock,
@@ -385,8 +433,8 @@ class TestTranscoderVidstab:
                 from tubearchive.ffmpeg.effects import StabilizeStrength
 
                 mock_detect.assert_called_once()
-                call_args = mock_detect.call_args
-                assert call_args[0][0] == StabilizeStrength(strength)
+                call_kwargs = mock_detect.call_args.kwargs
+                assert call_kwargs["strength"] == StabilizeStrength(strength)
 
 
 class TestTranscoderSilenceAnalysis:
