@@ -439,11 +439,21 @@ class TestVidstabDetectFilter:
         assert "accuracy=15" in result
 
     def test_includes_trf_path(self) -> None:
-        """result= 경로 포함."""
+        """result= 경로와 fileformat=ascii 포함."""
         result = create_vidstab_detect_filter(
             trf_path="transforms/my_video.trf",
         )
         assert "result=transforms/my_video.trf" in result
+        assert "fileformat=ascii" in result
+
+    def test_can_disable_fileformat(self) -> None:
+        """옵션 비활성화 시 fileformat=ascii 미포함."""
+        result = create_vidstab_detect_filter(
+            trf_path="transforms/my_video.trf",
+            include_fileformat=False,
+        )
+        assert "result=transforms/my_video.trf" in result
+        assert "fileformat=ascii" not in result
 
 
 class TestVidstabTransformFilter:

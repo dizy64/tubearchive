@@ -90,6 +90,12 @@ def _resolve_auto_lut(device_model: str, device_luts: dict[str, str]) -> str | N
     return str(resolved)
 
 
+def _is_vidstab_fileformat_unsupported(error: FFmpegError) -> bool:
+    """vidstabdetect의 fileformat 옵션 미지원 오류인지 판별한다."""
+    err_text = f"{error}\n{error.stderr or ''}".lower()
+    return "fileformat" in err_text and "option not found" in err_text
+
+
 class Transcoder:
     """영상 파일을 HEVC 10-bit SDR로 트랜스코딩하는 엔진.
 
@@ -313,13 +319,35 @@ class Transcoder:
             strength: 안정화 강도.
             trf_path: transform 데이터 저장 경로.
         """
-        detect_filter = create_vidstab_detect_filter(strength, str(trf_path))
+        detect_filter = create_vidstab_detect_filter(
+            strength=strength,
+            trf_path=str(trf_path),
+            include_fileformat=True,
+        )
         cmd = self.executor.build_vidstab_detect_command(
             input_path=video_file.path,
             video_filter=detect_filter,
         )
         logger.info("Running vidstab detection pass (strength=%s)", strength.value)
-        self.executor.run_analysis(cmd)
+        try:
+            self.executor.run_analysis(cmd)
+        except FFmpegError as e:
+            if not _is_vidstab_fileformat_unsupported(e):
+                raise
+
+            # FFmpeg/vidstab 버전에 따라 fileformat 옵션이 없을 수 있으므로
+            # 해당 경우에 한해 옵션을 제거하고 1회 재시도한다.
+            logger.info("vidstabdetect fileformat option unsupported, retrying without fileformat")
+            retry_filter = create_vidstab_detect_filter(
+                strength=strength,
+                trf_path=str(trf_path),
+                include_fileformat=False,
+            )
+            retry_cmd = self.executor.build_vidstab_detect_command(
+                input_path=video_file.path,
+                video_filter=retry_filter,
+            )
+            self.executor.run_analysis(retry_cmd)
 
     def transcode_video(
         self,
