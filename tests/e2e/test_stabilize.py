@@ -7,6 +7,7 @@ vidstab 미설치 시 모듈 전체 스킵.
     uv run pytest tests/e2e/test_stabilize.py -v
 """
 
+import logging
 import shutil
 from pathlib import Path
 
@@ -60,8 +61,9 @@ class TestStabilization:
         e2e_output_dir: Path,
         e2e_db: Path,
         monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """stabilize_strength='heavy' → 출력 파일 존재."""
+        """stabilize_strength='heavy' → 실제 안정화 경로가 실행된다."""
         create_test_video(e2e_video_dir / "clip.mov", duration=3.0)
 
         args = make_pipeline_args(
@@ -73,10 +75,13 @@ class TestStabilization:
             stabilize_strength="heavy",
         )
 
-        result_path = run_pipeline(args)
+        with caplog.at_level(logging.INFO, logger="tubearchive.core.transcoder"):
+            result_path = run_pipeline(args)
 
         assert result_path.exists()
         assert result_path.stat().st_size > 0
+        assert "Vidstab: strength=heavy, crop=crop" in caplog.text
+        assert "Vidstab analysis failed, skipping stabilization" not in caplog.text
 
     def test_stabilize_crop_expand(
         self,

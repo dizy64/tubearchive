@@ -29,28 +29,24 @@ jobs:
         run: uv run pytest tests/unit/ -v --tb=short
 
   e2e-test:
-    name: E2E Tests (${{ matrix.shard }})
-    runs-on: macos-latest
+    name: E2E Tests (Linux Container, ${{ matrix.shard }})
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         shard: [shard1, shard2, shard3]
+    container:
+      image: ubuntu:24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Homebrew packages
-        uses: actions/cache@v4
-        id: cache-brew
-        with:
-          path: |
-            ~/Library/Caches/Homebrew/downloads
-            ~/Library/Caches/Homebrew/api
-          key: brew-ffmpeg-${{ runner.os }}-${{ runner.arch }}
-
       - name: Install ffmpeg with vidstab
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          brew tap homebrew-ffmpeg/ffmpeg
-          brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvidstab
+          apt-get update
+          apt-get install -y ffmpeg
+          ffmpeg -hide_banner -filters | grep -E "vidstabdetect|vidstabtransform"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -66,6 +62,48 @@ jobs:
 
       - name: Run E2E tests (shard)
         run: uv run pytest tests/e2e/ -v --tb=short -m "e2e_${{ matrix.shard }}"
+
+  e2e-macos-smoke:
+    name: E2E macOS Smoke (best effort)
+    runs-on: macos-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg (best effort)
+        run: |
+          brew tap homebrew-ffmpeg/ffmpeg || true
+          brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvidstab || brew install ffmpeg || true
+
+      - name: Check vidstab availability
+        id: vidstab-check
+        run: |
+          if ffmpeg -hide_banner -filters | grep -q "vidstabdetect"; then
+            echo "has_vidstab=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_vidstab=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::vidstab filter is unavailable on macOS runner; skipping stabilize smoke test."
+          fi
+
+      - name: Install uv
+        if: steps.vidstab-check.outputs.has_vidstab == 'true'
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        if: steps.vidstab-check.outputs.has_vidstab == 'true'
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        if: steps.vidstab-check.outputs.has_vidstab == 'true'
+        run: uv sync --all-extras --dev
+
+      - name: Run macOS stabilize smoke
+        if: steps.vidstab-check.outputs.has_vidstab == 'true'
+        run: uv run pytest tests/e2e/test_stabilize.py::TestStabilization::test_stabilize_pipeline -v --tb=short
 
   ruff-lint:
     name: Ruff Lint

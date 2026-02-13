@@ -622,6 +622,7 @@ def create_audio_filter_chain(
 def create_vidstab_detect_filter(
     strength: StabilizeStrength = StabilizeStrength.MEDIUM,
     trf_path: str = "",
+    include_fileformat: bool = True,
 ) -> str:
     """
     vidstab 분석 패스 필터 생성 (Pass 1).
@@ -629,14 +630,18 @@ def create_vidstab_detect_filter(
     Args:
         strength: 안정화 강도
         trf_path: transform 파일 저장 경로
+        include_fileformat: fileformat=ascii 옵션 포함 여부
 
     Returns:
         vidstabdetect 필터 문자열
     """
     params = _VIDSTAB_PARAMS[strength]
-    return (
+    base = (
         f"vidstabdetect=shakiness={params.shakiness}:accuracy={params.accuracy}:result={trf_path}"
     )
+    if include_fileformat:
+        return f"{base}:fileformat=ascii"
+    return base
 
 
 def create_vidstab_transform_filter(
