@@ -8,11 +8,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tubearchive.ffmpeg.thumbnail import (
+    YOUTUBE_THUMBNAIL_MAX_QUALITY,
+    YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES,
+    YOUTUBE_THUMBNAIL_MIN_HEIGHT,
+    YOUTUBE_THUMBNAIL_MIN_QUALITY,
+    YOUTUBE_THUMBNAIL_MIN_WIDTH,
+    _build_thumbnail_prepare_command,
+    _probe_image_size,
     build_thumbnail_command,
     calculate_thumbnail_timestamps,
     extract_thumbnails,
     generate_thumbnail_paths,
     parse_timestamp,
+    prepare_thumbnail_for_youtube,
 )
 
 
@@ -323,3 +331,200 @@ class TestExtractThumbnails:
         result = extract_thumbnails(video, timestamps=[10.0])
 
         assert result == []
+
+
+class TestPrepareThumbnailForYoutube:
+    """YouTube 썸네일 정규화 유틸."""
+
+    def test_build_thumbnail_prepare_command(self, tmp_path: Path) -> None:
+        """썸네일 변환 명령 생성."""
+        src = tmp_path / "thumb.jpg"
+        dst = tmp_path / "thumb_youtube.jpg"
+        cmd = _build_thumbnail_prepare_command(src, dst)
+
+        assert cmd[0] == "ffmpeg"
+        assert cmd[1] == "-y"
+        assert "-vf" not in cmd
+
+    def test_build_thumbnail_prepare_command_with_resize(self, tmp_path: Path) -> None:
+        """리사이즈 플래그 포함 시 aspect-ratio 보존 스케일 필터 사용."""
+        src = tmp_path / "thumb.jpg"
+        dst = tmp_path / "thumb_youtube.jpg"
+        cmd = _build_thumbnail_prepare_command(src, dst, resize_to_min_size=True)
+        scale_expr = (
+            "scale="
+            f"trunc(iw*max({YOUTUBE_THUMBNAIL_MIN_WIDTH}/iw\\,{YOUTUBE_THUMBNAIL_MIN_HEIGHT}/ih)/2)*2"
+            ":"
+            f"trunc(ih*max({YOUTUBE_THUMBNAIL_MIN_WIDTH}/iw\\,{YOUTUBE_THUMBNAIL_MIN_HEIGHT}/ih)/2)*2"
+        )
+
+        assert "-vf" in cmd
+        assert scale_expr in cmd
+
+    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    def test_probe_image_size(self, mock_run: MagicMock, tmp_path: Path) -> None:
+        """ffprobe 결과에서 width/height 추출."""
+        image = tmp_path / "image.jpg"
+        image.touch()
+
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout='{"streams":[{"codec_type":"video","width":1920,"height":1080}]}',
+        )
+
+        width, height = _probe_image_size(image)
+
+        assert width == 1920
+        assert height == 1080
+        assert mock_run.call_count == 1
+        assert mock_run.call_args[1]["timeout"] == 20
+
+    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    def test_probe_image_size_timeout(self, mock_run: MagicMock, tmp_path: Path) -> None:
+        """ffprobe timeout 시 RuntimeError."""
+        image = tmp_path / "image.jpg"
+        image.touch()
+
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="ffprobe", timeout=20)
+
+        with pytest.raises(RuntimeError, match="ffprobe timed out"):
+            _probe_image_size(image)
+
+    @patch("tubearchive.ffmpeg.thumbnail._probe_image_size")
+    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    def test_prepare_thumbnail_returns_original_when_compatible(
+        self,
+        mock_run: MagicMock,
+        mock_probe: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """이미지 조건 충족 시 원본 경로 반환."""
+        image = tmp_path / "image.jpg"
+        image.write_bytes(b"x" * 1024)
+        mock_probe.return_value = (1920, 1080)
+
+        result = prepare_thumbnail_for_youtube(image)
+
+        assert result == image
+        mock_run.assert_not_called()
+
+    @patch("tubearchive.ffmpeg.thumbnail._probe_image_size")
+    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    def test_prepare_thumbnail_reencodes_when_too_small(
+        self,
+        mock_run: MagicMock,
+        mock_probe: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """작은 이미지면 ffmpeg로 변환."""
+        image = tmp_path / "image.jpg"
+        image.write_bytes(b"x")
+        output = tmp_path / "image_youtube.jpg"
+
+        mock_probe.return_value = (640, 360)
+
+        def _run(_: list[str], **_kwargs: object) -> MagicMock:
+            output.write_bytes(b"prepared")
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = _run
+
+        result = prepare_thumbnail_for_youtube(image)
+
+        assert result == output
+        command = mock_run.call_args[0][0]
+        assert command[0] == "ffmpeg"
+        assert "-vf" in command
+        assert (
+            f"scale=trunc(iw*max({YOUTUBE_THUMBNAIL_MIN_WIDTH}/iw\\,{YOUTUBE_THUMBNAIL_MIN_HEIGHT}/ih)/2)*2:"
+            f"trunc(ih*max({YOUTUBE_THUMBNAIL_MIN_WIDTH}/iw\\,{YOUTUBE_THUMBNAIL_MIN_HEIGHT}/ih)/2)*2"
+            in command
+        )
+
+    @patch("tubearchive.ffmpeg.thumbnail._probe_image_size")
+    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    def test_prepare_thumbnail_retries_quality_when_too_large(
+        self,
+        mock_run: MagicMock,
+        mock_probe: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """크기 초과 시 품질을 늘려 재시도."""
+        image = tmp_path / "image.jpg"
+        image.write_bytes(b"x")
+        output = tmp_path / "image_youtube.jpg"
+
+        image.write_bytes(b"x" * (YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES + 1))
+        mock_probe.return_value = (1920, 1080)
+
+        call_count = 0
+
+        def _run(_: list[str], **_kwargs: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                output.write_bytes(b"x" * (YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES + 1))
+            else:
+                output.write_bytes(b"x" * (YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES - 1))
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = _run
+        result = prepare_thumbnail_for_youtube(image)
+
+        assert result == output
+        assert call_count == 2
+        assert output.stat().st_size <= YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES
+
+    @patch("tubearchive.ffmpeg.thumbnail._probe_image_size", return_value=(640, 360))
+    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    def test_prepare_thumbnail_raises_on_ffmpeg_error(
+        self,
+        mock_run: MagicMock,
+        _mock_probe: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """ffmpeg 실패 시 RuntimeError."""
+        image = tmp_path / "image.jpg"
+        image.write_bytes(b"x")
+
+        mock_run.return_value = MagicMock(returncode=1, stderr="ffmpeg failed")
+
+        with pytest.raises(RuntimeError, match="Failed to prepare thumbnail"):
+            prepare_thumbnail_for_youtube(image)
+
+    def test_prepare_thumbnail_rejects_unsupported_format(self, tmp_path: Path) -> None:
+        """지원하지 않는 썸네일 확장자."""
+        image = tmp_path / "image.gif"
+        image.write_text("gif")
+
+        with pytest.raises(ValueError, match="Unsupported thumbnail format"):
+            prepare_thumbnail_for_youtube(image)
+
+    @patch("tubearchive.ffmpeg.thumbnail._probe_image_size")
+    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    def test_prepare_thumbnail_raises_when_retries_exhausted(
+        self,
+        mock_run: MagicMock,
+        mock_probe: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """최대 품질까지 재시도해도 크기가 크면 오류."""
+        image = tmp_path / "image.jpg"
+        image.write_bytes(b"x" * (YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES + 1))
+        output = tmp_path / "image_youtube.jpg"
+
+        mock_probe.return_value = (1920, 1080)
+
+        def _run(_: list[str], **_kwargs: object) -> MagicMock:
+            output.write_bytes(b"x" * (YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES + 1))
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = _run
+
+        with pytest.raises(RuntimeError, match="Failed to prepare thumbnail"):
+            prepare_thumbnail_for_youtube(image)
+
+        assert not output.exists()  # 최종 실패 시 정리됨
+        assert mock_run.call_count == (
+            YOUTUBE_THUMBNAIL_MAX_QUALITY - YOUTUBE_THUMBNAIL_MIN_QUALITY + 1
+        )

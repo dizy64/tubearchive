@@ -325,6 +325,107 @@ class TestYouTubeUploader:
         body = call_args.kwargs.get("body") or call_args[1].get("body")
         assert body["status"]["privacyStatus"] == "unlisted"
 
+    def test_set_thumbnail_uploads_image(self, tmp_path: Path) -> None:
+        """썸네일 업로드 API 호출."""
+        from tubearchive.youtube.uploader import YouTubeUploader
+
+        original_thumbnail = tmp_path / "thumb.jpg"
+        original_thumbnail.write_bytes(b"original")
+        prepared_thumbnail = tmp_path / "thumb_youtube.jpg"
+        prepared_thumbnail.write_bytes(b"prepared")
+
+        mock_service = MagicMock()
+        mock_set = MagicMock()
+        mock_service.thumbnails.return_value.set.return_value = mock_set
+
+        uploader = YouTubeUploader(mock_service)
+
+        with (
+            patch(
+                "tubearchive.youtube.uploader.prepare_thumbnail_for_youtube",
+                return_value=prepared_thumbnail,
+            ),
+            patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload,
+        ):
+            mock_media_upload.return_value = MagicMock()
+            uploader.set_thumbnail("video123", original_thumbnail)
+
+        mock_service.thumbnails.return_value.set.assert_called_once()
+        call_kwargs = mock_service.thumbnails.return_value.set.call_args.kwargs
+        assert call_kwargs["videoId"] == "video123"
+        mock_set.execute.assert_called_once()
+
+    def test_set_thumbnail_cleans_up_generated_file(self, tmp_path: Path) -> None:
+        """생성된 썸네일은 업로드 후 정리된다."""
+        from tubearchive.youtube.uploader import YouTubeUploader
+
+        original_thumbnail = tmp_path / "thumb.jpg"
+        original_thumbnail.write_bytes(b"original")
+        prepared_thumbnail = tmp_path / "thumb_youtube.jpg"
+        prepared_thumbnail.write_bytes(b"prepared")
+
+        mock_service = MagicMock()
+        mock_set = MagicMock()
+        mock_service.thumbnails.return_value.set.return_value = mock_set
+
+        uploader = YouTubeUploader(mock_service)
+
+        with (
+            patch(
+                "tubearchive.youtube.uploader.prepare_thumbnail_for_youtube",
+                return_value=prepared_thumbnail,
+            ),
+            patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload,
+        ):
+            mock_media_upload.return_value = MagicMock()
+            uploader.set_thumbnail("video123", original_thumbnail)
+
+        assert not prepared_thumbnail.exists()
+
+    def test_set_thumbnail_requires_video_id(self, tmp_path: Path) -> None:
+        """video_id 누락 시 에러."""
+        from tubearchive.youtube.uploader import YouTubeUploader
+
+        mock_service = MagicMock()
+        uploader = YouTubeUploader(mock_service)
+
+        with pytest.raises(ValueError):
+            uploader.set_thumbnail("", tmp_path / "thumb.jpg")
+
+    def test_set_thumbnail_handles_api_error(self, tmp_path: Path) -> None:
+        """썸네일 API 에러 처리."""
+        from googleapiclient.errors import HttpError
+
+        from tubearchive.youtube.uploader import YouTubeUploader, YouTubeUploadError
+
+        original_thumbnail = tmp_path / "thumb.jpg"
+        original_thumbnail.write_bytes(b"original")
+        prepared_thumbnail = tmp_path / "thumb_youtube.jpg"
+        prepared_thumbnail.write_bytes(b"prepared")
+
+        mock_service = MagicMock()
+        mock_set = MagicMock()
+        mock_service.thumbnails.return_value.set.return_value = mock_set
+        mock_response = Mock()
+        mock_response.status = 403
+        mock_response.reason = "Forbidden"
+        mock_set.execute.side_effect = HttpError(mock_response, b"forbidden")
+
+        uploader = YouTubeUploader(mock_service)
+
+        with (
+            patch(
+                "tubearchive.youtube.uploader.prepare_thumbnail_for_youtube",
+                return_value=prepared_thumbnail,
+            ),
+            patch("tubearchive.youtube.uploader.MediaFileUpload"),
+            pytest.raises(YouTubeUploadError) as exc_info,
+        ):
+            uploader.set_thumbnail("video123", original_thumbnail)
+
+        assert "video123" in str(exc_info.value)
+        assert not prepared_thumbnail.exists()
+
 
 class TestYouTubeUploadError:
     """업로드 에러 처리 테스트."""

@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # 개발 환경 설정
-bash scripts/install-hooks.sh                                   # pre-commit hook 설치 (최초 1회)
+bash scripts/install-hooks.sh                                   # pre-commit + pre-push 훅 설치 (최초 1회)
 
 # 테스트
 uv run pytest tests/ -v                                         # 전체 (unit + e2e)
@@ -30,7 +30,31 @@ uv run ruff format tubearchive/ tests/
 # CLI 실행
 uv run tubearchive ~/Videos/
 uv run tubearchive --dry-run ~/Videos/
+```
 
+## AI 가드레일
+
+- 커밋 전 가드레일은 `pre-commit` 훅으로 실행한다.
+- `pre-commit`은 스테이징된 Python 파일을 대상으로 ruff lint/check, ruff format 체크, mypy, unit test만 빠르게 검증한다.
+- `pre-push` 훅은 푸시 전 단위 테스트만 실행한다.
+- 검증은 외부 판단이 아닌 테스트/스크립트 결과를 기준으로 한다.
+- 빠른 피드백을 위해 기능 변경 시 우선 관련 unit 테스트로 실패를 조기에 잡는다.
+
+### 실행 예시
+
+```bash
+# 훅 설치 (pre-commit + pre-push)
+bash scripts/install-hooks.sh
+
+# 수동 실행(개발자 선호 시)
+uv run ruff check tubearchive/ tests/
+uv run ruff format --check tubearchive/ tests/
+uv run mypy tubearchive/
+uv run pytest tests/unit/ -q
+uv run pytest tests/e2e/ -q                    # 전체 e2e (필요 시 수동 실행)
+```
+
+```bash
 # 오디오 처리
 uv run tubearchive --normalize-audio ~/Videos/      # EBU R128 loudnorm 2-pass
 uv run tubearchive --denoise ~/Videos/              # 오디오 노이즈 제거
@@ -372,7 +396,7 @@ tests/
     └── test_e2e.py
 ```
 - **단위 테스트** (`tests/unit/`): 외부 의존성 없이 실행 가능. CI에서 ubuntu-latest
-- **E2E 테스트** (`tests/e2e/`): ffmpeg + ffprobe 필요. CI에서 macos-latest (VideoToolbox)
+- **E2E 테스트** (`tests/e2e/`): ffmpeg + ffprobe 필요. GitHub PR 워크플로에서만 실행.
 - 새 테스트 추가 시 위 기준에 맞는 디렉토리에 배치
 - 모든 테스트는 임시 DB/디렉토리 사용
 

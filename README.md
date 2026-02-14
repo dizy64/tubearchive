@@ -323,7 +323,20 @@ tubearchive --thumbnail ~/Videos/
 
 # 특정 시점에서 썸네일 추출
 tubearchive --thumbnail --thumbnail-at 00:01:30 --thumbnail-at 00:03:00 ~/Videos/
+
+# 업로드 시 썸네일 직접 지정
+tubearchive --set-thumbnail /path/to/cover.jpg --upload --thumbnail ~/Videos/
+
+# 병합 없이 파일 업로드 + 썸네일 지정
+tubearchive --set-thumbnail /path/to/cover.jpg --upload-only merged_output.mp4
 ```
+
+`--set-thumbnail`은 YouTube 업로드에서 우선 사용됩니다. 값이 없으면 `--thumbnail`로 생성한 썸네일을 다음 순서로 선택합니다.
+
+- 생성된 썸네일이 1개면 자동 사용
+- 생성된 썸네일이 여러 개면 업로드 단계에서 0~N 선택 대화형 입력
+
+YouTube는 썸네일 규격을 `최소 1280x720`, `최대 2MB`로 요구합니다. 조건 미달/초과 시 업로드 전에 자동으로 `*_youtube.jpg`로 재인코딩합니다.
 
 ### 원본 파일 아카이브
 
@@ -618,6 +631,9 @@ tubearchive ~/Videos/2024-01-15\ 도쿄\ 여행/ --upload
 # 방법 2: 기존 파일 업로드 (병합 없이)
 tubearchive --upload-only merged_output.mp4
 
+# 썸네일을 지정해 업로드
+tubearchive --set-thumbnail /path/to/cover.jpg --upload-only merged_output.mp4
+
 # 제목 지정
 tubearchive --upload-only video.mp4 --upload-title "나의 여행 영상"
 
@@ -635,6 +651,7 @@ tubearchive --split-duration 1h --upload ~/Videos/
 | `--upload` | 병합 완료 후 YouTube에 업로드 | - |
 | `--upload-only FILE` | 지정된 파일을 YouTube에 업로드 (병합 없이) | - |
 | `--upload-title TITLE` | 영상 제목 | 파일명 또는 디렉토리명 |
+| `--set-thumbnail PATH` | 업로드 썸네일 이미지 경로 (jpg/jpeg/png) | - |
 | `--upload-privacy` | 공개 설정 (public/unlisted/private) | unlisted |
 | `--upload-chunk MB` | 업로드 청크 크기 MB (1-256) | 32 |
 | `--playlist ID` | 업로드 후 플레이리스트에 추가 (여러 번 사용 가능) | - |

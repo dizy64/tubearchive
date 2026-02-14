@@ -3,6 +3,7 @@
 영상에서 대표 프레임을 추출하여 JPEG 썸네일을 생성한다.
 """
 
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -12,6 +13,194 @@ from tubearchive.core.detector import detect_metadata
 logger = logging.getLogger(__name__)
 
 DEFAULT_PERCENTAGES: tuple[float, ...] = (0.10, 0.33, 0.50)
+YOUTUBE_THUMBNAIL_MIN_WIDTH = 1280
+YOUTUBE_THUMBNAIL_MIN_HEIGHT = 720
+YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES = 2 * 1024 * 1024
+YOUTUBE_THUMBNAIL_MIN_QUALITY = 2
+YOUTUBE_THUMBNAIL_MAX_QUALITY = 31
+
+
+def _probe_image_size(
+    image_path: Path,
+    ffprobe_path: str = "ffprobe",
+    timeout_seconds: float = 20,
+) -> tuple[int, int]:
+    """썸네일 이미지의 가로/세로를 ffprobe로 조회한다.
+
+    Args:
+        image_path: 이미지 파일 경로
+        ffprobe_path: ffprobe 실행 파일 경로
+
+    Returns:
+        (width, height)
+
+    Raises:
+        RuntimeError: ffprobe 실패 또는 메타데이터 누락
+    """
+    try:
+        result = subprocess.run(
+            [
+                ffprobe_path,
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                str(image_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except OSError as e:
+        raise RuntimeError(f"Failed to run ffprobe: {e}") from e
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"ffprobe timed out: {e}") from e
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to probe image metadata: {result.stderr}")
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+        streams = payload.get("streams", [])
+        stream = next(
+            (s for s in streams if s.get("codec_type") == "video"),
+            None,
+        )
+        if stream is None:
+            raise ValueError("No video stream found")
+
+        width = int(stream["width"])
+        height = int(stream["height"])
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"Failed to parse image metadata: {e}") from e
+
+    if width <= 0 or height <= 0:
+        raise RuntimeError(f"Invalid image size: {width}x{height}")
+
+    return width, height
+
+
+def _build_thumbnail_prepare_command(
+    source: Path,
+    output: Path,
+    ffmpeg_path: str = "ffmpeg",
+    quality: int = 2,
+    resize_to_min_size: bool = False,
+) -> list[str]:
+    """YouTube 업로드용 썸네일 변환 ffmpeg 명령을 만든다."""
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(source),
+    ]
+
+    if resize_to_min_size:
+        command.extend(
+            [
+                "-vf",
+                (
+                    "scale="
+                    f"trunc(iw*max({YOUTUBE_THUMBNAIL_MIN_WIDTH}/iw\\,"
+                    f"{YOUTUBE_THUMBNAIL_MIN_HEIGHT}/ih)/2)*2"
+                    ":"
+                    f"trunc(ih*max({YOUTUBE_THUMBNAIL_MIN_WIDTH}/iw\\,"
+                    f"{YOUTUBE_THUMBNAIL_MIN_HEIGHT}/ih)/2)*2"
+                ),
+            ]
+        )
+
+    command.extend(
+        [
+            "-q:v",
+            str(quality),
+            str(output),
+        ]
+    )
+    return command
+
+
+def prepare_thumbnail_for_youtube(
+    thumbnail_path: Path,
+    ffmpeg_path: str = "ffmpeg",
+    ffprobe_path: str = "ffprobe",
+) -> Path:
+    """YouTube 썸네일 업로드 조건에 맞게 이미지를 정규화한다.
+
+    - 확장자: JPG/JPEG/PNG 허용
+    - 최소 크기: 1280x720 미만이면 리사이즈
+    - 최대 크기: 2MB 초과하면 재인코딩
+
+    조건을 만족하면 원본 경로를 그대로 반환하고,
+    조건 미충족 시 `_youtube` 접미사가 붙은 JPEG 파일로 변환 후 반환한다.
+    """
+    source = thumbnail_path.expanduser().resolve()
+
+    if not source.exists():
+        raise FileNotFoundError(f"Thumbnail file not found: {thumbnail_path}")
+
+    suffix = source.suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png"}:
+        raise ValueError(f"Unsupported thumbnail format: {suffix}")
+
+    width, height = _probe_image_size(source, ffprobe_path=ffprobe_path)
+    source_is_too_large = source.stat().st_size > YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES
+    needs_resize = width < YOUTUBE_THUMBNAIL_MIN_WIDTH or height < YOUTUBE_THUMBNAIL_MIN_HEIGHT
+
+    if not needs_resize and not source_is_too_large:
+        return source
+
+    output = source.with_name(f"{source.stem}_youtube.jpg")
+    quality = YOUTUBE_THUMBNAIL_MIN_QUALITY
+
+    while quality <= YOUTUBE_THUMBNAIL_MAX_QUALITY:
+        if output.exists():
+            output.unlink(missing_ok=True)
+
+        command = _build_thumbnail_prepare_command(
+            source,
+            output,
+            ffmpeg_path=ffmpeg_path,
+            quality=quality,
+            resize_to_min_size=needs_resize,
+        )
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+        except OSError as e:
+            raise RuntimeError(f"Failed to run ffmpeg: {e}") from e
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"Thumbnail conversion timed out: {e}") from e
+
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to prepare thumbnail: {result.stderr}")
+
+        if not output.exists():
+            raise RuntimeError(f"Failed to create thumbnail: {output}")
+
+        if output.stat().st_size <= YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES:
+            return output
+
+        logger.warning(
+            "Thumbnail conversion output too large (size=%s bytes), retrying with lower quality=%s",
+            output.stat().st_size,
+            quality + 1,
+        )
+        quality += 1
+
+    if output.exists():
+        output.unlink(missing_ok=True)
+
+    raise RuntimeError(
+        f"Failed to prepare thumbnail: size remains above {YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES} bytes."
+    )
 
 
 def calculate_thumbnail_timestamps(

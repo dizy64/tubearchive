@@ -102,6 +102,8 @@ from tubearchive.utils.summary_generator import generate_single_file_description
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_THUMBNAIL_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png"})
+
 
 # NOTE: STATUS_ICONS, CATALOG_STATUS_SENTINEL, format_duration, normalize_status_filter 등
 #       카탈로그/상태 관련 상수와 유틸리티는 tubearchive.commands.catalog에서 import합니다.
@@ -265,6 +267,8 @@ class ValidatedArgs:
     thumbnail: bool = False
     thumbnail_timestamps: list[str] | None = None
     thumbnail_quality: int = 2
+    set_thumbnail: Path | None = None
+    generated_thumbnail_paths: list[Path] | None = None
     detect_silence: bool = False
     trim_silence: bool = False
     silence_threshold: str = "-30dB"
@@ -709,6 +713,14 @@ def create_parser() -> argparse.ArgumentParser:
         help="썸네일 JPEG 품질 (1-31, 낮을수록 고품질, 기본: 2)",
     )
 
+    parser.add_argument(
+        "--set-thumbnail",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="YouTube 업로드 시 사용할 썸네일 이미지 경로 (JPG/PNG)",
+    )
+
     # 영상 분할 옵션
     parser.add_argument(
         "--split-duration",
@@ -973,6 +985,36 @@ def parse_schedule_datetime(schedule_str: str) -> str:
     return parsed_dt.isoformat()
 
 
+def _resolve_set_thumbnail_path(
+    set_thumbnail_arg: str | Path | None,
+) -> Path | None:
+    """`--set-thumbnail` 입력값을 정규화하고 검증한다.
+
+    - 경로 확장: `~` 전개 + `resolve()`
+    - 존재 여부 검증
+    - 포맷 검증 (`.jpg`, `.jpeg`, `.png`)
+
+    Args:
+        set_thumbnail_arg: CLI 입력값(`--set-thumbnail`)
+
+    Returns:
+        검증된 Path 또는 미지정 시 None
+    """
+    if not set_thumbnail_arg:
+        return None
+
+    set_thumbnail = Path(set_thumbnail_arg).expanduser().resolve()
+    if not set_thumbnail.is_file():
+        raise FileNotFoundError(f"Thumbnail file not found: {set_thumbnail_arg}")
+
+    if set_thumbnail.suffix.lower() not in SUPPORTED_THUMBNAIL_EXTENSIONS:
+        raise ValueError(
+            f"Unsupported thumbnail format: {set_thumbnail.suffix} (supported: .jpg, .jpeg, .png)"
+        )
+
+    return set_thumbnail
+
+
 def validate_args(
     args: argparse.Namespace,
     device_luts: dict[str, str] | None = None,
@@ -1064,6 +1106,8 @@ def validate_args(
     thumbnail = getattr(args, "thumbnail", False)
     thumbnail_at: list[str] | None = getattr(args, "thumbnail_at", None)
     thumbnail_quality: int = getattr(args, "thumbnail_quality", 2)
+    set_thumbnail_arg = getattr(args, "set_thumbnail", None)
+    set_thumbnail = _resolve_set_thumbnail_path(set_thumbnail_arg)
 
     # --thumbnail-at만 지정해도 암묵적 활성화
     if thumbnail_at and not thumbnail:
@@ -1213,6 +1257,8 @@ def validate_args(
         thumbnail=thumbnail,
         thumbnail_timestamps=thumbnail_at,
         thumbnail_quality=thumbnail_quality,
+        set_thumbnail=set_thumbnail,
+        generated_thumbnail_paths=None,
         detect_silence=detect_silence,
         trim_silence=trim_silence,
         silence_threshold=silence_threshold,
@@ -1980,6 +2026,7 @@ def run_pipeline(
     # 4.5 썸네일 생성 (비필수)
     if validated_args.thumbnail:
         thumbnail_paths = _generate_thumbnails(final_path, validated_args)
+        validated_args.generated_thumbnail_paths = thumbnail_paths
         if thumbnail_paths:
             print(f"\n🖼️  썸네일 {len(thumbnail_paths)}장 생성:")
             for tp in thumbnail_paths:
@@ -2392,6 +2439,7 @@ def upload_to_youtube(
     merge_job_id: int | None = None,
     playlist_ids: list[str] | None = None,
     chunk_mb: int | None = None,
+    thumbnail: Path | None = None,
 ) -> str | None:
     """
     영상을 YouTube에 업로드.
@@ -2405,6 +2453,7 @@ def upload_to_youtube(
         merge_job_id: DB에 저장할 MergeJob ID
         playlist_ids: 추가할 플레이리스트 ID 리스트 (None이면 추가 안 함)
         chunk_mb: 업로드 청크 크기 MB (None이면 환경변수/기본값)
+        thumbnail: 썸네일 이미지 경로
 
     Returns:
         업로드된 YouTube 영상 ID. 실패 시 None.
@@ -2505,6 +2554,14 @@ def upload_to_youtube(
             publish_at=publish_at,
             on_progress=on_progress,
         )
+
+        if thumbnail is not None:
+            try:
+                uploader.set_thumbnail(result.video_id, thumbnail)
+                print("🖼️  썸네일 업로드 완료")
+            except Exception as e:
+                logger.warning(f"Failed to set thumbnail for {result.video_id}: {e}")
+                print(f"⚠️  썸네일 업로드 실패: {e}")
 
         print("\n✅ YouTube 업로드 완료!")
         print(f"🎬 URL: {result.url}")
@@ -2715,6 +2772,39 @@ def _interactive_select(items: Sequence[object], prompt: str) -> int | None:
         return None
 
 
+def _resolve_upload_thumbnail(
+    explicit_thumbnail: Path | None,
+    generated_thumbnail_paths: list[Path] | None = None,
+) -> Path | None:
+    """업로드용 썸네일 경로를 결정한다.
+
+    우선순위:
+    1. --set-thumbnail 지정값
+    2. 생성된 썸네일이 1개면 자동 사용
+    3. 생성된 썸네일이 여러 개면 인터랙티브 선택
+
+    선택을 건너뛰면 None을 반환한다.
+    """
+    if explicit_thumbnail is not None:
+        return explicit_thumbnail
+
+    if not generated_thumbnail_paths:
+        return None
+
+    if len(generated_thumbnail_paths) == 1:
+        return generated_thumbnail_paths[0]
+
+    print("\n썸네일을 선택하세요 (0: 건너뛰기).")
+    for i, path in enumerate(generated_thumbnail_paths, start=1):
+        size_mb = path.stat().st_size / (1024 * 1024)
+        print(f"  {i}. {path.name} ({size_mb:.1f}MB)")
+
+    selected = _interactive_select(generated_thumbnail_paths, "선택: ")
+    if selected is None:
+        return None
+    return generated_thumbnail_paths[selected]
+
+
 def cmd_reset_build(path_arg: str) -> None:
     """``--reset-build`` 옵션 처리.
 
@@ -2910,6 +3000,9 @@ def cmd_upload_only(args: argparse.Namespace) -> None:
     if hasattr(args, "schedule") and args.schedule:
         publish_at = parse_schedule_datetime(args.schedule)
 
+    set_thumbnail = getattr(args, "set_thumbnail", None)
+    set_thumbnail_path = _resolve_set_thumbnail_path(set_thumbnail)
+
     # 업로드 실행
     upload_to_youtube(
         file_path=file_path,
@@ -2920,6 +3013,7 @@ def cmd_upload_only(args: argparse.Namespace) -> None:
         merge_job_id=merge_job_id,
         playlist_ids=playlist_ids,
         chunk_mb=args.upload_chunk,
+        thumbnail=set_thumbnail_path,
     )
 
 
@@ -3098,6 +3192,7 @@ def _upload_split_files(
     chunk_mb: int | None,
     split_job_id: int | None = None,
     publish_at: str | None = None,
+    thumbnail: Path | None = None,
 ) -> None:
     """분할 파일을 순차적으로 YouTube에 업로드한다.
 
@@ -3114,6 +3209,7 @@ def _upload_split_files(
         chunk_mb: 업로드 청크 크기 MB
         split_job_id: SplitJob DB ID (파트별 youtube_id 저장용)
         publish_at: 예약 공개 시간 (ISO 8601 형식, 설정 시 privacy는 private로 자동 변경)
+        thumbnail: 썸네일 이미지 경로
     """
     from tubearchive.utils.summary_generator import (
         generate_split_youtube_description,
@@ -3167,6 +3263,7 @@ def _upload_split_files(
                 merge_job_id=None,
                 playlist_ids=playlist_ids,
                 chunk_mb=chunk_mb,
+                thumbnail=thumbnail,
             )
             # 파트별 youtube_id를 split_job에 저장
             if video_id and split_job_id is not None:
@@ -3250,6 +3347,8 @@ def _upload_after_pipeline(
     args: argparse.Namespace,
     notifier: Notifier | None = None,
     publish_at: str | None = None,
+    generated_thumbnail_paths: list[Path] | None = None,
+    explicit_thumbnail: Path | None = None,
 ) -> None:
     """파이프라인 완료 후 YouTube 업로드를 수행한다.
 
@@ -3261,8 +3360,15 @@ def _upload_after_pipeline(
         args: 원본 CLI 인자 (playlist, upload_privacy, upload_chunk 등)
         notifier: 알림 오케스트레이터 (None이면 알림 비활성화)
         publish_at: 예약 공개 시간 (이미 검증된 값, 재파싱하지 않음)
+        generated_thumbnail_paths: 썸네일 후보 경로 목록 (생성된 썸네일)
+        explicit_thumbnail: --set-thumbnail에서 지정한 썸네일 경로
     """
     print("\n📤 YouTube 업로드 시작...")
+
+    thumbnail = _resolve_upload_thumbnail(
+        explicit_thumbnail=explicit_thumbnail,
+        generated_thumbnail_paths=generated_thumbnail_paths,
+    )
 
     merge_job_id = None
     title = None
@@ -3318,6 +3424,7 @@ def _upload_after_pipeline(
             chunk_mb=args.upload_chunk,
             split_job_id=split_job_id,
             publish_at=publish_at,
+            thumbnail=thumbnail,
         )
     else:
         upload_to_youtube(
@@ -3329,6 +3436,7 @@ def _upload_after_pipeline(
             merge_job_id=merge_job_id,
             playlist_ids=playlist_ids,
             chunk_mb=args.upload_chunk,
+            thumbnail=thumbnail,
         )
 
     # 알림: 업로드 완료
@@ -3529,7 +3637,12 @@ def main() -> None:
 
         if validated_args.upload:
             _upload_after_pipeline(
-                output_path, args, notifier=notifier, publish_at=validated_args.schedule
+                output_path,
+                args,
+                notifier=notifier,
+                publish_at=validated_args.schedule,
+                generated_thumbnail_paths=validated_args.generated_thumbnail_paths,
+                explicit_thumbnail=validated_args.set_thumbnail,
             )
 
     except FileNotFoundError as e:

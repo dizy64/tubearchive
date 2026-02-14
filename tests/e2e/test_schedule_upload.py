@@ -115,8 +115,13 @@ class TestScheduleUploadIntegration:
         e2e_output_dir: Path,
         future_schedule: str,
     ) -> None:
-        """--upload --schedule 옵션과 함께 파이프라인 실행."""
-        from tubearchive.cli import create_parser, run_pipeline, validate_args
+        """--upload --schedule에서 업로드 예약 시각 전달을 검증."""
+        from tubearchive.cli import (
+            _upload_after_pipeline,
+            create_parser,
+            run_pipeline,
+            validate_args,
+        )
 
         # Mock 설정
         mock_upload.return_value = UploadResult.from_video_id(
@@ -149,9 +154,19 @@ class TestScheduleUploadIntegration:
         # 파이프라인 실행 (병합까지)
         output_path = run_pipeline(validated_args)
 
+        _upload_after_pipeline(
+            output_path=output_path,
+            args=args,
+            publish_at=validated_args.schedule,
+            generated_thumbnail_paths=validated_args.generated_thumbnail_paths,
+            explicit_thumbnail=validated_args.set_thumbnail,
+        )
+
         # 병합 파일 생성 확인
         assert output_path.exists()
         assert output_path.stat().st_size > 0
+        assert mock_upload.call_count == 1
+        assert mock_upload.call_args.kwargs["publish_at"] == future_schedule
 
     @patch("tubearchive.youtube.auth.get_authenticated_service")
     @patch("tubearchive.youtube.auth.check_auth_status")
@@ -213,6 +228,52 @@ class TestScheduleUploadIntegration:
         mock_uploader.upload.assert_called_once()
         call_kwargs = mock_uploader.upload.call_args.kwargs
         assert call_kwargs["publish_at"] == future_schedule
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    def test_upload_uses_set_thumbnail_option(
+        self,
+        mock_upload: MagicMock,
+        test_videos_for_upload: Path,
+        e2e_output_dir: Path,
+    ) -> None:
+        """--set-thumbnail 지정 시 업로드 요청 인자에 썸네일 경로가 전달된다."""
+        from tubearchive.cli import (
+            _upload_after_pipeline,
+            create_parser,
+            run_pipeline,
+            validate_args,
+        )
+
+        mock_upload.return_value = None
+        output_file = e2e_output_dir / "merged.mp4"
+        thumbnail = e2e_output_dir / "cover.jpg"
+        thumbnail.write_bytes(b"fake jpg")
+
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                str(test_videos_for_upload),
+                "--output",
+                str(output_file),
+                "--upload",
+                "--set-thumbnail",
+                str(thumbnail),
+            ]
+        )
+        validated_args = validate_args(args)
+        output_path = run_pipeline(validated_args)
+        _upload_after_pipeline(
+            output_path=output_path,
+            args=args,
+            explicit_thumbnail=validated_args.set_thumbnail,
+        )
+
+        assert output_path == output_file
+        assert output_path.exists()
+
+        mock_upload.assert_called_once()
+        call_kwargs = mock_upload.call_args.kwargs
+        assert call_kwargs["thumbnail"] == thumbnail
 
     def test_schedule_without_upload_works(
         self,

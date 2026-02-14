@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
+from tubearchive.ffmpeg.thumbnail import prepare_thumbnail_for_youtube
+
 if TYPE_CHECKING:
     from googleapiclient._apis.youtube.v3 import YouTubeResource
 
@@ -416,6 +418,39 @@ class YouTubeUploader:
         if publish_at:
             logger.info(f"Scheduled to publish at: {publish_at}")
         return result
+
+    def set_thumbnail(self, video_id: str, thumbnail_path: Path) -> None:
+        """영상 썸네일을 업로드한다.
+
+        Args:
+            video_id: 대상 YouTube 영상 ID
+            thumbnail_path: 썸네일 이미지 경로
+        """
+        if not video_id:
+            raise ValueError("video_id is required")
+
+        prepared_thumbnail = prepare_thumbnail_for_youtube(thumbnail_path)
+
+        mimetype = "image/png" if prepared_thumbnail.suffix.lower() == ".png" else "image/jpeg"
+        media = MediaFileUpload(
+            str(prepared_thumbnail),
+            mimetype=mimetype,
+            resumable=False,
+        )
+
+        try:
+            request = self.service.thumbnails().set(
+                videoId=video_id,
+                media_body=media,
+            )
+            request.execute()
+        except HttpError as e:
+            raise YouTubeUploadError(
+                f"Failed to set thumbnail for video {video_id}: {e.resp.status} {e.resp.reason}"
+            ) from e
+        finally:
+            if prepared_thumbnail != thumbnail_path and prepared_thumbnail.exists():
+                prepared_thumbnail.unlink(missing_ok=True)
 
     def _execute_upload(
         self,
