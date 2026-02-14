@@ -297,6 +297,7 @@ class ValidatedArgs:
     device_luts: dict[str, str] | None = None
     notify: bool = False
     schedule: str | None = None
+    quality_report: bool = False
 
 
 @dataclass(frozen=True)
@@ -721,6 +722,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="YouTube 업로드 시 사용할 썸네일 이미지 경로 (JPG/PNG)",
     )
 
+    parser.add_argument(
+        "--quality-report",
+        action="store_true",
+        help="트랜스코딩 결과 SSIM/PSNR/VMAF 지표 출력 (가능한 필터만 계산)",
+    )
+
     # 영상 분할 옵션
     parser.add_argument(
         "--split-duration",
@@ -1117,6 +1124,9 @@ def validate_args(
     if not 1 <= thumbnail_quality <= 31:
         raise ValueError(f"Thumbnail quality must be 1-31, got: {thumbnail_quality}")
 
+    # 화질 리포트 옵션
+    quality_report = bool(getattr(args, "quality_report", False))
+
     # 무음 관련 옵션
     detect_silence = getattr(args, "detect_silence", False)
     trim_silence = getattr(args, "trim_silence", False)
@@ -1285,6 +1295,7 @@ def validate_args(
         auto_lut=auto_lut,
         lut_before_hdr=lut_before_hdr,
         device_luts=device_luts if device_luts else None,
+        quality_report=quality_report,
         notify=bool(getattr(args, "notify", False)) or get_default_notify(),
         schedule=schedule,
     )
@@ -2010,6 +2021,10 @@ def run_pipeline(
         shutil.move(str(bgm_mixed_path), str(final_path))
         logger.info(f"BGM mixing applied: {final_path}")
 
+    # 4.1 화질 리포트 출력 (선택)
+    if validated_args.quality_report:
+        _print_quality_report(video_files, results)
+
     # 4. DB 저장 및 Summary 생성
     video_ids = [r.video_id for r in results]
     video_clips = [r.clip_info for r in results]
@@ -2271,6 +2286,41 @@ def _generate_thumbnails(
     except Exception:
         logger.warning("Failed to generate thumbnails", exc_info=True)
         return []
+
+
+def _print_quality_report(
+    video_files: list[VideoFile],
+    results: list[TranscodeResult],
+) -> None:
+    """트랜스코딩 전/후 SSIM/PSNR/VMAF 지표를 출력한다."""
+    from tubearchive.core.quality import generate_quality_reports
+
+    pairs = [
+        (source.path, result.output_path)
+        for source, result in zip(video_files, results, strict=True)
+    ]
+    reports = generate_quality_reports(pairs)
+    if not reports:
+        print("\n🔬 화질 리포트: 계산 대상 없음")
+        return
+
+    print("\n🔬 화질 리포트:")
+    for report in reports:
+        print(f"\n  - 원본: {report.source_path.name}")
+        print(f"    결과: {report.output_path.name}")
+        if report.ssim is not None:
+            print(f"    SSIM: {report.ssim:.4f}")
+        if report.psnr is not None:
+            print(f"    PSNR: {report.psnr:.4f} dB")
+        if report.vmaf is not None:
+            print(f"    VMAF: {report.vmaf:.4f}")
+
+        if report.unavailable:
+            missing = ", ".join(sorted(report.unavailable))
+            print(f"    미지원/실패 지표: {missing}")
+        if report.errors:
+            for err in report.errors:
+                print(f"    경고: {err}")
 
 
 def _generate_timelapse(

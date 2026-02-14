@@ -191,6 +191,20 @@ class TestCreateParser:
 
         assert args.set_thumbnail is None
 
+    def test_parses_quality_report_flag(self) -> None:
+        """--quality-report 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--quality-report"])
+
+        assert args.quality_report is True
+
+    def test_quality_report_default_is_false(self) -> None:
+        """--quality-report 미지정 시 False."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.quality_report is False
+
     def test_parses_config_option(self) -> None:
         """--config 옵션."""
         parser = create_parser()
@@ -567,6 +581,39 @@ class TestValidateArgs:
         result = validate_args(args)
 
         assert result.output == tmp_path / "output.mp4"
+
+    def test_quality_report_default_is_false(self) -> None:
+        """--quality-report 미지정 시 False."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+        )
+
+        result = validate_args(args)
+
+        assert result.quality_report is False
+
+    def test_quality_report_true_enables_reporting(self) -> None:
+        """--quality-report True가 전달되면 ValidatedArgs에 반영."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            quality_report=True,
+        )
+
+        result = validate_args(args)
+
+        assert result.quality_report is True
 
     def test_denoise_level_enables_denoise(self, tmp_path: Path) -> None:
         """--denoise-level 지정 시 denoise 자동 활성화."""

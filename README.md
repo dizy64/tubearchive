@@ -219,6 +219,17 @@ tubearchive --trim-silence ~/Videos/
 tubearchive --trim-silence --silence-threshold -35dB --silence-duration 3.0 ~/Videos/
 ```
 
+### 화질 지표 리포트
+
+트랜스코딩 전/후 품질을 SSIM/PSNR/VMAF로 출력합니다.
+
+```bash
+# 트랜스코딩 후 지표(가능한 필터만) 출력
+tubearchive --quality-report ~/Videos/
+```
+
+지원되지 않는 필터는 실패하지 않고 미지원 항목으로 표시되며, 파이프라인은 계속 진행됩니다.
+
 ### 영상 안정화
 
 vidstab 2-pass 기반 손떨림 보정. 트랜스코딩 시간이 증가합니다.

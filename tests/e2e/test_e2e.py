@@ -193,6 +193,42 @@ class TestTranscodePipeline:
         assert int(video_stream["width"]) == 3840
         assert int(video_stream["height"]) == 2160
 
+    def test_quality_report_printed(
+        self,
+        single_landscape_video: Path,
+        e2e_output_dir: Path,
+        e2e_db: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--quality-report 사용 시 화질 지표 리포트가 출력된다."""
+        monkeypatch.setenv("TUBEARCHIVE_DB_PATH", str(e2e_db))
+
+        output_file = e2e_output_dir / "quality_report.mp4"
+        args = ValidatedArgs(
+            targets=[single_landscape_video],
+            output=output_file,
+            output_dir=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            quality_report=True,
+        )
+
+        result_path = run_pipeline(args)
+
+        assert result_path.exists()
+        captured = capsys.readouterr()
+        assert "화질 리포트" in captured.out
+        assert "원본:" in captured.out
+        assert "결과:" in captured.out
+        assert (
+            "SSIM" in captured.out
+            or "PSNR" in captured.out
+            or "VMAF" in captured.out
+            or "미지원/실패 지표" in captured.out
+        )
+
 
 class TestResumeAndRerun:
     """Resume 및 재실행 시나리오 테스트."""
