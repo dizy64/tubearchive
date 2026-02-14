@@ -335,7 +335,9 @@ class TestApplyConfigToEnv:
             for key in env_keys:
                 os.environ.pop(key, None)
                 if saved[key] is not None:
-                    os.environ[key] = saved[key]
+                    saved_value = saved[key]
+                    assert saved_value is not None
+                    os.environ[key] = saved_value
 
     def test_preserves_existing_env(self) -> None:
         """기존 환경변수 보존 (config 값으로 덮어쓰지 않음)."""
@@ -512,7 +514,9 @@ denoise_level = "extreme"
             for k in env_keys:
                 os.environ.pop(k, None)
                 if saved[k] is not None:
-                    os.environ[k] = saved[k]
+                    saved_value = saved[k]
+                    assert saved_value is not None
+                    os.environ[k] = saved_value
 
     def test_denoise_env_preserves_existing(self) -> None:
         """기존 환경변수 미덮어쓰기."""
@@ -770,7 +774,7 @@ on_error = "/tmp/error.sh"
 
     def test_hook_timeout_invalid_type_uses_default(self, tmp_path: Path) -> None:
         """timeout_sec가 숫자 아님/비정상 값이면 기본값을 사용한다."""
-        for label, value in ("string", '"120"'), ("nonnumeric", "abc"), ("negative", "-1"):
+        for label, value in ("string", '"120"'), ("nonnumeric", "true"), ("negative", "-1"):
             config_file = tmp_path / f"config_{label}.toml"
             config_file.write_text(
                 f"""\

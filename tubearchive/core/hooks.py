@@ -58,16 +58,13 @@ def run_hooks(
         context: 훅 실행 컨텍스트.
         timeout_sec: 훅 기본 타임아웃(초). None이면 설정값 사용.
     """
-    if event == "on_transcode":
-        commands = hooks.on_transcode
-    elif event == "on_merge":
-        commands = hooks.on_merge
-    elif event == "on_upload":
-        commands = hooks.on_upload
-    elif event == "on_error":
-        commands = hooks.on_error
-    else:
+    if event not in ("on_transcode", "on_merge", "on_upload", "on_error"):
         logger.warning("알 수 없는 훅 이벤트: %s", event)
+        return
+
+    commands = getattr(hooks, event, ())
+    if not isinstance(commands, tuple):
+        logger.warning("훅 설정의 이벤트 값이 비정상입니다: %s", event)
         return
 
     if not commands:
@@ -83,12 +80,23 @@ def run_hooks(
             if not cmd:
                 continue
 
-            subprocess.run(
+            result = subprocess.run(
                 cmd,
                 env=env,
                 timeout=effective_timeout,
                 check=False,
             )
+            if result.returncode != 0:
+                logger.warning(
+                    "훅 실행 실패(event=%s command=%s): returncode=%s",
+                    event,
+                    command,
+                    result.returncode,
+                )
+                if result.stdout:
+                    logger.warning("훅 stdout: %s", result.stdout)
+                if result.stderr:
+                    logger.warning("훅 stderr: %s", result.stderr)
         except subprocess.TimeoutExpired as exc:
             logger.warning("훅 타임아웃(event=%s, timeout=%ss): %s", event, effective_timeout, exc)
         except Exception:

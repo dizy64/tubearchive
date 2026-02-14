@@ -3654,10 +3654,10 @@ def main() -> None:
     config_path = Path(args.config) if args.config else None
     config = load_config(config_path)
     apply_config_to_env(config)
+    setup_logging(args.verbose)
 
     # --notify-test 처리 (서브커맨드 전)
     if getattr(args, "notify_test", False):
-        setup_logging(args.verbose)
         from tubearchive.notification import Notifier as _Notifier
 
         test_notifier = _Notifier(config.notification)
@@ -3684,8 +3684,6 @@ def main() -> None:
             context=HookContext(),
         )
         return
-
-    setup_logging(args.verbose)
 
     notifier: Notifier | None = None
     validated_args: ValidatedArgs | None = None

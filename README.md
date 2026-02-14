@@ -481,7 +481,7 @@ tubearchive --run-hook on_upload --config /path/to/config.toml
 훅 실행 환경 변수:
 
 - `TUBEARCHIVE_OUTPUT_PATH`: 이벤트 대상 출력 경로
-- `TUBEARCHIVE_YOUTUBE_ID`: 업로드 이벤트의 YouTube ID
+- `TUBEARCHIVE_YOUTUBE_ID`: 업로드 이벤트의 YouTube ID. 분할 업로드 시에는 여러 ID가 세미콜론(`;`)으로 구분되어 전달됩니다.
 - `TUBEARCHIVE_INPUT_PATHS`: `;`로 연결한 입력 경로 목록
 - `TUBEARCHIVE_INPUT_COUNT`: 입력 파일 개수
 - `TUBEARCHIVE_ERROR_MESSAGE`: `on_error` 예외 메시지

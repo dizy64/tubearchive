@@ -210,7 +210,7 @@ class NotificationConfig:
 class AppConfig:
     """애플리케이션 전체 설정.
 
-    [general] + [bgm] + [youtube] + [archive] + [color_grading] + [notification] 통합.
+    [general] + [bgm] + [youtube] + [archive] + [color_grading] + [hooks] + [notification] 통합.
     """
 
     general: GeneralConfig = field(default_factory=GeneralConfig)

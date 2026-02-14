@@ -38,6 +38,7 @@ class TestHookContext:
         assert env["TUBEARCHIVE_YOUTUBE_ID"] == ""
         assert env["TUBEARCHIVE_INPUT_PATHS"] == ""
         assert env["TUBEARCHIVE_INPUT_COUNT"] == "0"
+        assert "TUBEARCHIVE_ERROR_MESSAGE" not in env
 
 
 class TestRunHooks:
