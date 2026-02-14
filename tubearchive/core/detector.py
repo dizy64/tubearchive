@@ -16,12 +16,132 @@ ffprobe를 서브프로세스로 실행하여 영상 파일의 기술 메타데�
 """
 
 import json
+import re
 import subprocess
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
 from tubearchive.models.video import VideoMetadata
+
+_ISO6709_RE = re.compile(
+    r"(?P<lat>[+-]\d+(?:\.\d+)?)(?P<lon>[+-]\d+(?:\.\d+)?)(?:[+-]\d+(?:\.\d+)?)?/?"
+)
+_LATITUDE_RE = re.compile(r"\blat(?:itude)?\s*[:=]\s*(?P<lat>[+-]?\d+(?:\.\d+)?)", re.IGNORECASE)
+_LONGITUDE_RE = re.compile(r"\blon(?:gitude)?\s*[:=]\s*(?P<lon>[+-]?\d+(?:\.\d+)?)", re.IGNORECASE)
+
+
+def _parse_iso6709(value: str) -> tuple[float, float] | None:
+    """ISO6709 형식 문자열에서 위도/경도 추출."""
+    match = _ISO6709_RE.search(value)
+    if not match:
+        return None
+
+    try:
+        lat = float(match.group("lat"))
+        lon = float(match.group("lon"))
+    except (TypeError, ValueError):
+        return None
+    return lat, lon
+
+
+def _extract_location_from_tags(tags: dict[str, Any]) -> tuple[float, float] | None:
+    """메타데이터 태그에서 ISO6709 또는 lat/lon 키-값을 추출."""
+    for value in tags.values():
+        if not isinstance(value, str):
+            continue
+
+        if parsed := _parse_iso6709(value):
+            return parsed
+
+    lat = None
+    lon = None
+    for key, value in tags.items():
+        if not isinstance(value, str):
+            continue
+        key_lower = str(key).lower()
+        if lat is None and key_lower.startswith("lat"):
+            match = _LATITUDE_RE.search(value)
+            if match:
+                try:
+                    lat = float(match.group("lat"))
+                except ValueError:
+                    lat = None
+        elif lon is None and key_lower.startswith("lon"):
+            match = _LONGITUDE_RE.search(value)
+            if match:
+                try:
+                    lon = float(match.group("lon"))
+                except ValueError:
+                    lon = None
+
+    if lat is None or lon is None:
+        for value in tags.values():
+            if not isinstance(value, str):
+                continue
+            if parsed := _parse_iso6709(value):
+                return parsed
+            if lat is None:
+                lat_match = _LATITUDE_RE.search(value)
+                if lat_match:
+                    try:
+                        lat = float(lat_match.group("lat"))
+                    except ValueError:
+                        lat = None
+            if lon is None:
+                lon_match = _LONGITUDE_RE.search(value)
+                if lon_match:
+                    try:
+                        lon = float(lon_match.group("lon"))
+                    except ValueError:
+                        lon = None
+        if lat is None or lon is None:
+            return None
+        return lat, lon
+
+    return lat, lon
+
+
+def _extract_location_from_sidecar(video_path: Path) -> tuple[float, float] | None:
+    """동일한 이름의 .srt sidecar에서 위도/경도 추출."""
+    sidecar_path = video_path.with_suffix(".srt")
+    if not sidecar_path.is_file():
+        return None
+
+    try:
+        text = sidecar_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+    return _parse_coordinates_from_text(text)
+
+
+def _parse_coordinates_from_text(text: str) -> tuple[float, float] | None:
+    """텍스트에서 위도/경도 추출."""
+    if parsed := _parse_iso6709(text):
+        return parsed
+
+    lat = None
+    lon = None
+    for match in _LATITUDE_RE.finditer(text):
+        try:
+            lat = float(match.group("lat"))
+        except ValueError:
+            lat = None
+        if lat is not None:
+            break
+
+    for match in _LONGITUDE_RE.finditer(text):
+        try:
+            lon = float(match.group("lon"))
+        except ValueError:
+            lon = None
+        if lon is not None:
+            break
+
+    if lat is not None and lon is not None:
+        return lat, lon
+    return None
 
 
 def detect_metadata(video_path: Path) -> VideoMetadata:
@@ -85,6 +205,18 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
     color_space = video_stream.get("color_space")
     color_transfer = video_stream.get("color_transfer")
     color_primaries = video_stream.get("color_primaries")
+    tags = probe_data.get("format", {}).get("tags", {})
+    stream_tags = video_stream.get("tags", {})
+
+    location = None
+    if isinstance(tags, dict):
+        location = _extract_location_from_tags(tags)
+    if location is None and isinstance(stream_tags, dict):
+        location = _extract_location_from_tags(stream_tags)
+    if location is None:
+        location = _extract_location_from_sidecar(video_path)
+    location_latitude = location[0] if location is not None else None
+    location_longitude = location[1] if location is not None else None
 
     # 오디오 스트림 존재 여부
     has_audio = any(s.get("codec_type") == "audio" for s in probe_data.get("streams", []))
@@ -99,6 +231,8 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
         is_portrait=is_portrait,
         is_vfr=is_vfr,
         device_model=device_model,
+        location_latitude=location_latitude,
+        location_longitude=location_longitude,
         color_space=color_space,
         color_transfer=color_transfer,
         color_primaries=color_primaries,

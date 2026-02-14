@@ -370,6 +370,11 @@ class Transcoder:
         auto_lut: bool = False,
         lut_before_hdr: bool = False,
         device_luts: dict[str, str] | None = None,
+        watermark_text: str | None = None,
+        watermark_position: str = "bottom-right",
+        watermark_size: int = 48,
+        watermark_color: str = "white",
+        watermark_alpha: float = 1.0,
         progress_info_callback: Callable[[ProgressInfo], None] | None = None,
     ) -> tuple[Path, int, list[SilenceSegment] | None]:
         """
@@ -395,6 +400,11 @@ class Transcoder:
             auto_lut: 기기 모델 기반 자동 LUT 매칭 활성화
             lut_before_hdr: LUT 필터를 HDR→SDR 변환 전에 적용
             device_luts: 기기 키워드 → LUT 파일 경로 매핑
+            watermark_text: 워터마크 텍스트
+            watermark_position: 워터마크 위치
+            watermark_size: 워터마크 글자 크기
+            watermark_color: 워터마크 글자 색
+            watermark_alpha: 워터마크 투명도
             progress_info_callback: 상세 진행률 콜백 (UI 업데이트용)
 
         Returns:
@@ -526,6 +536,11 @@ class Transcoder:
             loudnorm_analysis=loudnorm_analysis,
             lut_path=resolved_lut,
             lut_before_hdr=lut_before_hdr,
+            watermark_text=watermark_text,
+            watermark_position=watermark_position,
+            watermark_size=watermark_size,
+            watermark_color=watermark_color,
+            watermark_alpha=watermark_alpha,
         )
 
         # 7. 실행: VideoToolbox → (실패 시) libx265 폴백
