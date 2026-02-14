@@ -70,6 +70,8 @@ from tubearchive.config import (
     get_default_stabilize,
     get_default_stabilize_crop,
     get_default_stabilize_strength,
+    get_default_template_intro,
+    get_default_template_outro,
     load_config,
 )
 from tubearchive.core.detector import detect_metadata
@@ -299,6 +301,8 @@ class ValidatedArgs:
     auto_lut: bool = False
     lut_before_hdr: bool = False
     device_luts: dict[str, str] | None = None
+    template_intro: Path | None = None
+    template_outro: Path | None = None
     notify: bool = False
     schedule: str | None = None
     quality_report: bool = False
@@ -810,6 +814,22 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--template-intro",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="병합 앞부분에 붙일 intro 템플릿 파일 경로",
+    )
+
+    parser.add_argument(
+        "--template-outro",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="병합 뒷부분에 붙일 outro 템플릿 파일 경로",
+    )
+
+    parser.add_argument(
         "--status",
         nargs="?",
         const=CATALOG_STATUS_SENTINEL,
@@ -1031,6 +1051,32 @@ def _resolve_set_thumbnail_path(
         )
 
     return set_thumbnail
+
+
+def _resolve_template_path(template_arg: str | Path | None) -> Path | None:
+    """템플릿 경로 인자를 정규화하고 검증한다."""
+    if not template_arg:
+        return None
+
+    template_path = Path(template_arg).expanduser().resolve()
+    if not template_path.is_file():
+        raise FileNotFoundError(f"Template file not found: {template_arg}")
+    return template_path
+
+
+def _template_video_file(path: Path) -> VideoFile:
+    """템플릿 파일을 ``VideoFile`` 로 변환한다."""
+    stat = path.stat()
+    if sys.platform == "darwin":
+        timestamp = stat.st_birthtime
+    else:
+        timestamp = stat.st_ctime
+
+    return VideoFile(
+        path=path,
+        creation_time=datetime.fromtimestamp(timestamp),
+        size_bytes=stat.st_size,
+    )
 
 
 def validate_args(
@@ -1255,6 +1301,20 @@ def validate_args(
 
     lut_before_hdr: bool = getattr(args, "lut_before_hdr", False)
 
+    # 템플릿 intro/outro (CLI > 환경변수 > 기본값)
+    template_intro_arg = getattr(args, "template_intro", None)
+    template_outro_arg = getattr(args, "template_outro", None)
+    template_intro = (
+        _resolve_template_path(template_intro_arg)
+        if template_intro_arg
+        else get_default_template_intro()
+    )
+    template_outro = (
+        _resolve_template_path(template_outro_arg)
+        if template_outro_arg
+        else get_default_template_outro()
+    )
+
     # 스케줄 옵션 검증
     schedule_arg: str | None = getattr(args, "schedule", None)
     schedule: str | None = None
@@ -1309,6 +1369,8 @@ def validate_args(
         auto_lut=auto_lut,
         lut_before_hdr=lut_before_hdr,
         device_luts=device_luts if device_luts else None,
+        template_intro=template_intro,
+        template_outro=template_outro,
         quality_report=quality_report,
         notify=bool(getattr(args, "notify", False)) or get_default_notify(),
         schedule=schedule,
@@ -1952,10 +2014,22 @@ def run_pipeline(
     if len(video_files) == 1 and validated_args.upload:
         return handle_single_file_upload(video_files[0], validated_args)
 
+    main_video_files = video_files
+    template_intro_path = validated_args.template_intro
+    template_outro_path = validated_args.template_outro
+    template_intro_video = (
+        _template_video_file(template_intro_path) if template_intro_path is not None else None
+    )
+    template_outro_video = (
+        _template_video_file(template_outro_path) if template_outro_path is not None else None
+    )
+    template_head_count = 1 if template_intro_video is not None else 0
+    template_tail_count = 1 if template_outro_video is not None else 0
+
     # 1.5 그룹핑 및 재정렬
     if validated_args.group_sequences:
-        groups = group_sequences(video_files)
-        video_files = reorder_with_groups(video_files, groups)
+        groups = group_sequences(main_video_files)
+        main_video_files = reorder_with_groups(main_video_files, groups)
         for group in groups:
             if len(group.files) > 1:
                 logger.info(
@@ -1969,7 +2043,36 @@ def run_pipeline(
             for i, video_file in enumerate(video_files)
         ]
 
-    fade_map = compute_fade_map(groups, default_fade=validated_args.fade_duration)
+    fade_map = {
+        vf.path: FadeConfig(fade_in=0.0, fade_out=0.0) for vf in main_video_files if vf.path
+    }
+    fade_map.update(
+        compute_fade_map(
+            groups=groups,
+            default_fade=validated_args.fade_duration,
+        )
+    )
+
+    video_files = list(main_video_files)
+    if template_intro_video is not None:
+        video_files.insert(0, template_intro_video)
+        first_main = main_video_files[0]
+        first_fade = fade_map.get(first_main.path)
+        if first_fade is not None:
+            fade_map[first_main.path] = FadeConfig(
+                fade_in=0.0,
+                fade_out=first_fade.fade_out,
+            )
+
+    if template_outro_video is not None:
+        video_files.append(template_outro_video)
+        last_main = main_video_files[-1]
+        last_fade = fade_map.get(last_main.path)
+        if last_fade is not None:
+            fade_map[last_main.path] = FadeConfig(
+                fade_in=last_fade.fade_in,
+                fade_out=0.0,
+            )
 
     # 2. 트랜스코딩
     temp_dir = get_temp_dir()
@@ -2009,6 +2112,8 @@ def run_pipeline(
         logger.info("Starting transcoding...")
         results = _transcode_sequential(video_files, temp_dir, transcode_opts)
 
+    main_results = results[template_head_count : len(results) - template_tail_count]
+
     run_hooks(
         validated_args.hooks,
         "on_transcode",
@@ -2024,8 +2129,8 @@ def run_pipeline(
 
         notifier.notify(
             transcode_complete_event(
-                file_count=len(results),
-                total_duration=sum(r.clip_info.duration for r in results),
+                file_count=len(main_results),
+                total_duration=sum(r.clip_info.duration for r in main_results),
             )
         )
 
@@ -2076,11 +2181,11 @@ def run_pipeline(
 
     # 4.1 화질 리포트 출력 (선택)
     if validated_args.quality_report:
-        _print_quality_report(video_files, results)
+        _print_quality_report(main_video_files, main_results)
 
     # 4. DB 저장 및 Summary 생성
-    video_ids = [r.video_id for r in results]
-    video_clips = [r.clip_info for r in results]
+    video_ids = [r.video_id for r in main_results]
+    video_clips = [r.clip_info for r in main_results]
     summary, merge_job_id = save_merge_job_to_db(
         final_path,
         video_clips,
@@ -2168,7 +2273,7 @@ def run_pipeline(
 
     # 5.5 원본 파일 아카이빙 (CLI 옵션 또는 config 정책)
     video_paths_for_archive = [
-        (r.video_id, vf.path) for r, vf in zip(results, video_files, strict=True)
+        (r.video_id, vf.path) for r, vf in zip(main_results, main_video_files, strict=True)
     ]
     _archive_originals(video_paths_for_archive, validated_args)
 

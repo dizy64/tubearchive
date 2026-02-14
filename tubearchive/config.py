@@ -35,6 +35,8 @@ ENV_DENOISE_LEVEL = "TUBEARCHIVE_DENOISE_LEVEL"
 ENV_NORMALIZE_AUDIO = "TUBEARCHIVE_NORMALIZE_AUDIO"
 ENV_GROUP_SEQUENCES = "TUBEARCHIVE_GROUP_SEQUENCES"
 ENV_FADE_DURATION = "TUBEARCHIVE_FADE_DURATION"
+ENV_TEMPLATE_INTRO = "TUBEARCHIVE_TEMPLATE_INTRO"
+ENV_TEMPLATE_OUTRO = "TUBEARCHIVE_TEMPLATE_OUTRO"
 ENV_TRIM_SILENCE = "TUBEARCHIVE_TRIM_SILENCE"
 ENV_SILENCE_THRESHOLD = "TUBEARCHIVE_SILENCE_THRESHOLD"
 ENV_SILENCE_MIN_DURATION = "TUBEARCHIVE_SILENCE_MIN_DURATION"
@@ -142,6 +144,19 @@ class ColorGradingConfig:
 
 
 @dataclass(frozen=True)
+class TemplateConfig:
+    """``[template]`` 섹션 설정.
+
+    intro/outro 파일 경로를 관리한다.
+    """
+
+    intro: str | None = None
+    """템플릿 intro 영상 경로."""
+    outro: str | None = None
+    """템플릿 outro 영상 경로."""
+
+
+@dataclass(frozen=True)
 class MacOSNotifyConfig:
     """``[notification.macos]`` 하위 설정."""
 
@@ -218,6 +233,7 @@ class AppConfig:
     youtube: YouTubeConfig = field(default_factory=YouTubeConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
     color_grading: ColorGradingConfig = field(default_factory=ColorGradingConfig)
+    template: TemplateConfig = field(default_factory=TemplateConfig)
     hooks: HooksConfig = field(default_factory=HooksConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)
 
@@ -497,6 +513,15 @@ def _parse_color_grading(data: dict[str, object]) -> ColorGradingConfig:
     )
 
 
+def _parse_template(data: dict[str, object]) -> TemplateConfig:
+    """[template] 섹션 파싱."""
+    section = "template"
+    return TemplateConfig(
+        intro=_parse_str(data, "intro", section),
+        outro=_parse_str(data, "outro", section),
+    )
+
+
 def _parse_notification(data: dict[str, object]) -> NotificationConfig:
     """[notification] 섹션 파싱. 타입 오류 시 해당 필드 무시."""
     section = "notification"
@@ -606,6 +631,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     youtube_data = raw.get("youtube", {})
     archive_data = raw.get("archive", {})
     color_grading_data = raw.get("color_grading", {})
+    template_data = raw.get("template", {})
     notification_data = raw.get("notification", {})
     hooks_data = raw.get("hooks", {})
 
@@ -659,6 +685,16 @@ def load_config(path: Path | None = None) -> AppConfig:
             )
         color_grading = ColorGradingConfig()
 
+    if isinstance(template_data, dict):
+        template = _parse_template(template_data)
+    else:
+        if template_data:
+            logger.warning(
+                "config: [template] 섹션이 테이블이 아닙니다 (got %s)",
+                type(template_data).__name__,
+            )
+        template = TemplateConfig()
+
     if isinstance(notification_data, dict):
         notification = _parse_notification(notification_data)
     else:
@@ -685,6 +721,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         youtube=youtube,
         archive=archive,
         color_grading=color_grading,
+        template=template,
         hooks=hooks,
         notification=notification,
     )
@@ -756,6 +793,12 @@ def apply_config_to_env(config: AppConfig) -> None:
     # color grading
     if config.color_grading.auto_lut is not None:
         mappings.append((ENV_AUTO_LUT, str(config.color_grading.auto_lut).lower()))
+
+    # template
+    if config.template.intro is not None:
+        mappings.append((ENV_TEMPLATE_INTRO, config.template.intro))
+    if config.template.outro is not None:
+        mappings.append((ENV_TEMPLATE_OUTRO, config.template.outro))
 
     # notification
     notif = config.notification
@@ -831,6 +874,10 @@ def generate_default_config() -> str:
 # [color_grading.device_luts]
 # nikon = "~/LUTs/nikon_nlog_to_rec709.cube"
 # gopro = "~/LUTs/gopro_flat_to_rec709.cube"
+
+[template]
+# intro = "~/templates/intro_intro.mp4"       # intro 템플릿 경로 (TUBEARCHIVE_TEMPLATE_INTRO)
+# outro = "~/templates/outro_outro.mp4"       # outro 템플릿 경로 (TUBEARCHIVE_TEMPLATE_OUTRO)
 
 [notification]
 # enabled = false                         # 전역 알림 활성화 (TUBEARCHIVE_NOTIFY)
@@ -1020,6 +1067,29 @@ def get_default_archive_destination() -> Path | None:
         path = Path(env_dest).expanduser()
         return path
     return None
+
+
+def _get_template_file_path(env_key: str) -> Path | None:
+    """템플릿 경로 환경변수 값을 파일 경로로 변환한다."""
+    env_path = os.environ.get(env_key)
+    if not env_path:
+        return None
+
+    path = Path(env_path).expanduser()
+    if path.is_file():
+        return path
+    logger.warning("%s=%s is not a valid file", env_key, env_path)
+    return None
+
+
+def get_default_template_intro() -> Path | None:
+    """환경변수 ``TUBEARCHIVE_TEMPLATE_INTRO`` 템플릿 경로를 반환한다."""
+    return _get_template_file_path(ENV_TEMPLATE_INTRO)
+
+
+def get_default_template_outro() -> Path | None:
+    """환경변수 ``TUBEARCHIVE_TEMPLATE_OUTRO`` 템플릿 경로를 반환한다."""
+    return _get_template_file_path(ENV_TEMPLATE_OUTRO)
 
 
 def get_default_bgm_path() -> Path | None:
