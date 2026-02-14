@@ -184,12 +184,17 @@ def _extract_vmaf_from_payload(
 @lru_cache(maxsize=1)
 def _get_available_filters() -> set[str]:
     """ffmpeg에서 사용 가능한 필터 집합을 반환한다."""
-    result = subprocess.run(
-        ["ffmpeg", "-filters"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-filters"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
+        logger.debug("Unable to query ffmpeg filters: %s", exc)
+        return set()
+
     lines = result.stdout.splitlines()
     filters: set[str] = set()
     pattern = re.compile(r"^\s*[A-Z.]{3}\s+(\S+)")

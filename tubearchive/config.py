@@ -175,6 +175,20 @@ class SlackConfig:
 
 
 @dataclass(frozen=True)
+class HooksConfig:
+    """``[hooks]`` 섹션 파서 결과.
+
+    이벤트별 실행할 훅 명령어를 보관한다.
+    """
+
+    on_transcode: tuple[str, ...] = field(default_factory=tuple)
+    on_merge: tuple[str, ...] = field(default_factory=tuple)
+    on_upload: tuple[str, ...] = field(default_factory=tuple)
+    on_error: tuple[str, ...] = field(default_factory=tuple)
+    timeout_sec: int = 60
+
+
+@dataclass(frozen=True)
 class NotificationConfig:
     """``config.toml`` 의 ``[notification]`` 섹션.
 
@@ -196,7 +210,7 @@ class NotificationConfig:
 class AppConfig:
     """애플리케이션 전체 설정.
 
-    [general] + [bgm] + [youtube] + [archive] + [color_grading] + [notification] 통합.
+    [general] + [bgm] + [youtube] + [archive] + [color_grading] + [hooks] + [notification] 통합.
     """
 
     general: GeneralConfig = field(default_factory=GeneralConfig)
@@ -204,7 +218,60 @@ class AppConfig:
     youtube: YouTubeConfig = field(default_factory=YouTubeConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
     color_grading: ColorGradingConfig = field(default_factory=ColorGradingConfig)
+    hooks: HooksConfig = field(default_factory=HooksConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)
+
+
+def _parse_hook_commands(data: dict[str, object], key: str, section: str) -> tuple[str, ...]:
+    """훅 명령 목록을 안전하게 파싱한다.
+
+    지원 형식:
+    - string: 단일 훅 명령 1개
+    - array<string>: 다중 훅 명령 목록
+    """
+    raw = data.get(key)
+    if raw is None:
+        return ()
+
+    if isinstance(raw, str):
+        return (raw,)
+
+    if not isinstance(raw, list):
+        _warn_type(f"{section}.{key}", "str|list[str]", raw)
+        return ()
+
+    commands: list[str] = []
+    skipped = 0
+    for item in raw:
+        if isinstance(item, str):
+            commands.append(item)
+        else:
+            skipped += 1
+    if skipped > 0:
+        logger.warning(
+            "config: %s.%s 에 비문자열 항목 %d개 무시됨",
+            section,
+            key,
+            skipped,
+        )
+    return tuple(commands)
+
+
+def _parse_hook_timeout(data: dict[str, object]) -> int:
+    """훅 타임아웃을 파싱한다."""
+    raw_timeout = data.get("timeout_sec")
+    if raw_timeout is None:
+        return 60
+    if isinstance(raw_timeout, int) and not isinstance(raw_timeout, bool):
+        if raw_timeout > 0:
+            return raw_timeout
+        logger.warning(
+            "config: hooks.timeout_sec 값 오류: %r (양수여야 함)",
+            raw_timeout,
+        )
+        return 60
+    _warn_type("hooks.timeout_sec", "int", raw_timeout)
+    return 60
 
 
 def _warn_type(field_name: str, expected: str, value: object) -> None:
@@ -494,6 +561,21 @@ def _parse_notification(data: dict[str, object]) -> NotificationConfig:
     )
 
 
+def _parse_hooks(data: dict[str, object]) -> HooksConfig:
+    """``[hooks]`` 섹션 파싱. 타입 오류 시 해당 필드 무시."""
+    section = "hooks"
+
+    timeout_sec = _parse_hook_timeout(data)
+
+    return HooksConfig(
+        on_transcode=_parse_hook_commands(data, "on_transcode", section),
+        on_merge=_parse_hook_commands(data, "on_merge", section),
+        on_upload=_parse_hook_commands(data, "on_upload", section),
+        on_error=_parse_hook_commands(data, "on_error", section),
+        timeout_sec=timeout_sec,
+    )
+
+
 def load_config(path: Path | None = None) -> AppConfig:
     """
     TOML 설정 파일 로드.
@@ -525,6 +607,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     archive_data = raw.get("archive", {})
     color_grading_data = raw.get("color_grading", {})
     notification_data = raw.get("notification", {})
+    hooks_data = raw.get("hooks", {})
 
     if isinstance(general_data, dict):
         general = _parse_general(general_data)
@@ -586,12 +669,23 @@ def load_config(path: Path | None = None) -> AppConfig:
             )
         notification = NotificationConfig()
 
+    if isinstance(hooks_data, dict):
+        hooks = _parse_hooks(hooks_data)
+    else:
+        if hooks_data:
+            logger.warning(
+                "config: [hooks] 섹션이 테이블이 아닙니다 (got %s)",
+                type(hooks_data).__name__,
+            )
+        hooks = HooksConfig()
+
     return AppConfig(
         general=general,
         bgm=bgm,
         youtube=youtube,
         archive=archive,
         color_grading=color_grading,
+        hooks=hooks,
         notification=notification,
     )
 
@@ -761,6 +855,13 @@ def generate_default_config() -> str:
 [notification.slack]
 # enabled = false                         # Slack Webhook (TUBEARCHIVE_NOTIFY_SLACK)
 # webhook_url = ""                        # Webhook URL (TUBEARCHIVE_SLACK_WEBHOOK_URL)
+
+[hooks]
+# timeout_sec = 60                         # 훅 기본 타임아웃(초)
+# on_transcode = ["/path/to/transcode_hook.sh"] # 트랜스코딩 완료 후 실행
+# on_merge = ["/path/to/merge_hook.sh"]      # 병합 완료 후 실행
+# on_upload = "/path/to/upload_hook.sh"      # 업로드 완료 후 실행
+# on_error = "/path/to/error_hook.sh"        # 에러 발생 시 실행
 """
 
 

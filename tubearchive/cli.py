@@ -30,11 +30,11 @@ import tempfile
 from collections.abc import Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 from tubearchive import __version__
 
@@ -53,6 +53,8 @@ from tubearchive.config import (
     ENV_OUTPUT_DIR,
     ENV_PARALLEL,
     ENV_YOUTUBE_PLAYLIST,
+    HooksConfig,
+    apply_config_to_env,
     get_default_auto_lut,
     get_default_bgm_loop,
     get_default_bgm_path,
@@ -68,6 +70,7 @@ from tubearchive.config import (
     get_default_stabilize,
     get_default_stabilize_crop,
     get_default_stabilize_strength,
+    load_config,
 )
 from tubearchive.core.detector import detect_metadata
 from tubearchive.core.grouper import (
@@ -76,6 +79,7 @@ from tubearchive.core.grouper import (
     group_sequences,
     reorder_with_groups,
 )
+from tubearchive.core.hooks import HookContext, HookEvent, run_hooks
 from tubearchive.core.merger import Merger
 from tubearchive.core.ordering import (
     SortKey,
@@ -298,6 +302,7 @@ class ValidatedArgs:
     notify: bool = False
     schedule: str | None = None
     quality_report: bool = False
+    hooks: HooksConfig = field(default_factory=HooksConfig)
 
 
 @dataclass(frozen=True)
@@ -434,6 +439,12 @@ def create_parser() -> argparse.ArgumentParser:
         "--upload",
         action="store_true",
         help="병합 완료 후 YouTube에 업로드",
+    )
+
+    parser.add_argument(
+        "--run-hook",
+        choices=["on_transcode", "on_merge", "on_upload", "on_error"],
+        help="설정 파일([hooks]) 이벤트 훅 수동 실행 (on_transcode/on_merge/on_upload/on_error)",
     )
 
     parser.add_argument(
@@ -1025,6 +1036,7 @@ def _resolve_set_thumbnail_path(
 def validate_args(
     args: argparse.Namespace,
     device_luts: dict[str, str] | None = None,
+    hooks: HooksConfig | None = None,
 ) -> ValidatedArgs:
     """CLI 인자를 검증하고 :class:`ValidatedArgs` 로 변환한다.
 
@@ -1250,6 +1262,8 @@ def validate_args(
         schedule = parse_schedule_datetime(schedule_arg)
         logger.info(f"Parsed schedule time: {schedule}")
 
+    hooks_config = hooks if hooks is not None else HooksConfig()
+
     return ValidatedArgs(
         targets=targets,
         output=output,
@@ -1298,6 +1312,7 @@ def validate_args(
         quality_report=quality_report,
         notify=bool(getattr(args, "notify", False)) or get_default_notify(),
         schedule=schedule,
+        hooks=hooks_config,
     )
 
 
@@ -1876,6 +1891,26 @@ def _print_summary(summary_markdown: str | None) -> None:
     print("=" * 60 + "\n")
 
 
+def _run_error_hook(
+    hooks: HooksConfig,
+    error: Exception,
+    *,
+    output_path: Path | None = None,
+    validated_args: ValidatedArgs | None = None,
+) -> None:
+    """실패 시 on_error 훅을 실행."""
+    input_paths = tuple(validated_args.targets) if validated_args is not None else ()
+    run_hooks(
+        hooks,
+        "on_error",
+        context=HookContext(
+            output_path=output_path,
+            input_paths=input_paths,
+            error_message=str(error),
+        ),
+    )
+
+
 def run_pipeline(
     validated_args: ValidatedArgs,
     notifier: Notifier | None = None,
@@ -1974,6 +2009,15 @@ def run_pipeline(
         logger.info("Starting transcoding...")
         results = _transcode_sequential(video_files, temp_dir, transcode_opts)
 
+    run_hooks(
+        validated_args.hooks,
+        "on_transcode",
+        context=HookContext(
+            input_paths=tuple(vf.path for vf in video_files),
+            output_path=results[0].output_path if results else None,
+        ),
+    )
+
     # 알림: 트랜스코딩 완료
     if notifier:
         from tubearchive.notification import transcode_complete_event
@@ -1993,6 +2037,15 @@ def run_pipeline(
         output_path,
     )
     logger.info(f"Final output: {final_path}")
+
+    run_hooks(
+        validated_args.hooks,
+        "on_merge",
+        context=HookContext(
+            output_path=final_path,
+            input_paths=tuple(vf.path for vf in video_files),
+        ),
+    )
 
     # 알림: 병합 완료
     if notifier:
@@ -3020,7 +3073,7 @@ def resolve_playlist_ids(playlist_args: list[str] | None) -> list[str]:
     return direct_ids
 
 
-def cmd_upload_only(args: argparse.Namespace) -> None:
+def cmd_upload_only(args: argparse.Namespace, hooks: HooksConfig | None = None) -> str | None:
     """
     --upload-only 옵션 처리.
 
@@ -3060,7 +3113,7 @@ def cmd_upload_only(args: argparse.Namespace) -> None:
     set_thumbnail_path = _resolve_set_thumbnail_path(set_thumbnail)
 
     # 업로드 실행
-    upload_to_youtube(
+    video_id = upload_to_youtube(
         file_path=file_path,
         title=args.upload_title,
         description=description,
@@ -3071,6 +3124,19 @@ def cmd_upload_only(args: argparse.Namespace) -> None:
         chunk_mb=args.upload_chunk,
         thumbnail=set_thumbnail_path,
     )
+
+    if hooks is not None:
+        run_hooks(
+            hooks,
+            "on_upload",
+            context=HookContext(
+                output_path=file_path,
+                youtube_id=video_id,
+                input_paths=(file_path,),
+            ),
+        )
+
+    return video_id
 
 
 def cmd_status() -> None:
@@ -3249,7 +3315,7 @@ def _upload_split_files(
     split_job_id: int | None = None,
     publish_at: str | None = None,
     thumbnail: Path | None = None,
-) -> None:
+) -> list[str]:
     """분할 파일을 순차적으로 YouTube에 업로드한다.
 
     각 파일에 대해 챕터를 리매핑하여 설명을 생성하고,
@@ -3293,6 +3359,7 @@ def _upload_split_files(
     split_durations = [probe_duration(f) for f in split_files]
 
     total = len(split_files)
+    uploaded_ids: list[str] = []
     for i, split_file in enumerate(split_files):
         part_title = f"{title} (Part {i + 1}/{total})" if title else None
 
@@ -3330,10 +3397,14 @@ def _upload_split_files(
                         split_repo.append_youtube_id(split_job_id, video_id)
                 except Exception as e:
                     logger.warning(f"Failed to save youtube_id for part {i + 1}: {e}")
+            if video_id:
+                uploaded_ids.append(video_id)
         except Exception as e:
             logger.error(f"Part {i + 1}/{total} upload failed: {e}")
             print(f"  ⚠️  Part {i + 1} 업로드 실패: {e}")
             continue
+
+    return uploaded_ids
 
 
 def _get_or_create_project_playlist(
@@ -3406,7 +3477,8 @@ def _upload_after_pipeline(
     publish_at: str | None = None,
     generated_thumbnail_paths: list[Path] | None = None,
     explicit_thumbnail: Path | None = None,
-) -> None:
+    hooks: HooksConfig | None = None,
+) -> list[str]:
     """파이프라인 완료 후 YouTube 업로드를 수행한다.
 
     DB에서 최신 merge_job을 조회하여 제목·설명을 가져온 뒤,
@@ -3462,6 +3534,7 @@ def _upload_after_pipeline(
             playlist_ids.append(project_playlist_id)
 
     # 분할 파일 확인
+    uploaded_ids: list[str] = []
     split_files: list[Path] = []
     split_job_id: int | None = None
     if merge_job_id is not None:
@@ -3478,7 +3551,7 @@ def _upload_after_pipeline(
             logger.warning(f"Failed to get split jobs: {e}")
 
     if split_files:
-        _upload_split_files(
+        uploaded_ids = _upload_split_files(
             split_files=split_files,
             title=title,
             clips_info_json=clips_info_json,
@@ -3491,7 +3564,7 @@ def _upload_after_pipeline(
             thumbnail=thumbnail,
         )
     else:
-        upload_to_youtube(
+        video_id = upload_to_youtube(
             file_path=output_path,
             title=title,
             description=description,
@@ -3502,6 +3575,8 @@ def _upload_after_pipeline(
             chunk_mb=args.upload_chunk,
             thumbnail=thumbnail,
         )
+        if video_id:
+            uploaded_ids = [video_id]
 
     # 알림: 업로드 완료
     if notifier:
@@ -3524,6 +3599,19 @@ def _upload_after_pipeline(
                 youtube_id=youtube_id,
             )
         )
+
+    if hooks is not None:
+        run_hooks(
+            hooks,
+            "on_upload",
+            context=HookContext(
+                output_path=output_path,
+                youtube_id=";".join(uploaded_ids),
+                input_paths=(output_path,),
+            ),
+        )
+
+    return uploaded_ids
 
 
 def cmd_init_config() -> None:
@@ -3563,15 +3651,13 @@ def main() -> None:
         return
 
     # 설정 파일 로드 및 환경변수 적용
-    from tubearchive.config import apply_config_to_env, load_config
-
     config_path = Path(args.config) if args.config else None
     config = load_config(config_path)
     apply_config_to_env(config)
+    setup_logging(args.verbose)
 
     # --notify-test 처리 (서브커맨드 전)
     if getattr(args, "notify_test", False):
-        setup_logging(args.verbose)
         from tubearchive.notification import Notifier as _Notifier
 
         test_notifier = _Notifier(config.notification)
@@ -3590,9 +3676,18 @@ def main() -> None:
     if args.upload_privacy is None:
         args.upload_privacy = config.youtube.upload_privacy or "unlisted"
 
-    setup_logging(args.verbose)
+    if args.run_hook:
+        hook_event = cast(HookEvent, args.run_hook)
+        run_hooks(
+            config.hooks,
+            hook_event,
+            context=HookContext(),
+        )
+        return
 
     notifier: Notifier | None = None
+    validated_args: ValidatedArgs | None = None
+    output_path: Path | None = None
 
     try:
         # --setup-youtube 옵션 처리 (설정 가이드)
@@ -3676,12 +3771,16 @@ def main() -> None:
 
         # --upload-only 옵션 처리 (업로드만)
         if args.upload_only:
-            cmd_upload_only(args)
+            cmd_upload_only(args, hooks=config.hooks)
             return
 
         # config의 device_luts를 validate_args에 전달하여 초기화 시 주입
         cfg_device_luts = config.color_grading.device_luts or None
-        validated_args = validate_args(args, device_luts=cfg_device_luts)
+        validated_args = validate_args(
+            args,
+            device_luts=cfg_device_luts,
+            hooks=config.hooks,
+        )
 
         if validated_args.dry_run:
             _cmd_dry_run(validated_args)
@@ -3712,12 +3811,15 @@ def main() -> None:
                 publish_at=validated_args.schedule,
                 generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
                 explicit_thumbnail=validated_args.set_thumbnail,
+                hooks=config.hooks,
             )
 
     except FileNotFoundError as e:
+        _run_error_hook(config.hooks, e, output_path=output_path, validated_args=validated_args)
         logger.error(str(e))
         sys.exit(1)
     except ValueError as e:
+        _run_error_hook(config.hooks, e, output_path=output_path, validated_args=validated_args)
         logger.error(str(e))
         sys.exit(1)
     except KeyboardInterrupt:
@@ -3729,6 +3831,7 @@ def main() -> None:
             from tubearchive.notification import error_event
 
             notifier.notify(error_event(error_message=str(e), stage="pipeline"))
+        _run_error_hook(config.hooks, e, output_path=output_path, validated_args=validated_args)
         logger.exception(f"Unexpected error: {e}")
         sys.exit(1)
 
