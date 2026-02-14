@@ -177,6 +177,20 @@ class TestCreateParser:
 
         assert args.thumbnail_quality == 2
 
+    def test_parses_set_thumbnail(self) -> None:
+        """--set-thumbnail 경로 파싱."""
+        parser = create_parser()
+        args = parser.parse_args(["--set-thumbnail", "/path/to/cover.jpg"])
+
+        assert args.set_thumbnail == "/path/to/cover.jpg"
+
+    def test_set_thumbnail_default_is_none(self) -> None:
+        """--set-thumbnail 미지정 시 None."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.set_thumbnail is None
+
     def test_parses_config_option(self) -> None:
         """--config 옵션."""
         parser = create_parser()
@@ -444,6 +458,68 @@ class TestValidateArgs:
         result = validate_args(args)
 
         assert result.targets == [tmp_path]
+
+    def test_validates_set_thumbnail_jpeg(self, tmp_path: Path) -> None:
+        """유효한 썸네일 파일 경로."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        thumbnail = tmp_path / "cover.jpg"
+        thumbnail.write_bytes(b"\xff\xd8")
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            set_thumbnail=str(thumbnail),
+        )
+
+        result = validate_args(args)
+
+        assert result.set_thumbnail == thumbnail.resolve()
+
+    def test_set_thumbnail_missing_file_raises(self, tmp_path: Path) -> None:
+        """존재하지 않는 썸네일은 에러."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            set_thumbnail=str(tmp_path / "missing.jpg"),
+        )
+
+        with pytest.raises(FileNotFoundError, match="Thumbnail file not found"):
+            validate_args(args)
+
+    def test_set_thumbnail_unsupported_format(self, tmp_path: Path) -> None:
+        """지원하지 않는 썸네일 확장자."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        thumbnail = tmp_path / "cover.gif"
+        thumbnail.write_text("gif")
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            set_thumbnail=str(thumbnail),
+        )
+
+        with pytest.raises(ValueError, match="Unsupported thumbnail format"):
+            validate_args(args)
 
     def test_validates_empty_targets_uses_cwd(self) -> None:
         """빈 targets는 cwd 사용."""
@@ -1040,6 +1116,124 @@ class TestUploadAfterPipeline:
         mock_upload.assert_called_once()
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["privacy"] == "private"
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.cli.init_database")
+    def test_upload_after_pipeline_uses_explicit_thumbnail(
+        self,
+        mock_db: MagicMock,
+        _mock_playlist: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """명시 썸네일이 있으면 업로드에 그대로 전달."""
+        from tubearchive.cli import _upload_after_pipeline
+
+        mock_conn = MagicMock()
+        mock_db.return_value = mock_conn
+        mock_conn.close = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.get_latest.return_value = None
+
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        thumbnail = tmp_path / "explicit.jpg"
+        thumbnail.touch()
+        args = argparse.Namespace(
+            upload_privacy="unlisted",
+            playlist=None,
+            upload_chunk=32,
+        )
+
+        with patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo):
+            _upload_after_pipeline(
+                output_path,
+                args,
+                generated_thumbnail_paths=None,
+                explicit_thumbnail=thumbnail,
+            )
+
+        call_kwargs = mock_upload.call_args[1]
+        assert call_kwargs["thumbnail"] == thumbnail
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.cli.init_database")
+    def test_upload_after_pipeline_uses_single_generated_thumbnail(
+        self,
+        mock_db: MagicMock,
+        _mock_playlist: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """생성 썸네일 1개는 자동 선택."""
+        from tubearchive.cli import _upload_after_pipeline
+
+        mock_conn = MagicMock()
+        mock_db.return_value = mock_conn
+        mock_conn.close = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.get_latest.return_value = None
+
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        generated = tmp_path / "generated.jpg"
+        generated.touch()
+        args = argparse.Namespace(
+            upload_privacy="unlisted",
+            playlist=None,
+            upload_chunk=32,
+        )
+
+        with patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo):
+            _upload_after_pipeline(
+                output_path,
+                args,
+                generated_thumbnail_paths=[generated],
+            )
+
+        call_kwargs = mock_upload.call_args[1]
+        assert call_kwargs["thumbnail"] == generated
+
+
+class TestResolveUploadThumbnail:
+    """썸네일 업로드 후보 결정 테스트."""
+
+    def test_resolve_upload_thumbnail_uses_explicit(self, tmp_path: Path) -> None:
+        """명시 썸네일이 우선."""
+        from tubearchive.cli import _resolve_upload_thumbnail
+
+        explicit = tmp_path / "a.jpg"
+        generated = [tmp_path / "b.jpg"]
+
+        assert _resolve_upload_thumbnail(explicit, generated) is explicit
+
+    def test_resolve_upload_thumbnail_single_generated(self, tmp_path: Path) -> None:
+        """자동 생성 썸네일 1개는 해당 경로 사용."""
+        from tubearchive.cli import _resolve_upload_thumbnail
+
+        generated = [tmp_path / "auto.jpg"]
+        generated[0].touch()
+
+        assert _resolve_upload_thumbnail(None, generated) is generated[0]
+
+    @patch("tubearchive.cli._interactive_select", return_value=1)
+    def test_resolve_upload_thumbnail_selects_from_multiple(
+        self,
+        _mock_select: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """썸네일이 여러 개면 인터랙티브 선택 결과 사용."""
+        from tubearchive.cli import _resolve_upload_thumbnail
+
+        generated = [tmp_path / "auto1.jpg", tmp_path / "auto2.jpg"]
+        for path in generated:
+            path.touch()
+
+        assert _resolve_upload_thumbnail(None, generated) is generated[1]
 
 
 class TestUploadSplitFiles:

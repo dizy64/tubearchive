@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Pre-commit hook: ruff check → ruff format → mypy → pytest unit
+# Pre-commit 훅:
+# 1) 변경된 Python 파일 lint/포맷 검사
+# 2) mypy 타입 검사
+# 3) 단위 테스트 (E2E는 pre-push에서 통합 검증)
+#
 # 설치: bash scripts/install-hooks.sh
 
 set -euo pipefail
@@ -8,33 +12,38 @@ set -euo pipefail
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 info() { echo -e "${GREEN}[pre-commit]${NC} $*"; }
 warn() { echo -e "${YELLOW}[pre-commit]${NC} $*"; }
 fail() { echo -e "${RED}[pre-commit]${NC} $*"; exit 1; }
 
-# 프로젝트 루트로 이동
 cd "$(git rev-parse --show-toplevel)"
 
-# --no-verify 사용 시 안내
-# (git 자체가 --no-verify로 hook을 건너뛰므로 여기 도달하면 항상 실행)
+# 커밋 스테이징 영역 기준으로 검사 대상 Python 파일 추출
+staged_files=()
+while IFS= read -r file; do
+    staged_files+=("${file}")
+done < <(
+    git diff --cached --name-only --diff-filter=ACMR \
+        | grep -E '\.py$' || true
+)
 
-# 1. ruff check (lint)
+if [ "${#staged_files[@]}" -eq 0 ]; then
+    info "스테이징된 Python 파일이 없어 기본 경로를 검사합니다."
+    staged_files=(tubearchive/ tests/)
+fi
+
+# 1. ruff lint
 info "ruff check 실행 중..."
-if ! uv run ruff check tubearchive/ tests/; then
+if ! uv run ruff check "${staged_files[@]}"; then
     fail "ruff check 실패. 위반 사항을 수정한 후 다시 커밋하세요."
 fi
 
-# 2. ruff format (자동 수정 + 변경 감지)
-info "ruff format 실행 중..."
-uv run ruff format tubearchive/ tests/
-if ! git diff --quiet; then
-    warn "ruff format이 파일을 수정했습니다:"
-    git diff --name-only
-    echo ""
-    warn "수정된 파일을 git add 한 후 다시 커밋하세요."
-    exit 1
+# 2. ruff format (검사 모드)
+info "ruff format 검사 중..."
+if ! uv run ruff format --check "${staged_files[@]}"; then
+    fail "ruff format 미적용 파일이 있습니다. uv run ruff format 실행 후 다시 커밋하세요."
 fi
 
 # 3. mypy (strict 타입 검사)
@@ -43,7 +52,7 @@ if ! uv run mypy tubearchive/; then
     fail "mypy 실패. 타입 오류를 수정한 후 다시 커밋하세요."
 fi
 
-# 4. pytest unit (단위 테스트만, e2e 제외)
+# 4. pytest unit
 info "pytest unit 실행 중..."
 if ! uv run pytest tests/unit/ -q; then
     fail "단위 테스트 실패. 테스트를 수정한 후 다시 커밋하세요."
