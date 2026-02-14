@@ -194,6 +194,9 @@ tubearchive -v ~/Videos/
 
 # 병렬 트랜스코딩 (4개 파일 동시 처리)
 tubearchive -j 4 ~/Videos/
+
+# 훅 이벤트 수동 실행
+tubearchive --run-hook on_merge
 ```
 
 ### 오디오 처리
@@ -454,9 +457,34 @@ tubearchive --config /path/to/config.toml ~/Videos/
 # playlist = ["PLxxxxxxxx"]
 # upload_chunk_mb = 32                  # 1-256
 # upload_privacy = "unlisted"           # public/unlisted/private
+
+[hooks]
+# timeout_sec = 60                     # 훅 타임아웃(초)
+# on_transcode = ["/path/to/transcode_hook.sh"]
+# on_merge = "/path/to/merge_hook.sh"
+# on_upload = ["/path/to/upload_hook.sh"]
+# on_error = "/path/to/error_hook.sh"
 ```
 
 에러 정책: 파일 없음 → 빈 config, TOML 문법 오류 → warning + 빈 config, 타입 오류 → 해당 필드 무시
+
+### 훅 사용
+
+훅은 파이프라인 이벤트(`on_transcode`, `on_merge`, `on_upload`, `on_error`)에 따라
+실행됩니다. `--run-hook`은 특정 이벤트 훅을 즉시 수동 실행합니다.
+
+```bash
+# 훅 이벤트 수동 실행
+tubearchive --run-hook on_upload --config /path/to/config.toml
+```
+
+훅 실행 환경 변수:
+
+- `TUBEARCHIVE_OUTPUT_PATH`: 이벤트 대상 출력 경로
+- `TUBEARCHIVE_YOUTUBE_ID`: 업로드 이벤트의 YouTube ID
+- `TUBEARCHIVE_INPUT_PATHS`: `;`로 연결한 입력 경로 목록
+- `TUBEARCHIVE_INPUT_COUNT`: 입력 파일 개수
+- `TUBEARCHIVE_ERROR_MESSAGE`: `on_error` 예외 메시지
 
 ### 작업 현황 조회
 

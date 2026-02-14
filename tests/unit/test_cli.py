@@ -15,6 +15,7 @@ from tubearchive.cli import (
     main,
     validate_args,
 )
+from tubearchive.config import AppConfig, HooksConfig
 from tubearchive.utils import truncate_path
 
 
@@ -239,6 +240,20 @@ class TestCreateParser:
         args = parser.parse_args([])
 
         assert args.upload_privacy is None
+
+    def test_parses_run_hook_option(self) -> None:
+        """--run-hook 옵션이 이벤트명으로 파싱된다."""
+        parser = create_parser()
+        args = parser.parse_args(["--run-hook", "on_merge"])
+
+        assert args.run_hook == "on_merge"
+
+    def test_run_hook_invalid_value_raises(self) -> None:
+        """알 수 없는 --run-hook 값은 argparse에서 거부한다."""
+        parser = create_parser()
+
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--run-hook", "invalid"])
 
     def test_parses_exclude_single(self) -> None:
         """--exclude 단일 패턴."""
@@ -472,6 +487,26 @@ class TestValidateArgs:
         result = validate_args(args)
 
         assert result.targets == [tmp_path]
+
+    def test_validates_with_custom_hooks(self, tmp_path: Path) -> None:
+        """validate_args에서 HooksConfig가 전달되면 유지된다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        hooks = HooksConfig(on_merge=("echo merged",), on_error=("echo err",), timeout_sec=90)
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+        )
+
+        result = validate_args(args, hooks=hooks)
+
+        assert result.hooks == hooks
 
     def test_validates_set_thumbnail_jpeg(self, tmp_path: Path) -> None:
         """유효한 썸네일 파일 경로."""
@@ -1124,6 +1159,44 @@ class TestMain:
         captured = capsys.readouterr()
         assert "Dry run" in captured.out or "dry" in captured.out.lower()
 
+    def test_main_runs_run_hook(self, tmp_path: Path) -> None:
+        """--run-hook 지정 시 run_hooks가 호출된다."""
+        config = AppConfig(hooks=HooksConfig(on_merge=("echo merged",)))
+
+        with (
+            patch("tubearchive.cli.load_config", return_value=config),
+            patch("tubearchive.cli.run_hooks") as mock_run_hooks,
+            patch("sys.argv", ["tubearchive", "--run-hook", "on_merge"]),
+        ):
+            main()
+
+        mock_run_hooks.assert_called_once()
+        assert mock_run_hooks.call_args.args[1] == "on_merge"
+        assert mock_run_hooks.call_args.args[0] == config.hooks
+
+    @patch("tubearchive.cli.run_pipeline", side_effect=RuntimeError("pipeline failed"))
+    def test_main_invokes_error_hook_on_exception(
+        self,
+        _mock_pipeline: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """파이프라인 예외 발생 시 on_error 훅이 실행된다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        config = AppConfig(hooks=HooksConfig(on_error=("echo error",)))
+
+        with (
+            patch("tubearchive.cli.load_config", return_value=config),
+            patch("tubearchive.cli.run_hooks") as mock_run_hooks,
+            patch("sys.argv", ["tubearchive", str(video_file)]),
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        assert mock_run_hooks.call_count >= 1
+        events = [args.args[1] for args in mock_run_hooks.call_args_list]
+        assert "on_error" in events
+
 
 class TestUploadAfterPipeline:
     """_upload_after_pipeline 테스트."""
@@ -1521,6 +1594,52 @@ class TestUploadSplitFiles:
 
         # 분할 파일 2개가 업로드됨
         assert mock_upload.call_count == 2
+
+
+class TestUploadOnly:
+    """--upload-only 처리 테스트."""
+
+    @patch("tubearchive.cli.run_hooks")
+    @patch("tubearchive.cli.upload_to_youtube", return_value="yt123")
+    def test_upload_only_calls_upload_hook(
+        self,
+        mock_upload: MagicMock,
+        mock_run_hooks: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--upload-only 완료 후 on_upload 훅이 실행된다."""
+        from tubearchive.cli import cmd_upload_only
+
+        file_path = tmp_path / "output.mp4"
+        file_path.write_bytes(b"dummy")
+
+        args = argparse.Namespace(
+            upload_only=str(file_path),
+            playlist=None,
+            upload_title=None,
+            upload_privacy="unlisted",
+            upload_chunk=32,
+            schedule=None,
+            set_thumbnail=None,
+        )
+
+        with (
+            patch(
+                "tubearchive.cli.MergeJobRepository",
+                return_value=MagicMock(get_by_output_path=MagicMock(return_value=None)),
+            ),
+            patch("tubearchive.cli.resolve_playlist_ids", return_value=[]),
+            patch("tubearchive.cli._resolve_set_thumbnail_path", return_value=None),
+        ):
+            result = cmd_upload_only(args, hooks=HooksConfig(on_upload=("echo upload",)))
+
+        assert result == "yt123"
+        mock_upload.assert_called_once()
+        mock_run_hooks.assert_called_once()
+        assert mock_run_hooks.call_args.args[1] == "on_upload"
+        context = mock_run_hooks.call_args.kwargs["context"]
+        assert context.output_path == file_path
+        assert context.youtube_id == "yt123"
 
     @patch("tubearchive.cli.upload_to_youtube")
     @patch("tubearchive.cli.probe_duration", return_value=3600.0)

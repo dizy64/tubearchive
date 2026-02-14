@@ -14,6 +14,7 @@ from tubearchive.config import (
     AppConfig,
     ColorGradingConfig,
     GeneralConfig,
+    HooksConfig,
     YouTubeConfig,
     apply_config_to_env,
     generate_default_config,
@@ -742,6 +743,68 @@ upload_chunk_mb = {val}
 """)
             config = load_config(config_file)
             assert config.youtube.upload_chunk_mb == val
+
+
+class TestHooksConfig:
+    """[hooks] 섹션 파서 테스트."""
+
+    def test_loads_hook_commands_and_timeout(self, tmp_path: Path) -> None:
+        """[hooks] 섹션을 파싱해 각 이벤트 명령과 timeout을 반영한다."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[hooks]
+timeout_sec = 120
+on_transcode = "/tmp/transcode.sh"
+on_merge = ["/tmp/merge_1.sh", 123, "/tmp/merge_2.sh"]
+on_upload = ["/tmp/upload.sh"]
+on_error = "/tmp/error.sh"
+""")
+
+        config = load_config(config_file)
+
+        assert config.hooks.timeout_sec == 120
+        assert config.hooks.on_transcode == ("/tmp/transcode.sh",)
+        assert config.hooks.on_merge == ("/tmp/merge_1.sh", "/tmp/merge_2.sh")
+        assert config.hooks.on_upload == ("/tmp/upload.sh",)
+        assert config.hooks.on_error == ("/tmp/error.sh",)
+
+    def test_hook_timeout_invalid_type_uses_default(self, tmp_path: Path) -> None:
+        """timeout_sec가 숫자 아님/비정상 값이면 기본값을 사용한다."""
+        for label, value in ("string", '"120"'), ("nonnumeric", "abc"), ("negative", "-1"):
+            config_file = tmp_path / f"config_{label}.toml"
+            config_file.write_text(
+                f"""\
+[hooks]
+timeout_sec = {value}
+"""
+            )
+
+            config = load_config(config_file)
+
+            assert config.hooks.timeout_sec == 60
+
+    def test_hooks_defaults_when_not_configured(self, tmp_path: Path) -> None:
+        """[hooks] 섹션이 없으면 기본 HooksConfig가 사용된다."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[general]
+parallel = 1
+""")
+
+        config = load_config(config_file)
+
+        assert config.hooks == HooksConfig()
+
+    def test_generate_default_config_includes_hooks_section(self) -> None:
+        """기본 템플릿에 [hooks] 섹션이 포함된다."""
+        default_config = generate_default_config()
+
+        assert "[hooks]" in default_config
+        assert "on_transcode" in default_config
+        assert "on_merge" in default_config
+        assert "on_upload" in default_config
+        assert "on_error" in default_config
+        assert "timeout_sec" in default_config
 
 
 class TestDataclassFrozen:
