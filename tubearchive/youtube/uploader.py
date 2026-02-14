@@ -430,8 +430,6 @@ class YouTubeUploader:
             raise ValueError("video_id is required")
 
         prepared_thumbnail = prepare_thumbnail_for_youtube(thumbnail_path)
-        if not prepared_thumbnail.exists():
-            raise FileNotFoundError(f"Thumbnail file not found: {prepared_thumbnail}")
 
         mimetype = "image/png" if prepared_thumbnail.suffix.lower() == ".png" else "image/jpeg"
         media = MediaFileUpload(
@@ -450,6 +448,9 @@ class YouTubeUploader:
             raise YouTubeUploadError(
                 f"Failed to set thumbnail for video {video_id}: {e.resp.status} {e.resp.reason}"
             ) from e
+        finally:
+            if prepared_thumbnail != thumbnail_path and prepared_thumbnail.exists():
+                prepared_thumbnail.unlink(missing_ok=True)
 
     def _execute_upload(
         self,

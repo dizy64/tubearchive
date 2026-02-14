@@ -16,9 +16,15 @@ DEFAULT_PERCENTAGES: tuple[float, ...] = (0.10, 0.33, 0.50)
 YOUTUBE_THUMBNAIL_MIN_WIDTH = 1280
 YOUTUBE_THUMBNAIL_MIN_HEIGHT = 720
 YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES = 2 * 1024 * 1024
+YOUTUBE_THUMBNAIL_MIN_QUALITY = 2
+YOUTUBE_THUMBNAIL_MAX_QUALITY = 31
 
 
-def _probe_image_size(image_path: Path, ffprobe_path: str = "ffprobe") -> tuple[int, int]:
+def _probe_image_size(
+    image_path: Path,
+    ffprobe_path: str = "ffprobe",
+    timeout_seconds: float = 20,
+) -> tuple[int, int]:
     """썸네일 이미지의 가로/세로를 ffprobe로 조회한다.
 
     Args:
@@ -45,9 +51,12 @@ def _probe_image_size(image_path: Path, ffprobe_path: str = "ffprobe") -> tuple[
             capture_output=True,
             text=True,
             check=False,
+            timeout=timeout_seconds,
         )
     except OSError as e:
         raise RuntimeError(f"Failed to run ffprobe: {e}") from e
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"ffprobe timed out: {e}") from e
 
     if result.returncode != 0:
         raise RuntimeError(f"Failed to probe image metadata: {result.stderr}")
@@ -78,19 +87,39 @@ def _build_thumbnail_prepare_command(
     output: Path,
     ffmpeg_path: str = "ffmpeg",
     quality: int = 2,
+    resize_to_min_size: bool = False,
 ) -> list[str]:
     """YouTube 업로드용 썸네일 변환 ffmpeg 명령을 만든다."""
-    return [
+    command = [
         ffmpeg_path,
         "-y",
         "-i",
         str(source),
-        "-vf",
-        f"scale={YOUTUBE_THUMBNAIL_MIN_WIDTH}:{YOUTUBE_THUMBNAIL_MIN_HEIGHT}",
-        "-q:v",
-        str(quality),
-        str(output),
     ]
+
+    if resize_to_min_size:
+        command.extend(
+            [
+                "-vf",
+                (
+                    "scale="
+                    f"trunc(iw*max({YOUTUBE_THUMBNAIL_MIN_WIDTH}/iw\\,"
+                    f"{YOUTUBE_THUMBNAIL_MIN_HEIGHT}/ih)/2)*2"
+                    ":"
+                    f"trunc(ih*max({YOUTUBE_THUMBNAIL_MIN_WIDTH}/iw\\,"
+                    f"{YOUTUBE_THUMBNAIL_MIN_HEIGHT}/ih)/2)*2"
+                ),
+            ]
+        )
+
+    command.extend(
+        [
+            "-q:v",
+            str(quality),
+            str(output),
+        ]
+    )
+    return command
 
 
 def prepare_thumbnail_for_youtube(
@@ -118,35 +147,60 @@ def prepare_thumbnail_for_youtube(
 
     width, height = _probe_image_size(source, ffprobe_path=ffprobe_path)
     source_is_too_large = source.stat().st_size > YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES
-    if (
-        width >= YOUTUBE_THUMBNAIL_MIN_WIDTH
-        and height >= YOUTUBE_THUMBNAIL_MIN_HEIGHT
-        and not source_is_too_large
-    ):
+    needs_resize = width < YOUTUBE_THUMBNAIL_MIN_WIDTH or height < YOUTUBE_THUMBNAIL_MIN_HEIGHT
+
+    if not needs_resize and not source_is_too_large:
         return source
 
     output = source.with_name(f"{source.stem}_youtube.jpg")
-    command = _build_thumbnail_prepare_command(source, output, ffmpeg_path=ffmpeg_path)
-    try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=60,
+    quality = YOUTUBE_THUMBNAIL_MIN_QUALITY
+
+    while quality <= YOUTUBE_THUMBNAIL_MAX_QUALITY:
+        if output.exists():
+            output.unlink(missing_ok=True)
+
+        command = _build_thumbnail_prepare_command(
+            source,
+            output,
+            ffmpeg_path=ffmpeg_path,
+            quality=quality,
+            resize_to_min_size=needs_resize,
         )
-    except OSError as e:
-        raise RuntimeError(f"Failed to run ffmpeg: {e}") from e
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"Thumbnail conversion timed out: {e}") from e
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+        except OSError as e:
+            raise RuntimeError(f"Failed to run ffmpeg: {e}") from e
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"Thumbnail conversion timed out: {e}") from e
 
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to prepare thumbnail: {result.stderr}")
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to prepare thumbnail: {result.stderr}")
 
-    if not output.exists():
-        raise RuntimeError(f"Failed to create thumbnail: {output}")
+        if not output.exists():
+            raise RuntimeError(f"Failed to create thumbnail: {output}")
 
-    return output
+        if output.stat().st_size <= YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES:
+            return output
+
+        logger.warning(
+            "Thumbnail conversion output too large (size=%s bytes), retrying with lower quality=%s",
+            output.stat().st_size,
+            quality + 1,
+        )
+        quality += 1
+
+    if output.exists():
+        output.unlink(missing_ok=True)
+
+    raise RuntimeError(
+        f"Failed to prepare thumbnail: size remains above {YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES} bytes."
+    )
 
 
 def calculate_thumbnail_timestamps(

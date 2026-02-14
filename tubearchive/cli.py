@@ -102,6 +102,8 @@ from tubearchive.utils.summary_generator import generate_single_file_description
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_THUMBNAIL_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png"})
+
 
 # NOTE: STATUS_ICONS, CATALOG_STATUS_SENTINEL, format_duration, normalize_status_filter 등
 #       카탈로그/상태 관련 상수와 유틸리티는 tubearchive.commands.catalog에서 import합니다.
@@ -983,6 +985,36 @@ def parse_schedule_datetime(schedule_str: str) -> str:
     return parsed_dt.isoformat()
 
 
+def _resolve_set_thumbnail_path(
+    set_thumbnail_arg: str | Path | None,
+) -> Path | None:
+    """`--set-thumbnail` 입력값을 정규화하고 검증한다.
+
+    - 경로 확장: `~` 전개 + `resolve()`
+    - 존재 여부 검증
+    - 포맷 검증 (`.jpg`, `.jpeg`, `.png`)
+
+    Args:
+        set_thumbnail_arg: CLI 입력값(`--set-thumbnail`)
+
+    Returns:
+        검증된 Path 또는 미지정 시 None
+    """
+    if not set_thumbnail_arg:
+        return None
+
+    set_thumbnail = Path(set_thumbnail_arg).expanduser().resolve()
+    if not set_thumbnail.is_file():
+        raise FileNotFoundError(f"Thumbnail file not found: {set_thumbnail_arg}")
+
+    if set_thumbnail.suffix.lower() not in SUPPORTED_THUMBNAIL_EXTENSIONS:
+        raise ValueError(
+            f"Unsupported thumbnail format: {set_thumbnail.suffix} (supported: .jpg, .jpeg, .png)"
+        )
+
+    return set_thumbnail
+
+
 def validate_args(
     args: argparse.Namespace,
     device_luts: dict[str, str] | None = None,
@@ -1075,16 +1107,7 @@ def validate_args(
     thumbnail_at: list[str] | None = getattr(args, "thumbnail_at", None)
     thumbnail_quality: int = getattr(args, "thumbnail_quality", 2)
     set_thumbnail_arg = getattr(args, "set_thumbnail", None)
-    set_thumbnail: Path | None = None
-    if set_thumbnail_arg:
-        set_thumbnail = Path(set_thumbnail_arg).expanduser().resolve()
-        if not set_thumbnail.is_file():
-            raise FileNotFoundError(f"Thumbnail file not found: {set_thumbnail_arg}")
-        if set_thumbnail.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
-            raise ValueError(
-                f"Unsupported thumbnail format: {set_thumbnail.suffix} "
-                "(supported: .jpg, .jpeg, .png)"
-            )
+    set_thumbnail = _resolve_set_thumbnail_path(set_thumbnail_arg)
 
     # --thumbnail-at만 지정해도 암묵적 활성화
     if thumbnail_at and not thumbnail:
@@ -1845,6 +1868,7 @@ def _print_summary(summary_markdown: str | None) -> None:
 def run_pipeline(
     validated_args: ValidatedArgs,
     notifier: Notifier | None = None,
+    generated_thumbnail_paths: list[Path] | None = None,
 ) -> Path:
     """
     전체 파이프라인 실행.
@@ -1854,6 +1878,7 @@ def run_pipeline(
     Args:
         validated_args: 검증된 인자
         notifier: 알림 오케스트레이터 (None이면 알림 비활성화)
+        generated_thumbnail_paths: 썸네일 생성 결과 저장용 출력 버퍼 (기본값 None)
 
     Returns:
         최종 출력 파일 경로
@@ -2001,9 +2026,13 @@ def run_pipeline(
         _link_merge_job_to_project(validated_args.project, merge_job_id)
 
     # 4.5 썸네일 생성 (비필수)
+    if generated_thumbnail_paths is not None:
+        generated_thumbnail_paths.clear()
+
     if validated_args.thumbnail:
         thumbnail_paths = _generate_thumbnails(final_path, validated_args)
-        validated_args.generated_thumbnail_paths = thumbnail_paths
+        if generated_thumbnail_paths is not None:
+            generated_thumbnail_paths.extend(thumbnail_paths)
         if thumbnail_paths:
             print(f"\n🖼️  썸네일 {len(thumbnail_paths)}장 생성:")
             for tp in thumbnail_paths:
@@ -2978,9 +3007,7 @@ def cmd_upload_only(args: argparse.Namespace) -> None:
         publish_at = parse_schedule_datetime(args.schedule)
 
     set_thumbnail = getattr(args, "set_thumbnail", None)
-    set_thumbnail_path = Path(set_thumbnail).expanduser() if set_thumbnail else None
-    if set_thumbnail_path is not None and not set_thumbnail_path.is_file():
-        raise FileNotFoundError(f"Thumbnail file not found: {set_thumbnail}")
+    set_thumbnail_path = _resolve_set_thumbnail_path(set_thumbnail)
 
     # 업로드 실행
     upload_to_youtube(
@@ -3177,6 +3204,7 @@ def _upload_split_files(
 
     각 파일에 대해 챕터를 리매핑하여 설명을 생성하고,
     제목에 ``(Part N/M)`` 형식을 추가한다.
+    썸네일은 모든 파트에 동일하게 적용한다.
 
     Args:
         split_files: 분할된 파일 경로 목록
@@ -3348,6 +3376,13 @@ def _upload_after_pipeline(
         explicit_thumbnail=explicit_thumbnail,
         generated_thumbnail_paths=generated_thumbnail_paths,
     )
+    if thumbnail is not None:
+        logger.info(
+            "Using thumbnail for upload: %s",
+            getattr(thumbnail, "name", str(thumbnail)),
+        )
+    else:
+        logger.info("No thumbnail selected for upload.")
 
     merge_job_id = None
     title = None
@@ -3610,7 +3645,12 @@ def main() -> None:
             if notifier.has_providers:
                 logger.info("알림 시스템 활성화 (%d개 채널)", notifier.provider_count)
 
-        output_path = run_pipeline(validated_args, notifier=notifier)
+        pipeline_generated_thumbnail_paths: list[Path] = []
+        output_path = run_pipeline(
+            validated_args,
+            notifier=notifier,
+            generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
+        )
         print("\n✅ 완료!")
         print(f"📹 출력 파일: {output_path}")
 
@@ -3620,7 +3660,7 @@ def main() -> None:
                 args,
                 notifier=notifier,
                 publish_at=validated_args.schedule,
-                generated_thumbnail_paths=validated_args.generated_thumbnail_paths,
+                generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
                 explicit_thumbnail=validated_args.set_thumbnail,
             )
 

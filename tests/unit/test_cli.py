@@ -1198,6 +1198,53 @@ class TestUploadAfterPipeline:
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["thumbnail"] == generated
 
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli._resolve_upload_thumbnail")
+    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.cli.init_database")
+    def test_upload_after_pipeline_logs_selected_thumbnail(
+        self,
+        mock_db: MagicMock,
+        _mock_playlist: MagicMock,
+        mock_resolve_thumbnail: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """썸네일 선택 결과를 INFO 로그로 남긴다."""
+        from tubearchive.cli import _upload_after_pipeline
+
+        mock_conn = MagicMock()
+        mock_db.return_value = mock_conn
+        mock_conn.close = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.get_latest.return_value = None
+
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        thumbnail = tmp_path / "selected.jpg"
+        thumbnail.touch()
+        args = argparse.Namespace(
+            upload_privacy="unlisted",
+            playlist=None,
+            upload_chunk=32,
+        )
+        mock_resolve_thumbnail.return_value = thumbnail
+
+        with (
+            patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo),
+            caplog.at_level("INFO"),
+        ):
+            _upload_after_pipeline(
+                output_path,
+                args,
+                generated_thumbnail_paths=[tmp_path / "generated.jpg"],
+            )
+
+        assert "Using thumbnail for upload" in caplog.text
+        assert thumbnail.name in caplog.text
+
 
 class TestResolveUploadThumbnail:
     """썸네일 업로드 후보 결정 테스트."""
@@ -1234,6 +1281,21 @@ class TestResolveUploadThumbnail:
             path.touch()
 
         assert _resolve_upload_thumbnail(None, generated) is generated[1]
+
+    @patch("tubearchive.cli._interactive_select", return_value=None)
+    def test_resolve_upload_thumbnail_skips_when_user_cancels(
+        self,
+        _mock_select: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """사용자가 0번으로 건너뛰면 None을 반환한다."""
+        from tubearchive.cli import _resolve_upload_thumbnail
+
+        generated = [tmp_path / "auto1.jpg", tmp_path / "auto2.jpg"]
+        for path in generated:
+            path.touch()
+
+        assert _resolve_upload_thumbnail(None, generated) is None
 
 
 class TestUploadSplitFiles:
@@ -1412,6 +1474,39 @@ class TestUploadSplitFiles:
 
         # 분할 파일 2개가 업로드됨
         assert mock_upload.call_count == 2
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.probe_duration", return_value=3600.0)
+    def test_split_upload_reuses_thumbnail_for_all_parts(
+        self,
+        _mock_probe: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """분할 업로드는 모든 파트에 동일한 썸네일을 전달한다."""
+        from tubearchive.cli import _upload_split_files
+
+        f1 = tmp_path / "video_001.mp4"
+        f2 = tmp_path / "video_002.mp4"
+        f1.touch()
+        f2.touch()
+
+        thumbnail = tmp_path / "thumb.jpg"
+        thumbnail.touch()
+
+        _upload_split_files(
+            split_files=[f1, f2],
+            title="Test",
+            clips_info_json='[{"name":"A.mp4","duration":3600,"start":0,"end":3600,"device":null,"shot_time":null}]',
+            privacy="unlisted",
+            merge_job_id=1,
+            playlist_ids=None,
+            chunk_mb=32,
+            thumbnail=thumbnail,
+        )
+
+        assert mock_upload.call_count == 2
+        assert all(call.kwargs["thumbnail"] == thumbnail for call in mock_upload.call_args_list)
 
     @patch("tubearchive.cli.upload_to_youtube")
     @patch("tubearchive.cli.probe_duration", return_value=60.0)

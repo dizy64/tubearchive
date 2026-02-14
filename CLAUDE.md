@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # 개발 환경 설정
-bash scripts/install-hooks.sh                                   # pre-commit hook 설치 (최초 1회)
+bash scripts/install-hooks.sh                                   # pre-commit + pre-push 훅 설치 (최초 1회)
 
 # 테스트
 uv run pytest tests/ -v                                         # 전체 (unit + e2e)
@@ -35,7 +35,7 @@ uv run tubearchive --dry-run ~/Videos/
 ## AI 가드레일
 
 - 커밋 전 가드레일은 `pre-commit` 훅으로 실행한다.
-- `pre-commit`은 스테이징된 Python 파일 대상을 대상으로 ruff lint/check, ruff format 체크, mypy, unit test만 빠르게 검증한다.
+- `pre-commit`은 스테이징된 Python 파일을 대상으로 ruff lint/check, ruff format 체크, mypy, unit test만 빠르게 검증한다.
 - `pre-push` 훅은 푸시 전 단위 테스트만 실행한다.
 - 검증은 외부 판단이 아닌 테스트/스크립트 결과를 기준으로 한다.
 - 빠른 피드백을 위해 기능 변경 시 우선 관련 unit 테스트로 실패를 조기에 잡는다.

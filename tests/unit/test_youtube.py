@@ -355,6 +355,33 @@ class TestYouTubeUploader:
         assert call_kwargs["videoId"] == "video123"
         mock_set.execute.assert_called_once()
 
+    def test_set_thumbnail_cleans_up_generated_file(self, tmp_path: Path) -> None:
+        """생성된 썸네일은 업로드 후 정리된다."""
+        from tubearchive.youtube.uploader import YouTubeUploader
+
+        original_thumbnail = tmp_path / "thumb.jpg"
+        original_thumbnail.write_bytes(b"original")
+        prepared_thumbnail = tmp_path / "thumb_youtube.jpg"
+        prepared_thumbnail.write_bytes(b"prepared")
+
+        mock_service = MagicMock()
+        mock_set = MagicMock()
+        mock_service.thumbnails.return_value.set.return_value = mock_set
+
+        uploader = YouTubeUploader(mock_service)
+
+        with (
+            patch(
+                "tubearchive.youtube.uploader.prepare_thumbnail_for_youtube",
+                return_value=prepared_thumbnail,
+            ),
+            patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload,
+        ):
+            mock_media_upload.return_value = MagicMock()
+            uploader.set_thumbnail("video123", original_thumbnail)
+
+        assert not prepared_thumbnail.exists()
+
     def test_set_thumbnail_requires_video_id(self, tmp_path: Path) -> None:
         """video_id 누락 시 에러."""
         from tubearchive.youtube.uploader import YouTubeUploader
@@ -397,6 +424,7 @@ class TestYouTubeUploader:
             uploader.set_thumbnail("video123", original_thumbnail)
 
         assert "video123" in str(exc_info.value)
+        assert not prepared_thumbnail.exists()
 
 
 class TestYouTubeUploadError:
