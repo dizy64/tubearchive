@@ -619,6 +619,56 @@ def create_audio_filter_chain(
     return ",".join(filters)
 
 
+def create_watermark_filter(
+    text: str,
+    position: str = "bottom-right",
+    font_size: int = 48,
+    color: str = "white",
+    alpha: float = 1.0,
+) -> str:
+    """영상 오버레이용 워터마크 drawtext 필터 문자열을 생성한다."""
+    if not text:
+        return ""
+    if font_size <= 0:
+        raise ValueError(f"Watermark font_size must be > 0, got: {font_size}")
+    if not (0.0 <= alpha <= 1.0):
+        raise ValueError(f"Watermark alpha must be in [0.0, 1.0], got: {alpha}")
+
+    normalized_color = color.split("@", 1)[0].strip() or "white"
+    escaped_text = (
+        text.replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace(":", "\\:")
+        .replace(",", "\\,")
+        .replace(";", "\\;")
+    )
+
+    normalized_position = position.strip().lower().replace("_", "-")
+    padding = 24
+    if normalized_position == "top-left":
+        x_expr = str(padding)
+        y_expr = str(padding)
+    elif normalized_position == "top-right":
+        x_expr = f"W-text_w-{padding}"
+        y_expr = str(padding)
+    elif normalized_position == "bottom-left":
+        x_expr = str(padding)
+        y_expr = f"H-text_h-{padding}"
+    elif normalized_position == "center":
+        x_expr = "(W-text_w)/2"
+        y_expr = "(H-text_h)/2"
+    else:
+        x_expr = f"W-text_w-{padding}"
+        y_expr = f"H-text_h-{padding}"
+
+    return (
+        f"drawtext=text='{escaped_text}':"
+        f"x={x_expr}:y={y_expr}:"
+        f"fontsize={font_size}:"
+        f"fontcolor={normalized_color}@{alpha:.2f}"
+    )
+
+
 def create_vidstab_detect_filter(
     strength: StabilizeStrength = StabilizeStrength.MEDIUM,
     trf_path: str = "",
@@ -735,6 +785,7 @@ def _build_portrait_video_filter(
     stabilize_filter: str = "",
     lut_filter: str = "",
     lut_before_hdr: bool = False,
+    watermark_filter: str = "",
 ) -> str:
     """세로 영상용 filter_complex 문자열 생성.
 
@@ -766,9 +817,9 @@ def _build_portrait_video_filter(
     # 합성: 중앙 오버레이 + (LUT after) + (fade)
     overlay = "[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2"
     if not lut_before_hdr:
-        merge_chain = ",".join(filter(None, [overlay, lut_filter, fade_filters]))
+        merge_chain = ",".join(filter(None, [overlay, lut_filter, watermark_filter, fade_filters]))
     else:
-        merge_chain = ",".join(filter(None, [overlay, fade_filters]))
+        merge_chain = ",".join(filter(None, [overlay, watermark_filter, fade_filters]))
 
     return f"[0:v]{split_input};{bg_chain};{fg_chain};{merge_chain}[v_out]"
 
@@ -781,6 +832,7 @@ def _build_landscape_video_filter(
     stabilize_filter: str = "",
     lut_filter: str = "",
     lut_before_hdr: bool = False,
+    watermark_filter: str = "",
 ) -> str:
     """가로 영상용 -vf 필터 문자열 생성.
 
@@ -793,9 +845,23 @@ def _build_landscape_video_filter(
     )
 
     if lut_before_hdr:
-        chain = [stabilize_filter, lut_filter, hdr_filter, scale_pad, fade_filters]
+        chain = [
+            stabilize_filter,
+            lut_filter,
+            hdr_filter,
+            scale_pad,
+            watermark_filter,
+            fade_filters,
+        ]
     else:
-        chain = [stabilize_filter, hdr_filter, scale_pad, lut_filter, fade_filters]
+        chain = [
+            stabilize_filter,
+            hdr_filter,
+            scale_pad,
+            lut_filter,
+            watermark_filter,
+            fade_filters,
+        ]
     parts = [p for p in chain if p]
     return f"[0:v]{','.join(parts)}[v_out]"
 
@@ -819,6 +885,11 @@ def create_combined_filter(
     loudnorm_analysis: LoudnormAnalysis | None = None,
     lut_path: str | None = None,
     lut_before_hdr: bool = False,
+    watermark_text: str | None = None,
+    watermark_position: str = "bottom-right",
+    watermark_size: int = 48,
+    watermark_color: str = "white",
+    watermark_alpha: float = 1.0,
 ) -> tuple[str, str]:
     """영상·오디오 필터를 결합하여 최종 FFmpeg ``-filter_complex`` 문자열을 생성한다.
 
@@ -872,6 +943,16 @@ def create_combined_filter(
     if lut_path:
         lut_filter_str = create_lut_filter(lut_path)
 
+    watermark_filter = ""
+    if watermark_text:
+        watermark_filter = create_watermark_filter(
+            text=watermark_text,
+            position=watermark_position,
+            font_size=watermark_size,
+            color=watermark_color,
+            alpha=watermark_alpha,
+        )
+
     fade_filters = ""
     if effective_fade_in > 0:
         fade_filters = f"fade=t=in:st=0:d={effective_fade_in}"
@@ -890,6 +971,7 @@ def create_combined_filter(
             fade_filters,
             stabilize_filter,
             lut_filter=lut_filter_str,
+            watermark_filter=watermark_filter,
             lut_before_hdr=lut_before_hdr,
         )
     else:
@@ -900,6 +982,7 @@ def create_combined_filter(
             fade_filters,
             stabilize_filter,
             lut_filter=lut_filter_str,
+            watermark_filter=watermark_filter,
             lut_before_hdr=lut_before_hdr,
         )
 
