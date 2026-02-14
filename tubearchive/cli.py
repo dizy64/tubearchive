@@ -1868,6 +1868,7 @@ def _print_summary(summary_markdown: str | None) -> None:
 def run_pipeline(
     validated_args: ValidatedArgs,
     notifier: Notifier | None = None,
+    generated_thumbnail_paths: list[Path] | None = None,
 ) -> Path:
     """
     전체 파이프라인 실행.
@@ -1877,6 +1878,7 @@ def run_pipeline(
     Args:
         validated_args: 검증된 인자
         notifier: 알림 오케스트레이터 (None이면 알림 비활성화)
+        generated_thumbnail_paths: 썸네일 생성 결과 저장용 출력 버퍼 (기본값 None)
 
     Returns:
         최종 출력 파일 경로
@@ -2024,9 +2026,13 @@ def run_pipeline(
         _link_merge_job_to_project(validated_args.project, merge_job_id)
 
     # 4.5 썸네일 생성 (비필수)
+    if generated_thumbnail_paths is not None:
+        generated_thumbnail_paths.clear()
+
     if validated_args.thumbnail:
         thumbnail_paths = _generate_thumbnails(final_path, validated_args)
-        validated_args.generated_thumbnail_paths = thumbnail_paths
+        if generated_thumbnail_paths is not None:
+            generated_thumbnail_paths.extend(thumbnail_paths)
         if thumbnail_paths:
             print(f"\n🖼️  썸네일 {len(thumbnail_paths)}장 생성:")
             for tp in thumbnail_paths:
@@ -3198,6 +3204,7 @@ def _upload_split_files(
 
     각 파일에 대해 챕터를 리매핑하여 설명을 생성하고,
     제목에 ``(Part N/M)`` 형식을 추가한다.
+    썸네일은 모든 파트에 동일하게 적용한다.
 
     Args:
         split_files: 분할된 파일 경로 목록
@@ -3369,6 +3376,13 @@ def _upload_after_pipeline(
         explicit_thumbnail=explicit_thumbnail,
         generated_thumbnail_paths=generated_thumbnail_paths,
     )
+    if thumbnail is not None:
+        logger.info(
+            "Using thumbnail for upload: %s",
+            getattr(thumbnail, "name", str(thumbnail)),
+        )
+    else:
+        logger.info("No thumbnail selected for upload.")
 
     merge_job_id = None
     title = None
@@ -3631,7 +3645,12 @@ def main() -> None:
             if notifier.has_providers:
                 logger.info("알림 시스템 활성화 (%d개 채널)", notifier.provider_count)
 
-        output_path = run_pipeline(validated_args, notifier=notifier)
+        pipeline_generated_thumbnail_paths: list[Path] = []
+        output_path = run_pipeline(
+            validated_args,
+            notifier=notifier,
+            generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
+        )
         print("\n✅ 완료!")
         print(f"📹 출력 파일: {output_path}")
 
@@ -3641,7 +3660,7 @@ def main() -> None:
                 args,
                 notifier=notifier,
                 publish_at=validated_args.schedule,
-                generated_thumbnail_paths=validated_args.generated_thumbnail_paths,
+                generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
                 explicit_thumbnail=validated_args.set_thumbnail,
             )
 

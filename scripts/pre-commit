@@ -1,22 +1,16 @@
 #!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export HOOK_NAME="pre-commit"
+source "${SCRIPT_DIR}/hook-helpers.sh"
+
 # Pre-commit 훅:
 # 1) 변경된 Python 파일 lint/포맷 검사
 # 2) mypy 타입 검사
-# 3) 단위 테스트 (E2E는 GitHub PR 파이프라인에서 통합 검증)
+# 3) 단위 테스트 (E2E는 GitHub PR 파이프라인에서만 수행)
 #
 # 설치: bash scripts/install-hooks.sh
 
 set -euo pipefail
-
-# 색상 정의
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
-
-info() { echo -e "${GREEN}[pre-commit]${NC} $*"; }
-warn() { echo -e "${YELLOW}[pre-commit]${NC} $*"; }
-fail() { echo -e "${RED}[pre-commit]${NC} $*"; exit 1; }
 
 cd "$(git rev-parse --show-toplevel)"
 
