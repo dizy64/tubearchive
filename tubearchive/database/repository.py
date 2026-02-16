@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from tubearchive.models.job import (
+    BackupHistory,
     JobStatus,
     MergeJob,
     Project,
@@ -926,6 +927,96 @@ class ArchiveHistoryRepository:
             "moved": int(row["moved"]),
             "deleted": int(row["deleted"]),
         }
+
+
+class BackupHistoryRepository:
+    """``backup_history`` 테이블 CRUD 저장소."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        """초기화."""
+        self.conn = conn
+
+    def insert_history(
+        self,
+        merge_job_id: int,
+        source_path: Path,
+        remote: str,
+        source_type: str,
+        success: bool,
+        error_message: str | None = None,
+    ) -> int:
+        """백업 이력 삽입.
+
+        Args:
+            merge_job_id: 병합 작업 ID
+            source_path: 소스 파일 경로
+            remote: 대상 remote 경로
+            source_type: 백업 대상 타입 (output/split/timelapse/original)
+            success: 백업 성공 여부
+            error_message: 실패 메시지
+
+        Returns:
+            삽입된 backup_history ID
+        """
+        cursor = self.conn.execute(
+            """
+            INSERT INTO backup_history (
+                merge_job_id, source_path, remote, source_type, success, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                merge_job_id,
+                str(source_path),
+                remote,
+                source_type,
+                1 if success else 0,
+                error_message,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid or 0
+
+    def get_by_merge_job(self, merge_job_id: int) -> list[BackupHistory]:
+        """병합 작업 기준 백업 이력 조회."""
+        cursor = self.conn.execute(
+            "SELECT * FROM backup_history WHERE merge_job_id = ? ORDER BY backed_up_at DESC",
+            (merge_job_id,),
+        )
+        return [self._row_to_history(row) for row in cursor.fetchall()]
+
+    def get_stats(self, period: str | None = None) -> dict[str, int]:
+        """백업 통계를 반환."""
+        where = ""
+        params: list[str] = []
+        if period:
+            where = "WHERE backed_up_at LIKE ?"
+            params.append(f"{period}%")
+
+        row = self.conn.execute(
+            f"""SELECT
+                    COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as success,
+                    COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0) as failed
+                FROM backup_history {where}""",
+            params,
+        ).fetchone()
+
+        return {
+            "success": int(row["success"]),
+            "failed": int(row["failed"]),
+        }
+
+    def _row_to_history(self, row: sqlite3.Row) -> BackupHistory:
+        """Row를 BackupHistory로 변환."""
+        return BackupHistory(
+            id=row["id"],
+            merge_job_id=row["merge_job_id"],
+            source_path=Path(row["source_path"]),
+            remote=row["remote"],
+            source_type=row["source_type"],
+            success=bool(row["success"]),
+            created_at=datetime.fromisoformat(row["backed_up_at"]),
+            error_message=row["error_message"],
+        )
 
 
 class ProjectRepository:

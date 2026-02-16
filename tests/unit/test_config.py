@@ -11,10 +11,18 @@ from tubearchive.config import (
     ENV_STABILIZE,
     ENV_STABILIZE_CROP,
     ENV_STABILIZE_STRENGTH,
+    ENV_TEMPLATE_INTRO,
+    ENV_TEMPLATE_OUTRO,
+    ENV_WATCH_LOG,
+    ENV_WATCH_PATHS,
+    ENV_WATCH_POLL_INTERVAL,
+    ENV_WATCH_STABILITY_CHECKS,
     AppConfig,
     ColorGradingConfig,
     GeneralConfig,
     HooksConfig,
+    TemplateConfig,
+    WatchConfig,
     YouTubeConfig,
     apply_config_to_env,
     generate_default_config,
@@ -22,6 +30,12 @@ from tubearchive.config import (
     get_default_stabilize,
     get_default_stabilize_crop,
     get_default_stabilize_strength,
+    get_default_template_intro,
+    get_default_template_outro,
+    get_default_watch_log_path,
+    get_default_watch_paths,
+    get_default_watch_poll_interval,
+    get_default_watch_stability_checks,
     load_config,
 )
 
@@ -85,6 +99,32 @@ parallel = 2
         assert config.general.parallel == 2
         assert config.general.output_dir is None
         assert config.youtube == YouTubeConfig()
+
+    def test_loads_template_paths(self, tmp_path: Path) -> None:
+        """[template] 섹션을 정상 파싱."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[template]
+intro = "/tmp/intro.mov"
+outro = "/tmp/outro.mov"
+""")
+        config = load_config(config_file)
+
+        assert config.template.intro == "/tmp/intro.mov"
+        assert config.template.outro == "/tmp/outro.mov"
+
+    def test_loads_template_type_error(self, tmp_path: Path) -> None:
+        """[template] 타입 오류는 None 처리."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[template]
+intro = 123
+outro = [1,2,3]
+""")
+        config = load_config(config_file)
+
+        assert config.template.intro is None
+        assert config.template.outro is None
 
     def test_loads_partial_youtube_only(self, tmp_path: Path) -> None:
         """[youtube] 섹션만 있는 경우."""
@@ -313,6 +353,8 @@ class TestApplyConfigToEnv:
             "TUBEARCHIVE_UPLOAD_CHUNK_MB",
             "TUBEARCHIVE_GROUP_SEQUENCES",
             "TUBEARCHIVE_FADE_DURATION",
+            "TUBEARCHIVE_TEMPLATE_INTRO",
+            "TUBEARCHIVE_TEMPLATE_OUTRO",
         ]
         saved = {}
         for key in env_keys:
@@ -339,6 +381,71 @@ class TestApplyConfigToEnv:
                     assert saved_value is not None
                     os.environ[key] = saved_value
 
+    def test_injects_watch_envs_to_env(self, tmp_path: Path) -> None:
+        """watch 설정이 환경변수로 주입된다."""
+        watch_dir_1 = tmp_path / "watch_1"
+        watch_dir_1.mkdir()
+        watch_dir_2 = tmp_path / "watch_2"
+        watch_dir_2.mkdir()
+        watch_log = tmp_path / "watch.log"
+
+        config = AppConfig(
+            watch=WatchConfig(
+                paths=(str(watch_dir_1), str(watch_dir_2)),
+                poll_interval=1.75,
+                stability_checks=4,
+                log_path=str(watch_log),
+            )
+        )
+
+        env_keys = [
+            ENV_WATCH_PATHS,
+            ENV_WATCH_POLL_INTERVAL,
+            ENV_WATCH_STABILITY_CHECKS,
+            ENV_WATCH_LOG,
+        ]
+        saved = {}
+        for key in env_keys:
+            saved[key] = os.environ.pop(key, None)
+
+        try:
+            apply_config_to_env(config)
+
+            assert os.environ.get(ENV_WATCH_PATHS) == f"{watch_dir_1},{watch_dir_2}"
+            assert os.environ.get(ENV_WATCH_POLL_INTERVAL) == "1.75"
+            assert os.environ.get(ENV_WATCH_STABILITY_CHECKS) == "4"
+            assert os.environ.get(ENV_WATCH_LOG) == str(watch_log)
+        finally:
+            for key in env_keys:
+                os.environ.pop(key, None)
+                if saved[key] is not None:
+                    saved_value = saved[key]
+                    assert saved_value is not None
+                    os.environ[key] = saved_value
+
+    def test_template_paths_injected_to_env(self) -> None:
+        """template intro/outro 경로가 환경변수로 주입된다."""
+        config = AppConfig(
+            template=TemplateConfig(
+                intro="/tmp/template_intro.mov",
+                outro="/tmp/template_outro.mov",
+            )
+        )
+        saved_intro = os.environ.pop("TUBEARCHIVE_TEMPLATE_INTRO", None)
+        saved_outro = os.environ.pop("TUBEARCHIVE_TEMPLATE_OUTRO", None)
+
+        try:
+            apply_config_to_env(config)
+            assert os.environ.get("TUBEARCHIVE_TEMPLATE_INTRO") == "/tmp/template_intro.mov"
+            assert os.environ.get("TUBEARCHIVE_TEMPLATE_OUTRO") == "/tmp/template_outro.mov"
+        finally:
+            os.environ.pop("TUBEARCHIVE_TEMPLATE_INTRO", None)
+            os.environ.pop("TUBEARCHIVE_TEMPLATE_OUTRO", None)
+            if saved_intro is not None:
+                os.environ["TUBEARCHIVE_TEMPLATE_INTRO"] = saved_intro
+            if saved_outro is not None:
+                os.environ["TUBEARCHIVE_TEMPLATE_OUTRO"] = saved_outro
+
     def test_preserves_existing_env(self) -> None:
         """기존 환경변수 보존 (config 값으로 덮어쓰지 않음)."""
         config = AppConfig(
@@ -358,6 +465,21 @@ class TestApplyConfigToEnv:
                 os.environ["TUBEARCHIVE_PARALLEL"] = saved
             else:
                 os.environ.pop("TUBEARCHIVE_PARALLEL", None)
+
+    def test_overwrites_existing_env_when_requested(self) -> None:
+        """reload용으로 기존 환경변수를 강제 덮어쓴다."""
+        config = AppConfig(
+            general=GeneralConfig(parallel=8),
+        )
+
+        os.environ["TUBEARCHIVE_PARALLEL"] = "2"
+
+        try:
+            apply_config_to_env(config, overwrite=True)
+
+            assert os.environ.get("TUBEARCHIVE_PARALLEL") == "8"
+        finally:
+            os.environ.pop("TUBEARCHIVE_PARALLEL", None)
 
     def test_playlist_csv_conversion(self) -> None:
         """playlist 리스트 → CSV 변환."""
@@ -415,11 +537,17 @@ class TestGenerateDefaultConfig:
             "normalize_audio",
             "group_sequences",
             "fade_duration",
+            "intro",
+            "outro",
             "client_secrets",
             "token",
             "playlist",
             "upload_chunk_mb",
             "upload_privacy",
+            "paths",
+            "poll_interval",
+            "stability_checks",
+            "log_path",
         ]
         for key in expected_keys:
             assert key in result, f"Missing key: {key}"
@@ -445,6 +573,86 @@ class TestGenerateDefaultConfig:
         parsed = tomllib.loads(toml_str)
         assert "general" in parsed
         assert "youtube" in parsed
+        assert "watch" in parsed
+
+    def test_generate_default_config_includes_watch_section(self) -> None:
+        """기본 템플릿에 [watch] 섹션이 포함된다."""
+        result = generate_default_config()
+        assert "[watch]" in result
+        assert "paths" in result
+        assert "poll_interval" in result
+        assert "stability_checks" in result
+        assert "log_path" in result
+
+
+class TestTemplateDefaults:
+    """템플릿 기본값/환경변수 테스트."""
+
+    def test_get_default_template_intro(self, tmp_path: Path) -> None:
+        """템플릿 intro 환경변수가 파일일 때 Path 반환."""
+        intro = tmp_path / "intro.mov"
+        intro.write_bytes(b"\x00")
+
+        with patch.dict(os.environ, {ENV_TEMPLATE_INTRO: str(intro)}):
+            assert get_default_template_intro() == intro
+
+    def test_get_default_template_outro(self, tmp_path: Path) -> None:
+        """템플릿 outro 환경변수가 파일일 때 Path 반환."""
+        outro = tmp_path / "outro.mov"
+        outro.write_bytes(b"\x00")
+
+        with patch.dict(os.environ, {ENV_TEMPLATE_OUTRO: str(outro)}):
+            assert get_default_template_outro() == outro
+
+    def test_get_default_template_intro_missing_file(self, tmp_path: Path) -> None:
+        """템플릿 intro 환경변수가 존재하지 않으면 None."""
+        missing = tmp_path / "missing.mov"
+
+        with patch.dict(os.environ, {ENV_TEMPLATE_INTRO: str(missing)}):
+            assert get_default_template_intro() is None
+
+
+class TestWatchConfigDefaults:
+    """watch 기본값/환경변수 테스트."""
+
+    def test_get_default_watch_paths(self, tmp_path: Path) -> None:
+        """paths 환경변수가 콤마 구분 문자열이면 tuple로 변환."""
+        dir_1 = tmp_path / "watch1"
+        dir_1.mkdir()
+        dir_2 = tmp_path / "watch2"
+        dir_2.mkdir()
+
+        with patch.dict(os.environ, {ENV_WATCH_PATHS: f"{dir_1}, {dir_2}"}):
+            assert get_default_watch_paths() == (str(dir_1), str(dir_2))
+
+    def test_get_default_watch_paths_empty(self) -> None:
+        """watch 경로 미설정 시 빈 tuple."""
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_default_watch_paths() == ()
+
+    def test_get_default_watch_poll_interval(self) -> None:
+        """watch poll_interval 기본값/검증 동작."""
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_default_watch_poll_interval() == 1.0
+        with patch.dict(os.environ, {ENV_WATCH_POLL_INTERVAL: "2.5"}):
+            assert get_default_watch_poll_interval() == 2.5
+        with patch.dict(os.environ, {ENV_WATCH_POLL_INTERVAL: "0"}):
+            assert get_default_watch_poll_interval() == 1.0
+
+    def test_get_default_watch_stability_checks(self) -> None:
+        """watch stability_checks 기본값/검증 동작."""
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_default_watch_stability_checks() == 2
+        with patch.dict(os.environ, {ENV_WATCH_STABILITY_CHECKS: "4"}):
+            assert get_default_watch_stability_checks() == 4
+        with patch.dict(os.environ, {ENV_WATCH_STABILITY_CHECKS: "0"}):
+            assert get_default_watch_stability_checks() == 2
+
+    def test_get_default_watch_log_path(self, tmp_path: Path) -> None:
+        """watch log 경로 env가 지정되면 Path 반환."""
+        log_path = tmp_path / "watch.log"
+        with patch.dict(os.environ, {ENV_WATCH_LOG: str(log_path)}):
+            assert get_default_watch_log_path() == log_path
 
 
 class TestDenoiseConfig:

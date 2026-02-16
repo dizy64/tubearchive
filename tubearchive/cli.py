@@ -23,18 +23,19 @@ import logging
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import tempfile
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
-from threading import Lock
-from typing import TYPE_CHECKING, NamedTuple, cast
+from threading import Event, Lock
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 from tubearchive import __version__
 
@@ -56,9 +57,12 @@ from tubearchive.config import (
     HooksConfig,
     apply_config_to_env,
     get_default_auto_lut,
+    get_default_backup_include_originals,
+    get_default_backup_remote,
     get_default_bgm_loop,
     get_default_bgm_path,
     get_default_bgm_volume,
+    get_default_config_path,
     get_default_denoise,
     get_default_denoise_level,
     get_default_fade_duration,
@@ -70,8 +74,15 @@ from tubearchive.config import (
     get_default_stabilize,
     get_default_stabilize_crop,
     get_default_stabilize_strength,
+    get_default_template_intro,
+    get_default_template_outro,
+    get_default_watch_log_path,
+    get_default_watch_paths,
+    get_default_watch_poll_interval,
+    get_default_watch_stability_checks,
     load_config,
 )
+from tubearchive.core.backup import BackupExecutor, BackupResult
 from tubearchive.core.detector import detect_metadata
 from tubearchive.core.grouper import (
     FileSequenceGroup,
@@ -90,6 +101,10 @@ from tubearchive.core.ordering import (
 )
 from tubearchive.core.scanner import scan_videos
 from tubearchive.core.splitter import probe_duration
+from tubearchive.core.subtitle import (
+    SUPPORTED_SUBTITLE_FORMATS,
+    SUPPORTED_SUBTITLE_MODELS,
+)
 from tubearchive.core.transcoder import Transcoder
 from tubearchive.database.repository import (
     MergeJobRepository,
@@ -103,6 +118,7 @@ from tubearchive.models.video import FadeConfig, VideoFile
 from tubearchive.utils import truncate_path
 from tubearchive.utils.progress import MultiProgressBar, ProgressInfo, format_size
 from tubearchive.utils.summary_generator import generate_single_file_description
+from tubearchive.utils.validators import VIDEO_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +293,11 @@ class ValidatedArgs:
     trim_silence: bool = False
     silence_threshold: str = "-30dB"
     silence_min_duration: float = 2.0
+    subtitle: bool = False
+    subtitle_model: str = "tiny"
+    subtitle_format: str = "srt"
+    subtitle_lang: str | None = None
+    subtitle_burn: bool = False
     bgm_path: Path | None = None
     bgm_volume: float = 0.2
     bgm_loop: bool = False
@@ -288,6 +309,8 @@ class ValidatedArgs:
     split_size: str | None = None
     archive_originals: Path | None = None
     archive_force: bool = False
+    backup_remote: str | None = None
+    backup_all: bool = False
     timelapse_speed: int | None = None
     timelapse_audio: bool = False
     timelapse_resolution: str | None = None
@@ -299,6 +322,13 @@ class ValidatedArgs:
     auto_lut: bool = False
     lut_before_hdr: bool = False
     device_luts: dict[str, str] | None = None
+    template_intro: Path | None = None
+    template_outro: Path | None = None
+    watch: bool = False
+    watch_paths: list[Path] = field(default_factory=list)
+    watch_poll_interval: float = 1.0
+    watch_stability_checks: int = 2
+    watch_log: Path | None = None
     notify: bool = False
     schedule: str | None = None
     quality_report: bool = False
@@ -434,6 +464,25 @@ def create_parser() -> argparse.ArgumentParser:
         help=f"출력 파일 저장 디렉토리 (환경변수: {ENV_OUTPUT_DIR})",
     )
 
+    parser.add_argument(
+        "--watch",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help=(
+            "감시 대상 디렉토리 지정 (반복 사용 가능). 지정하지 않으면 "
+            "config.toml [watch].paths 사용"
+        ),
+    )
+
+    parser.add_argument(
+        "--watch-log",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="watch 모드 로그 파일 경로 (config.toml [watch].log_path/환경변수 대체)",
+    )
+
     # YouTube 업로드 옵션
     parser.add_argument(
         "--upload",
@@ -565,6 +614,43 @@ def create_parser() -> argparse.ArgumentParser:
         "--bgm-loop",
         action="store_true",
         help="BGM 길이 < 영상 길이일 때 루프 재생",
+    )
+
+    # 자막 생성/하드코딩 옵션
+    parser.add_argument(
+        "--subtitle",
+        action="store_true",
+        help="병합 영상 자막 생성",
+    )
+
+    parser.add_argument(
+        "--subtitle-model",
+        type=str,
+        default="tiny",
+        choices=list(SUPPORTED_SUBTITLE_MODELS),
+        help="Whisper 모델 (tiny/base/small/medium/large, 기본: tiny)",
+    )
+
+    parser.add_argument(
+        "--subtitle-format",
+        type=str,
+        default="srt",
+        choices=list(SUPPORTED_SUBTITLE_FORMATS),
+        help="자막 출력 포맷 (srt/vtt, 기본: srt)",
+    )
+
+    parser.add_argument(
+        "--subtitle-lang",
+        type=str,
+        default=None,
+        metavar="LANG",
+        help="자막 언어 코드 (예: en, ko). 미지정 시 자동 감지",
+    )
+
+    parser.add_argument(
+        "--subtitle-burn",
+        action="store_true",
+        help="자막을 영상에 하드코딩 (ffmpeg subtitles 필터)",
     )
 
     parser.add_argument(
@@ -810,6 +896,22 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--template-intro",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="병합 맨 앞에 붙일 템플릿 파일 경로",
+    )
+
+    parser.add_argument(
+        "--template-outro",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="병합 맨 뒤에 붙일 템플릿 파일 경로",
+    )
+
+    parser.add_argument(
         "--status",
         nargs="?",
         const=CATALOG_STATUS_SENTINEL,
@@ -902,6 +1004,20 @@ def create_parser() -> argparse.ArgumentParser:
         "--archive-force",
         action="store_true",
         help="원본 파일 삭제(delete 정책) 시 확인 프롬프트 우회",
+    )
+
+    # 클라우드 백업 옵션
+    parser.add_argument(
+        "--backup",
+        type=str,
+        default=None,
+        metavar="REMOTE",
+        help="병합 결과를 백업할 대상 remote (rclone 대상: 예: s3:bucket/path)",
+    )
+    parser.add_argument(
+        "--backup-all",
+        action="store_true",
+        help="원본 파일까지 함께 백업 (템플릿 포함, 기본: 결과물만)",
     )
 
     # 알림 옵션
@@ -1033,6 +1149,41 @@ def _resolve_set_thumbnail_path(
     return set_thumbnail
 
 
+def _resolve_template_path(template_arg: str | Path | None) -> Path | None:
+    """`--template-*` 경로를 검증하고 Path로 변환한다.
+
+    - `~` 확장
+    - 존재 여부 검증
+
+    Args:
+        template_arg: 템플릿 파일 경로
+
+    Returns:
+        검증된 Path 또는 미지정 시 None
+    """
+    if not template_arg:
+        return None
+
+    template = Path(template_arg).expanduser().resolve()
+    if not template.is_file():
+        raise FileNotFoundError(f"Template file not found: {template_arg}")
+    return template
+
+
+def _to_video_file(path: Path) -> VideoFile:
+    """템플릿 경로를 ``VideoFile`` 객체로 변환한다.
+
+    ``scan_videos``와 동일한 생성 시간 계산 규칙을 사용한다.
+    """
+    stat = path.stat()
+    if sys.platform == "darwin":
+        creation_time = datetime.fromtimestamp(getattr(stat, "st_birthtime", stat.st_mtime))
+    else:
+        creation_time = datetime.fromtimestamp(stat.st_ctime)
+
+    return VideoFile(path=path, creation_time=creation_time, size_bytes=stat.st_size)
+
+
 def validate_args(
     args: argparse.Namespace,
     device_luts: dict[str, str] | None = None,
@@ -1080,6 +1231,24 @@ def validate_args(
             raise FileNotFoundError(f"Output directory not found: {args.output_dir}")
     else:
         output_dir = get_default_output_dir()
+
+    # watch 모드 경로 결정 (CLI > config)
+    watch_arg = getattr(args, "watch", None)
+    watch_paths_raw = watch_arg if watch_arg is not None else list(get_default_watch_paths())
+    watch_mode = bool(watch_paths_raw)
+    watch_paths: list[Path] = []
+    for watch_path in watch_paths_raw:
+        watch_target = Path(watch_path).expanduser()
+        if not watch_target.is_dir():
+            raise FileNotFoundError(f"Watch path not found or not a directory: {watch_path}")
+        watch_paths.append(watch_target)
+
+    watch_poll_interval = get_default_watch_poll_interval()
+    watch_stability_checks = get_default_watch_stability_checks()
+    watch_log_arg = getattr(args, "watch_log", None)
+    watch_log: Path | None = (
+        Path(watch_log_arg).expanduser() if watch_log_arg else get_default_watch_log_path()
+    )
 
     # upload 플래그 확인
     upload = getattr(args, "upload", False)
@@ -1149,6 +1318,22 @@ def validate_args(
     if silence_min_duration <= 0:
         raise ValueError(f"Silence duration must be > 0, got: {silence_min_duration}")
 
+    # 자막 옵션
+    subtitle = bool(getattr(args, "subtitle", False))
+    subtitle_model = getattr(args, "subtitle_model", "tiny")
+    if subtitle_model not in SUPPORTED_SUBTITLE_MODELS:
+        raise ValueError(f"Unsupported subtitle model: {subtitle_model}")
+
+    subtitle_format = getattr(args, "subtitle_format", "srt")
+    if subtitle_format not in SUPPORTED_SUBTITLE_FORMATS:
+        raise ValueError(f"Unsupported subtitle format: {subtitle_format}")
+
+    subtitle_lang = getattr(args, "subtitle_lang", None)
+    if subtitle_lang is not None:
+        subtitle_lang = subtitle_lang.strip().lower() or None
+
+    subtitle_burn = bool(getattr(args, "subtitle_burn", False))
+
     # BGM 옵션 검증 (CLI 인자 > 환경 변수 > 기본값)
     bgm_path_arg = getattr(args, "bgm", None)
     bgm_path: Path | None = None
@@ -1207,6 +1392,15 @@ def validate_args(
 
     archive_force_flag: bool = getattr(args, "archive_force", False)
 
+    # 클라우드 백업 옵션 (CLI > 환경변수 > 기본값)
+    backup_remote_arg = getattr(args, "backup", None)
+    backup_remote: str | None = (
+        backup_remote_arg.strip() if backup_remote_arg else get_default_backup_remote()
+    )
+    backup_all: bool = bool(getattr(args, "backup_all", False)) or (
+        get_default_backup_include_originals()
+    )
+
     # 타임랩스 옵션 검증
     timelapse_speed: int | None = None
     if hasattr(args, "timelapse") and args.timelapse:
@@ -1255,6 +1449,21 @@ def validate_args(
 
     lut_before_hdr: bool = getattr(args, "lut_before_hdr", False)
 
+    # 템플릿 옵션 (CLI > env/config)
+    template_intro_env = get_default_template_intro()
+    template_outro_env = get_default_template_outro()
+    template_intro_arg = getattr(args, "template_intro", None)
+    template_outro_arg = getattr(args, "template_outro", None)
+    template_intro = (
+        _resolve_template_path(template_intro_arg)
+        if template_intro_arg is not None
+        else _resolve_template_path(template_intro_env)
+    )
+    template_outro = (
+        _resolve_template_path(template_outro_arg)
+        if template_outro_arg is not None
+        else _resolve_template_path(template_outro_env)
+    )
     # 스케줄 옵션 검증
     schedule_arg: str | None = getattr(args, "schedule", None)
     schedule: str | None = None
@@ -1287,6 +1496,11 @@ def validate_args(
         trim_silence=trim_silence,
         silence_threshold=silence_threshold,
         silence_min_duration=silence_min_duration,
+        subtitle=subtitle,
+        subtitle_model=subtitle_model,
+        subtitle_format=subtitle_format,
+        subtitle_lang=subtitle_lang,
+        subtitle_burn=subtitle_burn,
         bgm_path=bgm_path,
         bgm_volume=bgm_volume,
         bgm_loop=bgm_loop,
@@ -1298,6 +1512,8 @@ def validate_args(
         split_size=split_size,
         archive_originals=archive_originals,
         archive_force=archive_force_flag,
+        backup_remote=backup_remote,
+        backup_all=backup_all,
         timelapse_speed=timelapse_speed,
         timelapse_audio=timelapse_audio,
         timelapse_resolution=timelapse_resolution,
@@ -1309,6 +1525,13 @@ def validate_args(
         auto_lut=auto_lut,
         lut_before_hdr=lut_before_hdr,
         device_luts=device_luts if device_luts else None,
+        template_intro=template_intro,
+        template_outro=template_outro,
+        watch=watch_mode,
+        watch_paths=watch_paths,
+        watch_poll_interval=watch_poll_interval,
+        watch_stability_checks=watch_stability_checks,
+        watch_log=watch_log,
         quality_report=quality_report,
         notify=bool(getattr(args, "notify", False)) or get_default_notify(),
         schedule=schedule,
@@ -1316,7 +1539,11 @@ def validate_args(
     )
 
 
-def setup_logging(verbose: bool = False) -> None:
+def setup_logging(
+    verbose: bool = False,
+    *,
+    log_path: Path | None = None,
+) -> None:
     """
     로깅 설정.
 
@@ -1324,11 +1551,258 @@ def setup_logging(verbose: bool = False) -> None:
         verbose: 상세 로그 여부
     """
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers: list[logging.Handler] = [
+        logging.StreamHandler(),
+    ]
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_path))
+
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+    root_logger = logging.getLogger()
+    for handler in list(root_logger.handlers):
+        root_logger.removeHandler(handler)
+        handler.close()
+
+    for handler in handlers:
+        handler.setLevel(level)
+        handler.setFormatter(formatter)
+        root_logger.addHandler(handler)
+
+    root_logger.setLevel(level)
+
+
+def _wait_for_stable_file(
+    file_path: Path,
+    checks: int,
+    interval: float,
+    stop_event: Event,
+) -> bool:
+    """파일 크기가 N회 연속 동일하면 안정된 것으로 간주."""
+    if checks <= 0:
+        return True
+
+    last_size: int | None = None
+    stable_count = 0
+    while not stop_event.is_set():
+        try:
+            current_size = file_path.stat().st_size
+        except OSError:
+            return False
+
+        if last_size is not None and current_size == last_size:
+            stable_count += 1
+        else:
+            last_size = current_size
+            stable_count = 1
+
+        if stable_count >= checks:
+            return True
+
+        stop_event.wait(interval)
+
+    return False
+
+
+def _setup_file_observer(
+    paths: list[Path],
+    callback: Callable[[Path], None],
+) -> tuple[Any, Any]:
+    """watchdog observer를 시작하고 observer 객체를 반환."""
+    try:
+        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "watchdog 패키지가 필요합니다. 'uv add watchdog'로 설치 후 다시 시도하세요."
+        ) from exc
+
+    class _Handler(FileSystemEventHandler):
+        def on_created(self, event: Any) -> None:
+            if not getattr(event, "is_directory", False):
+                callback(Path(event.src_path))
+
+        def on_modified(self, event: Any) -> None:
+            if not getattr(event, "is_directory", False):
+                callback(Path(event.src_path))
+
+        def on_moved(self, event: Any) -> None:
+            if not getattr(event, "is_directory", False):
+                callback(Path(event.dest_path))
+
+    observer: Any = Observer()
+    handler = _Handler()
+    for watch_path in paths:
+        observer.schedule(handler, str(watch_path), recursive=True)
+    observer.start()
+    return observer, handler
+
+
+def _run_watch_pipeline(
+    file_path: Path,
+    args_namespace: argparse.Namespace,
+    validated_args: ValidatedArgs,
+    notifier: Notifier | None = None,
+    hooks: HooksConfig | None = None,
+) -> None:
+    """watch 이벤트가 들어온 단일 파일에 대해 파이프라인 1회 실행."""
+    pipeline_args = replace(
+        validated_args,
+        targets=[file_path],
+        watch=False,
+        watch_paths=[],
+    )
+    pipeline_generated_thumbnail_paths: list[Path] = []
+    output_path = run_pipeline(
+        pipeline_args,
+        notifier=notifier,
+        generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
+    )
+    print("\n✅ 완료!")
+    print(f"📹 출력 파일: {output_path}")
+
+    if pipeline_args.upload:
+        _upload_after_pipeline(
+            output_path=output_path,
+            args=args_namespace,
+            notifier=notifier,
+            publish_at=pipeline_args.schedule,
+            generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
+            explicit_thumbnail=pipeline_args.set_thumbnail,
+            hooks=hooks,
+        )
+
+
+def _run_watch_mode(
+    parsed_args: argparse.Namespace,
+    validated_args: ValidatedArgs,
+    *,
+    config_path: Path | None,
+    hooks: HooksConfig | None = None,
+    notifier: Notifier | None = None,
+    verbose: bool = False,
+) -> None:
+    """watch 모드 실행."""
+    from collections import deque
+
+    queue: deque[Path] = deque()
+    lock = Lock()
+    stop_event = Event()
+    reload_event = Event()
+
+    def _enqueue_file(path: Path) -> None:
+        if stop_event.is_set():
+            return
+        if path.name.startswith(".") or path.suffix.lower() not in VIDEO_EXTENSIONS:
+            return
+
+        with lock:
+            if path not in queue:
+                queue.append(path)
+
+    def _load_validated_args() -> ValidatedArgs:
+        if config_path is None:
+            return validate_args(parsed_args, hooks=hooks)
+        updated_config = load_config(config_path)
+        apply_config_to_env(updated_config, overwrite=True)
+        return validate_args(
+            parsed_args,
+            device_luts=updated_config.color_grading.device_luts or None,
+            hooks=updated_config.hooks,
+        )
+
+    def _signal_handler(signum: int, _frame: object | None) -> None:
+        if signum == signal.SIGINT:
+            stop_event.set()
+        else:
+            reload_event.set()
+
+    previous_sigint: Any = signal.getsignal(signal.SIGINT)
+    previous_sighup: Any | None = (
+        signal.getsignal(signal.SIGHUP) if hasattr(signal, "SIGHUP") else None
+    )
+    signal.signal(signal.SIGINT, _signal_handler)
+    if previous_sighup is not None:
+        signal.signal(signal.SIGHUP, _signal_handler)
+
+    try:
+        current_args = validated_args
+        while not stop_event.is_set():
+            if not current_args.watch or not current_args.watch_paths:
+                logger.info("No watch paths configured; exiting watch mode.")
+                return
+
+            setup_logging(
+                verbose=verbose,
+                log_path=current_args.watch_log,
+            )
+
+            observer, _handler = _setup_file_observer(current_args.watch_paths, _enqueue_file)
+            logger.info("watch mode started (paths=%s)", current_args.watch_paths)
+
+            try:
+                while not stop_event.is_set():
+                    if reload_event.is_set():
+                        reload_event.clear()
+                        break
+
+                    pending: Path | None = None
+                    with lock:
+                        if queue:
+                            pending = queue.popleft()
+
+                    if pending is None:
+                        stop_event.wait(current_args.watch_poll_interval)
+                        continue
+
+                    if not _wait_for_stable_file(
+                        pending,
+                        checks=current_args.watch_stability_checks,
+                        interval=current_args.watch_poll_interval,
+                        stop_event=stop_event,
+                    ):
+                        continue
+
+                    if not pending.is_file():
+                        continue
+
+                    try:
+                        _run_watch_pipeline(
+                            pending,
+                            parsed_args,
+                            current_args,
+                            notifier=notifier,
+                            hooks=current_args.hooks if hooks is None else hooks,
+                        )
+                    except Exception as e:
+                        logger.error("watch pipeline failed for %s: %s", pending, e)
+                        _run_error_hook(
+                            current_args.hooks,
+                            e,
+                            output_path=None,
+                            validated_args=current_args,
+                        )
+            finally:
+                observer.stop()
+                observer.join()
+
+            if stop_event.is_set():
+                return
+
+            try:
+                current_args = _load_validated_args()
+            except Exception as e:
+                logger.error("watch config reload failed: %s", e)
+                return
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        if previous_sighup is not None:
+            signal.signal(signal.SIGHUP, previous_sighup)
+        stop_event.set()
 
 
 def get_output_filename(targets: list[Path]) -> str:
@@ -1915,6 +2389,7 @@ def run_pipeline(
     validated_args: ValidatedArgs,
     notifier: Notifier | None = None,
     generated_thumbnail_paths: list[Path] | None = None,
+    generated_subtitle_paths: list[Path] | None = None,
 ) -> Path:
     """
     전체 파이프라인 실행.
@@ -1925,6 +2400,7 @@ def run_pipeline(
         validated_args: 검증된 인자
         notifier: 알림 오케스트레이터 (None이면 알림 비활성화)
         generated_thumbnail_paths: 썸네일 생성 결과 저장용 출력 버퍼 (기본값 None)
+        generated_subtitle_paths: 자막 생성 결과 저장용 출력 버퍼 (기본값 None)
 
     Returns:
         최종 출력 파일 경로
@@ -1949,13 +2425,39 @@ def run_pipeline(
         return Path()  # 빈 경로 반환
 
     # 단일 파일 + --upload 시 빠른 경로
-    if len(video_files) == 1 and validated_args.upload:
+    if (
+        len(video_files) == 1
+        and validated_args.upload
+        and validated_args.template_intro is None
+        and validated_args.template_outro is None
+    ):
         return handle_single_file_upload(video_files[0], validated_args)
+
+    # 템플릿 삽입 (템플릿은 검증 및 파일 존재 확인을 validate_args에서 수행)
+    main_video_files = list(video_files)
+    template_intro_file: VideoFile | None = None
+    template_outro_file: VideoFile | None = None
+    main_paths = {vf.path for vf in main_video_files}
+
+    if validated_args.template_intro and validated_args.template_intro not in main_paths:
+        template_intro_file = _to_video_file(validated_args.template_intro)
+
+    if (
+        validated_args.template_outro
+        and validated_args.template_outro not in main_paths
+        and (
+            template_intro_file is None or template_intro_file.path != validated_args.template_outro
+        )
+    ):
+        template_outro_file = _to_video_file(validated_args.template_outro)
+
+    template_intro_count = 1 if template_intro_file is not None else 0
+    template_outro_count = 1 if template_outro_file is not None else 0
 
     # 1.5 그룹핑 및 재정렬
     if validated_args.group_sequences:
-        groups = group_sequences(video_files)
-        video_files = reorder_with_groups(video_files, groups)
+        groups = group_sequences(main_video_files)
+        main_video_files = reorder_with_groups(main_video_files, groups)
         for group in groups:
             if len(group.files) > 1:
                 logger.info(
@@ -1966,11 +2468,42 @@ def run_pipeline(
     else:
         groups = [
             FileSequenceGroup(files=(video_file,), group_id=f"s_{i}")
-            for i, video_file in enumerate(video_files)
+            for i, video_file in enumerate(main_video_files)
         ]
 
-    fade_map = compute_fade_map(groups, default_fade=validated_args.fade_duration)
+    fade_map = compute_fade_map(
+        groups=groups,
+        default_fade=validated_args.fade_duration,
+    )
 
+    video_files = list(main_video_files)
+    if template_intro_file is not None:
+        video_files.insert(0, template_intro_file)
+        fade_map[template_intro_file.path] = FadeConfig(
+            fade_in=validated_args.fade_duration,
+            fade_out=0.0,
+        )
+        first_main = main_video_files[0]
+        first_fade = fade_map.get(first_main.path)
+        if first_fade is not None:
+            fade_map[first_main.path] = FadeConfig(
+                fade_in=0.0,
+                fade_out=first_fade.fade_out,
+            )
+
+    if template_outro_file is not None:
+        video_files.append(template_outro_file)
+        fade_map[template_outro_file.path] = FadeConfig(
+            fade_in=0.0,
+            fade_out=validated_args.fade_duration,
+        )
+        last_main = main_video_files[-1]
+        last_fade = fade_map.get(last_main.path)
+        if last_fade is not None:
+            fade_map[last_main.path] = FadeConfig(
+                fade_in=last_fade.fade_in,
+                fade_out=0.0,
+            )
     # 2. 트랜스코딩
     temp_dir = get_temp_dir()
     logger.info(f"Using temp directory: {temp_dir}")
@@ -2009,6 +2542,23 @@ def run_pipeline(
         logger.info("Starting transcoding...")
         results = _transcode_sequential(video_files, temp_dir, transcode_opts)
 
+    video_ids = [r.video_id for r in results]
+    main_start = template_intro_count
+    main_end = len(results) - template_outro_count if template_outro_count else len(results)
+    if main_start >= main_end:
+        # 템플릿만 들어간 경우(또는 인덱스 역전) 대비: 전체 결과를 사용
+        main_start = 0
+        main_end = len(results)
+    main_results = results[main_start:main_end]
+    main_video_files = video_files[main_start:main_end]
+    if not main_video_files:
+        main_video_files = video_files
+        main_video_ids = [r.video_id for r in results]
+        main_video_clips = [r.clip_info for r in results]
+    else:
+        main_video_ids = [r.video_id for r in main_results]
+        main_video_clips = [r.clip_info for r in main_results]
+
     run_hooks(
         validated_args.hooks,
         "on_transcode",
@@ -2024,8 +2574,8 @@ def run_pipeline(
 
         notifier.notify(
             transcode_complete_event(
-                file_count=len(results),
-                total_duration=sum(r.clip_info.duration for r in results),
+                file_count=len(main_results),
+                total_duration=sum(r.clip_info.duration for r in main_results),
             )
         )
 
@@ -2054,7 +2604,7 @@ def run_pipeline(
         notifier.notify(
             merge_complete_event(
                 output_path=str(final_path),
-                file_count=len(results),
+                file_count=len(main_results),
                 total_size_bytes=final_path.stat().st_size if final_path.exists() else 0,
             )
         )
@@ -2074,18 +2624,42 @@ def run_pipeline(
         shutil.move(str(bgm_mixed_path), str(final_path))
         logger.info(f"BGM mixing applied: {final_path}")
 
+    # 4.1 자막 생성/하드코딩 (선택)
+    subtitle_path: Path | None = None
+    if validated_args.subtitle:
+        from tubearchive.core.subtitle import generate_subtitles
+
+        logger.info("Generating subtitles for merged output...")
+        generated = final_path.with_suffix(f".{validated_args.subtitle_format}")
+        subtitle_result = generate_subtitles(
+            final_path,
+            model=validated_args.subtitle_model,
+            language=validated_args.subtitle_lang,
+            output_format=validated_args.subtitle_format,
+            output_path=generated,
+        )
+        subtitle_path = subtitle_result.subtitle_path
+        if generated_subtitle_paths is not None:
+            generated_subtitle_paths.append(subtitle_path)
+
+        if validated_args.subtitle_burn:
+            logger.info("Applying hardcoded subtitles...")
+            final_path = _apply_subtitle_burn(
+                input_path=final_path,
+                subtitle_path=subtitle_path,
+            )
+
     # 4.1 화질 리포트 출력 (선택)
     if validated_args.quality_report:
-        _print_quality_report(video_files, results)
+        _print_quality_report(main_video_files, main_results)
 
     # 4. DB 저장 및 Summary 생성
     video_ids = [r.video_id for r in results]
-    video_clips = [r.clip_info for r in results]
     summary, merge_job_id = save_merge_job_to_db(
         final_path,
-        video_clips,
+        main_video_clips,
         validated_args.targets,
-        video_ids,
+        main_video_ids,
         groups=groups,
     )
 
@@ -2107,6 +2681,7 @@ def run_pipeline(
                 print(f"  - {tp}")
 
     # 4.6 영상 분할 (비필수)
+    split_files: list[Path] = []
     if validated_args.split_duration or validated_args.split_size:
         from tubearchive.core.splitter import SplitOptions, VideoSplitter
 
@@ -2162,20 +2737,126 @@ def run_pipeline(
         if timelapse_path:
             print(f"\n⏩ 타임랩스 ({validated_args.timelapse_speed}x) 생성:")
             print(f"  - {timelapse_path}")
+
+    # 4.8 클라우드 백업 (결과물 + 옵션에 따라 원본)
+    video_paths_for_archive = [
+        (r.video_id, vf.path) for r, vf in zip(main_results, main_video_files, strict=True)
+    ]
+    if validated_args.backup_remote:
+        original_for_backup = (
+            [path for _, path in video_paths_for_archive] if validated_args.backup_all else []
+        )
+        _run_backup(
+            final_path=final_path,
+            split_files=split_files,
+            timelapse_path=timelapse_path,
+            original_paths_for_backup=original_for_backup,
+            validated_args=validated_args,
+            merge_job_id=merge_job_id,
+        )
+
     # 5. 임시 파일 정리
     if not validated_args.keep_temp:
         _cleanup_temp(temp_dir, results, final_path, video_ids)
 
     # 5.5 원본 파일 아카이빙 (CLI 옵션 또는 config 정책)
-    video_paths_for_archive = [
-        (r.video_id, vf.path) for r, vf in zip(results, video_files, strict=True)
-    ]
     _archive_originals(video_paths_for_archive, validated_args)
 
     # 6. Summary 출력
     _print_summary(summary)
 
     return final_path
+
+
+def _run_backup(
+    *,
+    final_path: Path,
+    split_files: list[Path],
+    timelapse_path: Path | None,
+    original_paths_for_backup: list[Path],
+    validated_args: ValidatedArgs,
+    merge_job_id: int | None,
+) -> None:
+    """병합/분할/타임랩스/원본 영상을 백업한다.
+
+    실패해도 파이프라인을 중단하지 않고 로그만 남긴다.
+    """
+    if not validated_args.backup_remote:
+        return
+
+    remote = validated_args.backup_remote.strip()
+    if not remote:
+        logger.warning("backup remote is empty. skip backup.")
+        return
+
+    backup_targets: list[tuple[Path, Literal["output", "split", "timelapse", "original"]]] = []
+    if final_path.exists():
+        backup_targets.append((final_path, "output"))
+    else:
+        logger.warning("Final output not found for backup: %s", final_path)
+
+    for split_file in split_files:
+        if split_file.exists():
+            backup_targets.append((split_file, "split"))
+        else:
+            logger.warning("Split file not found for backup: %s", split_file)
+
+    if timelapse_path is not None:
+        if timelapse_path.exists():
+            backup_targets.append((timelapse_path, "timelapse"))
+        else:
+            logger.warning("Timelapse file not found for backup: %s", timelapse_path)
+
+    for original_path in original_paths_for_backup:
+        if original_path.exists():
+            backup_targets.append((original_path, "original"))
+        else:
+            logger.warning("Original file not found for backup: %s", original_path)
+
+    if not backup_targets:
+        logger.warning("No backup targets found.")
+        return
+
+    logger.info("Starting backup (%s) for %d target(s)", remote, len(backup_targets))
+    executor = BackupExecutor(remote)
+    results: list[
+        tuple[Path, Literal["output", "split", "timelapse", "original"], BackupResult]
+    ] = []
+
+    for source_path, source_type in backup_targets:
+        backup_result = executor.copy(source_path)
+        results.append((source_path, source_type, backup_result))
+        if backup_result.success:
+            logger.info("Backup succeeded: %s -> %s (%s)", source_path, remote, source_type)
+        else:
+            logger.warning(
+                "Backup failed: %s -> %s (%s): %s",
+                source_path,
+                remote,
+                source_type,
+                backup_result.message,
+            )
+
+    if merge_job_id is None:
+        logger.debug(
+            "merge_job_id is None; skip backup history insertion (target count=%d)",
+            len(results),
+        )
+        return
+
+    with database_session() as conn:
+        from tubearchive.database.repository import BackupHistoryRepository
+
+        backup_repo = BackupHistoryRepository(conn)
+        for source_path, source_type, result in results:
+            backup_repo.insert_history(
+                merge_job_id=merge_job_id,
+                source_path=source_path,
+                remote=remote,
+                source_type=source_type,
+                success=result.success,
+                error_message=result.message,
+            )
 
 
 def _archive_originals(
@@ -2339,6 +3020,37 @@ def _generate_thumbnails(
     except Exception:
         logger.warning("Failed to generate thumbnails", exc_info=True)
         return []
+
+
+def _apply_subtitle_burn(
+    input_path: Path,
+    subtitle_path: Path,
+) -> Path:
+    """자막을 비디오에 하드코딩한다."""
+    from tubearchive.core.subtitle import build_subtitle_filter
+
+    output_path = input_path.with_name(f"{input_path.stem}_subtitled{input_path.suffix}")
+    subtitle_filter = build_subtitle_filter(subtitle_path)
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vf",
+        subtitle_filter,
+        "-c:a",
+        "copy",
+        "-c:v",
+        "libx265",
+        str(output_path),
+    ]
+    logger.info("Applying hardcoded subtitle: %s", output_path.name)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error("Subtitle burn failed: %s", result.stderr)
+        raise RuntimeError(f"Failed to burn subtitle: {result.stderr}")
+    return output_path
 
 
 def _print_quality_report(
@@ -2549,6 +3261,8 @@ def upload_to_youtube(
     playlist_ids: list[str] | None = None,
     chunk_mb: int | None = None,
     thumbnail: Path | None = None,
+    subtitle_path: Path | None = None,
+    subtitle_language: str | None = None,
 ) -> str | None:
     """
     영상을 YouTube에 업로드.
@@ -2563,6 +3277,8 @@ def upload_to_youtube(
         playlist_ids: 추가할 플레이리스트 ID 리스트 (None이면 추가 안 함)
         chunk_mb: 업로드 청크 크기 MB (None이면 환경변수/기본값)
         thumbnail: 썸네일 이미지 경로
+        subtitle_path: 자막 파일 경로
+        subtitle_language: 자막 언어 코드
 
     Returns:
         업로드된 YouTube 영상 ID. 실패 시 None.
@@ -2671,6 +3387,18 @@ def upload_to_youtube(
             except Exception as e:
                 logger.warning(f"Failed to set thumbnail for {result.video_id}: {e}")
                 print(f"⚠️  썸네일 업로드 실패: {e}")
+
+        if subtitle_path is not None:
+            try:
+                uploader.set_captions(
+                    video_id=result.video_id,
+                    caption_path=subtitle_path,
+                    language=subtitle_language,
+                )
+                print("🧾 자막 업로드 완료")
+            except Exception as e:
+                logger.warning(f"Failed to set captions for {result.video_id}: {e}")
+                print(f"⚠️  자막 업로드 실패: {e}")
 
         print("\n✅ YouTube 업로드 완료!")
         print(f"🎬 URL: {result.url}")
@@ -3476,6 +4204,8 @@ def _upload_after_pipeline(
     notifier: Notifier | None = None,
     publish_at: str | None = None,
     generated_thumbnail_paths: list[Path] | None = None,
+    subtitle_path: Path | None = None,
+    subtitle_language: str | None = None,
     explicit_thumbnail: Path | None = None,
     hooks: HooksConfig | None = None,
 ) -> list[str]:
@@ -3490,6 +4220,8 @@ def _upload_after_pipeline(
         notifier: 알림 오케스트레이터 (None이면 알림 비활성화)
         publish_at: 예약 공개 시간 (이미 검증된 값, 재파싱하지 않음)
         generated_thumbnail_paths: 썸네일 후보 경로 목록 (생성된 썸네일)
+        subtitle_path: 자막 파일 경로
+        subtitle_language: 자막 언어 코드
         explicit_thumbnail: --set-thumbnail에서 지정한 썸네일 경로
     """
     print("\n📤 YouTube 업로드 시작...")
@@ -3574,6 +4306,8 @@ def _upload_after_pipeline(
             playlist_ids=playlist_ids,
             chunk_mb=args.upload_chunk,
             thumbnail=thumbnail,
+            subtitle_path=subtitle_path,
+            subtitle_language=subtitle_language,
         )
         if video_id:
             uploaded_ids = [video_id]
@@ -3651,7 +4385,7 @@ def main() -> None:
         return
 
     # 설정 파일 로드 및 환경변수 적용
-    config_path = Path(args.config) if args.config else None
+    config_path = Path(args.config) if args.config else get_default_config_path()
     config = load_config(config_path)
     apply_config_to_env(config)
     setup_logging(args.verbose)
@@ -3782,6 +4516,17 @@ def main() -> None:
             hooks=config.hooks,
         )
 
+        if validated_args.watch:
+            _run_watch_mode(
+                args,
+                validated_args,
+                config_path=config_path,
+                hooks=config.hooks,
+                notifier=notifier,
+                verbose=args.verbose,
+            )
+            return
+
         if validated_args.dry_run:
             _cmd_dry_run(validated_args)
             return
@@ -3795,10 +4540,15 @@ def main() -> None:
                 logger.info("알림 시스템 활성화 (%d개 채널)", notifier.provider_count)
 
         pipeline_generated_thumbnail_paths: list[Path] = []
+        pipeline_generated_subtitle_paths: list[Path] = []
         output_path = run_pipeline(
             validated_args,
             notifier=notifier,
             generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
+            generated_subtitle_paths=pipeline_generated_subtitle_paths,
+        )
+        subtitle_path = (
+            pipeline_generated_subtitle_paths[0] if pipeline_generated_subtitle_paths else None
         )
         print("\n✅ 완료!")
         print(f"📹 출력 파일: {output_path}")
@@ -3810,6 +4560,8 @@ def main() -> None:
                 notifier=notifier,
                 publish_at=validated_args.schedule,
                 generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
+                subtitle_path=subtitle_path,
+                subtitle_language=validated_args.subtitle_lang,
                 explicit_thumbnail=validated_args.set_thumbnail,
                 hooks=config.hooks,
             )

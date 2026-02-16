@@ -35,6 +35,10 @@ ENV_DENOISE_LEVEL = "TUBEARCHIVE_DENOISE_LEVEL"
 ENV_NORMALIZE_AUDIO = "TUBEARCHIVE_NORMALIZE_AUDIO"
 ENV_GROUP_SEQUENCES = "TUBEARCHIVE_GROUP_SEQUENCES"
 ENV_FADE_DURATION = "TUBEARCHIVE_FADE_DURATION"
+ENV_BACKUP_REMOTE = "TUBEARCHIVE_BACKUP_REMOTE"
+ENV_BACKUP_INCLUDE_ORIGINALS = "TUBEARCHIVE_BACKUP_INCLUDE_ORIGINALS"
+ENV_TEMPLATE_INTRO = "TUBEARCHIVE_TEMPLATE_INTRO"
+ENV_TEMPLATE_OUTRO = "TUBEARCHIVE_TEMPLATE_OUTRO"
 ENV_TRIM_SILENCE = "TUBEARCHIVE_TRIM_SILENCE"
 ENV_SILENCE_THRESHOLD = "TUBEARCHIVE_SILENCE_THRESHOLD"
 ENV_SILENCE_MIN_DURATION = "TUBEARCHIVE_SILENCE_MIN_DURATION"
@@ -47,6 +51,12 @@ ENV_STABILIZE = "TUBEARCHIVE_STABILIZE"
 ENV_STABILIZE_STRENGTH = "TUBEARCHIVE_STABILIZE_STRENGTH"
 ENV_STABILIZE_CROP = "TUBEARCHIVE_STABILIZE_CROP"
 ENV_AUTO_LUT = "TUBEARCHIVE_AUTO_LUT"
+ENV_WATCH_PATHS = "TUBEARCHIVE_WATCH_PATHS"
+ENV_WATCH_POLL_INTERVAL = "TUBEARCHIVE_WATCH_POLL_INTERVAL"
+ENV_WATCH_STABILITY_CHECKS = "TUBEARCHIVE_WATCH_STABILITY_CHECKS"
+ENV_WATCH_LOG = "TUBEARCHIVE_WATCH_LOG_PATH"
+ENV_TEMPLATE_INTRO = "TUBEARCHIVE_TEMPLATE_INTRO"
+ENV_TEMPLATE_OUTRO = "TUBEARCHIVE_TEMPLATE_OUTRO"
 
 # 알림 설정
 ENV_NOTIFY = "TUBEARCHIVE_NOTIFY"
@@ -114,6 +124,20 @@ class YouTubeConfig:
 
 
 @dataclass(frozen=True)
+class TemplateConfig:
+    """``[template]`` 섹션 데이터.
+
+    인트로/아웃트로 템플릿 파일 경로를 보관한다.
+    ``None`` 이면 해당 템플릿 미적용이다.
+    """
+
+    intro: str | None = None
+    """인트로 영상 경로 (문자열)."""
+    outro: str | None = None
+    """아웃트로 영상 경로 (문자열)."""
+
+
+@dataclass(frozen=True)
 class ArchiveConfig:
     """``config.toml`` 의 ``[archive]`` 섹션.
 
@@ -122,6 +146,17 @@ class ArchiveConfig:
 
     policy: str | None = None  # keep/move/delete
     destination: str | None = None  # move 시 이동 경로
+
+
+@dataclass(frozen=True)
+class BackupConfig:
+    """``[backup]`` 섹션 데이터.
+
+    처리 완료 후 백업 대상과 범위를 관리한다.
+    """
+
+    remote: str | None = None
+    include_originals: bool = False
 
 
 @dataclass(frozen=True)
@@ -139,6 +174,20 @@ class ColorGradingConfig:
     """기기 모델명 기반 자동 LUT 적용 여부."""
     device_luts: dict[str, str] = field(default_factory=dict)
     """기기 키워드 → LUT 파일 경로 매핑 (config.toml 전용, env var 없음)."""
+
+
+@dataclass(frozen=True)
+class WatchConfig:
+    """``config.toml`` 의 ``[watch]`` 섹션."""
+
+    paths: tuple[str, ...] = ()
+    """워치 대상 디렉토리 목록."""
+    poll_interval: float | None = None
+    """폴링 대기 시간(초)."""
+    stability_checks: int | None = None
+    """파일 안정성 검사 반복 횟수."""
+    log_path: str | None = None
+    """watch 데몬 로그 파일 경로."""
 
 
 @dataclass(frozen=True)
@@ -210,14 +259,18 @@ class NotificationConfig:
 class AppConfig:
     """애플리케이션 전체 설정.
 
-    [general] + [bgm] + [youtube] + [archive] + [color_grading] + [hooks] + [notification] 통합.
+    [general] + [bgm] + [youtube] + [archive] + [color_grading]
+    + [template] + [hooks] + [notification] 통합.
     """
 
     general: GeneralConfig = field(default_factory=GeneralConfig)
     bgm: BGMConfig = field(default_factory=BGMConfig)
     youtube: YouTubeConfig = field(default_factory=YouTubeConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
+    backup: BackupConfig = field(default_factory=BackupConfig)
     color_grading: ColorGradingConfig = field(default_factory=ColorGradingConfig)
+    watch: WatchConfig = field(default_factory=WatchConfig)
+    template: TemplateConfig = field(default_factory=TemplateConfig)
     hooks: HooksConfig = field(default_factory=HooksConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)
 
@@ -473,6 +526,19 @@ def _parse_archive(data: dict[str, object]) -> ArchiveConfig:
     )
 
 
+def _parse_backup(data: dict[str, object]) -> BackupConfig:
+    """``[backup]`` 섹션 파싱. 타입 오류 시 해당 필드만 무시."""
+    section = "backup"
+
+    remote = _parse_str(data, "remote", section)
+    include_originals = _parse_bool(data, "include_originals", section)
+
+    return BackupConfig(
+        remote=remote,
+        include_originals=include_originals if include_originals is not None else False,
+    )
+
+
 def _parse_color_grading(data: dict[str, object]) -> ColorGradingConfig:
     """[color_grading] 섹션 파싱. 타입 오류 시 해당 필드 무시."""
     section = "color_grading"
@@ -494,6 +560,62 @@ def _parse_color_grading(data: dict[str, object]) -> ColorGradingConfig:
     return ColorGradingConfig(
         auto_lut=auto_lut,
         device_luts=device_luts,
+    )
+
+
+def _parse_watch(data: dict[str, object]) -> WatchConfig:
+    """``[watch]`` 섹션 파싱. 타입 오류 시 해당 필드만 기본값 유지."""
+    section = "watch"
+
+    raw_paths = data.get("paths")
+    paths: list[str] = []
+    if isinstance(raw_paths, list):
+        for raw_path in raw_paths:
+            if isinstance(raw_path, str):
+                paths.append(raw_path.strip())
+            else:
+                _warn_type(f"{section}.paths", "list[str]", raw_path)
+    elif raw_paths is not None:
+        _warn_type(f"{section}.paths", "list[str]", raw_paths)
+
+    raw_poll_interval = data.get("poll_interval")
+    poll_interval = None
+    if raw_poll_interval is not None:
+        if isinstance(raw_poll_interval, (int, float)):
+            if raw_poll_interval > 0:
+                poll_interval = float(raw_poll_interval)
+            else:
+                logger.warning("%s.%s must be > 0, using None", section, "poll_interval")
+        else:
+            _warn_type(f"{section}.poll_interval", "float", raw_poll_interval)
+
+    raw_stability_checks = data.get("stability_checks")
+    stability_checks = None
+    if raw_stability_checks is not None:
+        if isinstance(raw_stability_checks, int):
+            if raw_stability_checks > 0:
+                stability_checks = raw_stability_checks
+            else:
+                logger.warning("%s.%s must be > 0, using None", section, "stability_checks")
+        else:
+            _warn_type(f"{section}.stability_checks", "int", raw_stability_checks)
+
+    log_path = _parse_str(data, "log_path", section)
+
+    return WatchConfig(
+        paths=tuple(p for p in paths if p),
+        poll_interval=poll_interval,
+        stability_checks=stability_checks,
+        log_path=log_path,
+    )
+
+
+def _parse_template(data: dict[str, object]) -> TemplateConfig:
+    """``[template]`` 섹션 파싱."""
+    section = "template"
+    return TemplateConfig(
+        intro=_parse_str(data, "intro", section),
+        outro=_parse_str(data, "outro", section),
     )
 
 
@@ -606,8 +728,10 @@ def load_config(path: Path | None = None) -> AppConfig:
     youtube_data = raw.get("youtube", {})
     archive_data = raw.get("archive", {})
     color_grading_data = raw.get("color_grading", {})
+    template_data = raw.get("template", {})
     notification_data = raw.get("notification", {})
     hooks_data = raw.get("hooks", {})
+    watch_data = raw.get("watch", {})
 
     if isinstance(general_data, dict):
         general = _parse_general(general_data)
@@ -649,6 +773,17 @@ def load_config(path: Path | None = None) -> AppConfig:
             )
         archive = ArchiveConfig()
 
+    backup_data = raw.get("backup", {})
+    if isinstance(backup_data, dict):
+        backup = _parse_backup(backup_data)
+    else:
+        if backup_data:
+            logger.warning(
+                "config: [backup] 섹션이 테이블이 아닙니다 (got %s)",
+                type(backup_data).__name__,
+            )
+        backup = BackupConfig()
+
     if isinstance(color_grading_data, dict):
         color_grading = _parse_color_grading(color_grading_data)
     else:
@@ -658,6 +793,16 @@ def load_config(path: Path | None = None) -> AppConfig:
                 type(color_grading_data).__name__,
             )
         color_grading = ColorGradingConfig()
+
+    if isinstance(template_data, dict):
+        template = _parse_template(template_data)
+    else:
+        if template_data:
+            logger.warning(
+                "config: [template] 섹션이 테이블이 아닙니다 (got %s)",
+                type(template_data).__name__,
+            )
+        template = TemplateConfig()
 
     if isinstance(notification_data, dict):
         notification = _parse_notification(notification_data)
@@ -679,22 +824,36 @@ def load_config(path: Path | None = None) -> AppConfig:
             )
         hooks = HooksConfig()
 
+    if isinstance(watch_data, dict):
+        watch = _parse_watch(watch_data)
+    else:
+        if watch_data:
+            logger.warning(
+                "config: [watch] 섹션이 테이블이 아닙니다 (got %s)",
+                type(watch_data).__name__,
+            )
+        watch = WatchConfig()
+
     return AppConfig(
         general=general,
         bgm=bgm,
         youtube=youtube,
         archive=archive,
+        backup=backup,
         color_grading=color_grading,
+        watch=watch,
+        template=template,
         hooks=hooks,
         notification=notification,
     )
 
 
-def apply_config_to_env(config: AppConfig) -> None:
+def apply_config_to_env(config: AppConfig, *, overwrite: bool = False) -> None:
     """
-    설정값을 환경변수에 주입 (미설정인 경우만).
+    설정값을 환경변수에 주입.
 
-    이미 설정된 환경변수는 보존된다 (환경변수 > config).
+    기본 동작은 기존 환경변수를 보존한다.
+    reload 모드에서 최신 config 값을 반영하려면 overwrite=True로 호출한다.
     """
     mappings: list[tuple[str, str | None]] = [
         (ENV_OUTPUT_DIR, config.general.output_dir),
@@ -747,15 +906,35 @@ def apply_config_to_env(config: AppConfig) -> None:
     if config.general.stabilize_crop is not None:
         mappings.append((ENV_STABILIZE_CROP, config.general.stabilize_crop))
 
+    # watch
+    if config.watch.paths:
+        mappings.append((ENV_WATCH_PATHS, ",".join(config.watch.paths)))
+    if config.watch.poll_interval is not None:
+        mappings.append((ENV_WATCH_POLL_INTERVAL, str(config.watch.poll_interval)))
+    if config.watch.stability_checks is not None:
+        mappings.append((ENV_WATCH_STABILITY_CHECKS, str(config.watch.stability_checks)))
+    if config.watch.log_path is not None:
+        mappings.append((ENV_WATCH_LOG, config.watch.log_path))
+
     # archive policy
     if config.archive.policy is not None:
         mappings.append((ENV_ARCHIVE_POLICY, config.archive.policy))
     if config.archive.destination is not None:
         mappings.append((ENV_ARCHIVE_DESTINATION, config.archive.destination))
 
+    if config.backup.remote is not None:
+        mappings.append((ENV_BACKUP_REMOTE, config.backup.remote))
+    mappings.append((ENV_BACKUP_INCLUDE_ORIGINALS, str(config.backup.include_originals).lower()))
+
     # color grading
     if config.color_grading.auto_lut is not None:
         mappings.append((ENV_AUTO_LUT, str(config.color_grading.auto_lut).lower()))
+
+    # template
+    if config.template.intro is not None:
+        mappings.append((ENV_TEMPLATE_INTRO, config.template.intro))
+    if config.template.outro is not None:
+        mappings.append((ENV_TEMPLATE_OUTRO, config.template.outro))
 
     # notification
     notif = config.notification
@@ -781,7 +960,7 @@ def apply_config_to_env(config: AppConfig) -> None:
         mappings.append((ENV_SLACK_WEBHOOK_URL, notif.slack.webhook_url))
 
     for env_key, value in mappings:
-        if value is not None and env_key not in os.environ:
+        if value is not None and (overwrite or env_key not in os.environ):
             os.environ[env_key] = value
 
 
@@ -826,12 +1005,19 @@ def generate_default_config() -> str:
 # policy = "keep"                           # keep/move/delete (TUBEARCHIVE_ARCHIVE_POLICY)
 # destination = "~/Videos/archive"          # move 시 이동 경로 (TUBEARCHIVE_ARCHIVE_DESTINATION)
 
+[backup]
+# remote = "s3:bucket/path"                # rclone remote 또는 경로 (TUBEARCHIVE_BACKUP_REMOTE)
+# include_originals = false                # true: 결과물 + 원본 백업 (기본 false)
+
 [color_grading]
 # auto_lut = false                          # 기기별 자동 LUT 적용 (TUBEARCHIVE_AUTO_LUT)
 # [color_grading.device_luts]
 # nikon = "~/LUTs/nikon_nlog_to_rec709.cube"
 # gopro = "~/LUTs/gopro_flat_to_rec709.cube"
 
+[template]
+# intro = "~/templates/intro.mov"         # 병합 맨 앞에 붙일 템플릿
+# outro = "~/templates/outro.mov"         # 병합 맨 뒤에 붙일 템플릿
 [notification]
 # enabled = false                         # 전역 알림 활성화 (TUBEARCHIVE_NOTIFY)
 # on_transcode_complete = true            # 트랜스코딩 완료 알림
@@ -862,6 +1048,12 @@ def generate_default_config() -> str:
 # on_merge = ["/path/to/merge_hook.sh"]      # 병합 완료 후 실행
 # on_upload = "/path/to/upload_hook.sh"      # 업로드 완료 후 실행
 # on_error = "/path/to/error_hook.sh"        # 에러 발생 시 실행
+
+[watch]
+# paths = ["/Users/you/Videos/Incoming"]     # 감시 대상 디렉토리 목록
+# poll_interval = 1.0                      # 파일 안정성 대기(초)
+# stability_checks = 2                      # 동일 크기 반복 횟수
+# log_path = "/Users/you/.tubearchive/watch.log" # watch 모드 로그 파일
 """
 
 
@@ -993,6 +1185,19 @@ def get_default_fade_duration() -> float:
     return val
 
 
+def get_default_backup_remote() -> str | None:
+    """환경변수 ``TUBEARCHIVE_BACKUP_REMOTE`` 에서 백업 원격 경로를 가져온다."""
+    env_val = os.environ.get(ENV_BACKUP_REMOTE)
+    if not env_val:
+        return None
+    return env_val.strip()
+
+
+def get_default_backup_include_originals() -> bool:
+    """환경변수 ``TUBEARCHIVE_BACKUP_INCLUDE_ORIGINALS`` 값을 bool로 반환."""
+    return _get_env_bool(ENV_BACKUP_INCLUDE_ORIGINALS)
+
+
 def get_default_archive_policy() -> str:
     """환경변수 ``TUBEARCHIVE_ARCHIVE_POLICY`` 에서 아카이브 정책을 가져온다.
 
@@ -1020,6 +1225,29 @@ def get_default_archive_destination() -> Path | None:
         path = Path(env_dest).expanduser()
         return path
     return None
+
+
+def _get_template_file_path(env_key: str) -> Path | None:
+    """템플릿 경로 환경변수 값을 파일 경로로 변환한다."""
+    env_path = os.environ.get(env_key)
+    if not env_path:
+        return None
+
+    path = Path(env_path).expanduser()
+    if path.is_file():
+        return path
+    logger.warning("%s=%s is not a valid file", env_key, env_path)
+    return None
+
+
+def get_default_template_intro() -> Path | None:
+    """환경변수 ``TUBEARCHIVE_TEMPLATE_INTRO`` 템플릿 경로를 반환한다."""
+    return _get_template_file_path(ENV_TEMPLATE_INTRO)
+
+
+def get_default_template_outro() -> Path | None:
+    """환경변수 ``TUBEARCHIVE_TEMPLATE_OUTRO`` 템플릿 경로를 반환한다."""
+    return _get_template_file_path(ENV_TEMPLATE_OUTRO)
 
 
 def get_default_bgm_path() -> Path | None:
@@ -1103,6 +1331,59 @@ def get_default_stabilize_crop() -> str | None:
         return normalized
     logger.warning("%s=%s is not a valid crop mode", ENV_STABILIZE_CROP, env_val)
     return None
+
+
+def get_default_watch_paths() -> tuple[str, ...]:
+    """환경변수 ``TUBEARCHIVE_WATCH_PATHS`` 에서 watch 대상 경로를 가져온다."""
+    raw = os.environ.get(ENV_WATCH_PATHS)
+    if not raw:
+        return ()
+    raw_paths = [p.strip() for p in raw.split(",")]
+    return tuple(p for p in raw_paths if p)
+
+
+def get_default_watch_poll_interval() -> float:
+    """환경변수 ``TUBEARCHIVE_WATCH_POLL_INTERVAL`` 에서 값을 읽는다."""
+    env_val = os.environ.get(ENV_WATCH_POLL_INTERVAL)
+    if not env_val:
+        return 1.0
+    try:
+        val = float(env_val)
+    except ValueError:
+        logger.warning("%s=%s is not a valid number", ENV_WATCH_POLL_INTERVAL, env_val)
+        return 1.0
+    if val <= 0:
+        logger.warning("%s=%s must be > 0, using 1.0", ENV_WATCH_POLL_INTERVAL, env_val)
+        return 1.0
+    return val
+
+
+def get_default_watch_stability_checks() -> int:
+    """환경변수 ``TUBEARCHIVE_WATCH_STABILITY_CHECKS`` 에서 값을 읽는다."""
+    env_val = os.environ.get(ENV_WATCH_STABILITY_CHECKS)
+    if not env_val:
+        return 2
+    try:
+        val = int(env_val)
+    except ValueError:
+        logger.warning(
+            "%s=%s is not a valid integer",
+            ENV_WATCH_STABILITY_CHECKS,
+            env_val,
+        )
+        return 2
+    if val <= 0:
+        logger.warning("%s=%s must be > 0, using 2", ENV_WATCH_STABILITY_CHECKS, env_val)
+        return 2
+    return val
+
+
+def get_default_watch_log_path() -> Path | None:
+    """환경변수 ``TUBEARCHIVE_WATCH_LOG_PATH`` 에서 경로를 가져온다."""
+    raw = os.environ.get(ENV_WATCH_LOG)
+    if not raw:
+        return None
+    return Path(raw).expanduser()
 
 
 def get_default_auto_lut() -> bool:
