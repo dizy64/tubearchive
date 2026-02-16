@@ -57,6 +57,10 @@ ENV_WATCH_STABILITY_CHECKS = "TUBEARCHIVE_WATCH_STABILITY_CHECKS"
 ENV_WATCH_LOG = "TUBEARCHIVE_WATCH_LOG_PATH"
 ENV_TEMPLATE_INTRO = "TUBEARCHIVE_TEMPLATE_INTRO"
 ENV_TEMPLATE_OUTRO = "TUBEARCHIVE_TEMPLATE_OUTRO"
+ENV_SUBTITLE_LANG = "TUBEARCHIVE_SUBTITLE_LANG"
+ENV_SUBTITLE_MODEL = "TUBEARCHIVE_SUBTITLE_MODEL"
+ENV_SUBTITLE_FORMAT = "TUBEARCHIVE_SUBTITLE_FORMAT"
+ENV_SUBTITLE_BURN = "TUBEARCHIVE_SUBTITLE_BURN"
 
 # 알림 설정
 ENV_NOTIFY = "TUBEARCHIVE_NOTIFY"
@@ -92,6 +96,10 @@ class GeneralConfig:
     stabilize: bool | None = None
     stabilize_strength: str | None = None
     stabilize_crop: str | None = None
+    subtitle_lang: str | None = None
+    subtitle_model: str | None = None
+    subtitle_format: str | None = None
+    subtitle_burn: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -428,6 +436,21 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
         section,
         ("crop", "expand"),
     )
+    subtitle_lang = _parse_str(data, "subtitle_lang", section)
+    if subtitle_lang is not None:
+        subtitle_lang = subtitle_lang.strip().lower() or None
+    subtitle_model = _parse_enum_str(
+        data,
+        "subtitle_model",
+        section,
+        ("tiny", "base", "small", "medium", "large"),
+    )
+    subtitle_format = _parse_enum_str(
+        data,
+        "subtitle_format",
+        section,
+        ("srt", "vtt"),
+    )
 
     return GeneralConfig(
         output_dir=_parse_str(data, "output_dir", section),
@@ -444,6 +467,10 @@ def _parse_general(data: dict[str, object]) -> GeneralConfig:
         stabilize=_parse_bool(data, "stabilize", section),
         stabilize_strength=stabilize_strength,
         stabilize_crop=stabilize_crop,
+        subtitle_lang=subtitle_lang,
+        subtitle_model=subtitle_model,
+        subtitle_format=subtitle_format,
+        subtitle_burn=_parse_bool(data, "subtitle_burn", section),
     )
 
 
@@ -905,6 +932,14 @@ def apply_config_to_env(config: AppConfig, *, overwrite: bool = False) -> None:
         mappings.append((ENV_STABILIZE_STRENGTH, config.general.stabilize_strength))
     if config.general.stabilize_crop is not None:
         mappings.append((ENV_STABILIZE_CROP, config.general.stabilize_crop))
+    if config.general.subtitle_lang is not None:
+        mappings.append((ENV_SUBTITLE_LANG, config.general.subtitle_lang))
+    if config.general.subtitle_model is not None:
+        mappings.append((ENV_SUBTITLE_MODEL, config.general.subtitle_model))
+    if config.general.subtitle_format is not None:
+        mappings.append((ENV_SUBTITLE_FORMAT, config.general.subtitle_format))
+    if config.general.subtitle_burn is not None:
+        mappings.append((ENV_SUBTITLE_BURN, str(config.general.subtitle_burn).lower()))
 
     # watch
     if config.watch.paths:
@@ -988,6 +1023,10 @@ def generate_default_config() -> str:
 # stabilize = false                         # 영상 안정화 (TUBEARCHIVE_STABILIZE)
 # stabilize_strength = "medium"             # light/medium/heavy (TUBEARCHIVE_STABILIZE_STRENGTH)
 # stabilize_crop = "crop"                   # crop/expand (TUBEARCHIVE_STABILIZE_CROP)
+# subtitle_lang = "en"                      # 자막 언어 코드 (TUBEARCHIVE_SUBTITLE_LANG)
+# subtitle_model = "base"                   # tiny/base/small/medium/large
+# subtitle_format = "srt"                  # srt/vtt (TUBEARCHIVE_SUBTITLE_FORMAT)
+# subtitle_burn = false                     # 자막 하드코딩(burn) 기본값 (TUBEARCHIVE_SUBTITLE_BURN)
 
 [bgm]
 # bgm_path = "~/Music/bgm.mp3"              # 배경음악 파일 경로 (TUBEARCHIVE_BGM_PATH)
@@ -1394,3 +1433,47 @@ def get_default_auto_lut() -> bool:
 def get_default_notify() -> bool:
     """환경변수 ``TUBEARCHIVE_NOTIFY`` 에서 알림 활성화 여부를 가져온다."""
     return _get_env_bool(ENV_NOTIFY)
+
+
+def get_default_subtitle_lang() -> str | None:
+    """환경변수 ``TUBEARCHIVE_SUBTITLE_LANG`` 에서 자막 언어를 가져온다."""
+    env_lang = os.environ.get(ENV_SUBTITLE_LANG)
+    if not env_lang:
+        return None
+    normalized = env_lang.strip().lower()
+    return normalized or None
+
+
+def get_default_subtitle_model() -> str | None:
+    """환경변수 ``TUBEARCHIVE_SUBTITLE_MODEL`` 에서 모델을 가져온다.
+
+    ``tiny/base/small/medium/large``만 허용한다.
+    """
+    env_model = os.environ.get(ENV_SUBTITLE_MODEL)
+    if not env_model:
+        return None
+    normalized = env_model.strip().lower()
+    if normalized in {"tiny", "base", "small", "medium", "large"}:
+        return normalized
+    logger.warning("%s=%s is not a valid model", ENV_SUBTITLE_MODEL, env_model)
+    return None
+
+
+def get_default_subtitle_format() -> str | None:
+    """환경변수 ``TUBEARCHIVE_SUBTITLE_FORMAT`` 에서 자막 포맷을 가져온다.
+
+    ``srt``/``vtt``만 허용한다.
+    """
+    env_format = os.environ.get(ENV_SUBTITLE_FORMAT)
+    if not env_format:
+        return None
+    normalized = env_format.strip().lower()
+    if normalized in {"srt", "vtt"}:
+        return normalized
+    logger.warning("%s=%s is not a valid format", ENV_SUBTITLE_FORMAT, env_format)
+    return None
+
+
+def get_default_subtitle_burn() -> bool:
+    """환경변수 ``TUBEARCHIVE_SUBTITLE_BURN`` 에서 자막 하드코딩 기본값을 가져온다."""
+    return _get_env_bool(ENV_SUBTITLE_BURN)
