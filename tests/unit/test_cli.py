@@ -2008,7 +2008,7 @@ class TestTranscodeOptions:
         assert opts.watermark_pos == "bottom-right"
         assert opts.watermark_size == 48
         assert opts.watermark_color == "white"
-        assert opts.watermark_alpha == 1.0
+        assert opts.watermark_alpha == 0.85
 
     def test_watermark_custom_values(self) -> None:
         """워터마크 커스텀 값 확인."""

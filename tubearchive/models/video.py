@@ -99,6 +99,10 @@ class VideoMetadata:
             raise ValueError(f"Invalid duration: {self.duration_seconds}")
         if self.fps <= 0:
             raise ValueError(f"Invalid FPS: {self.fps}")
+        if self.location_latitude is not None and not (-90.0 <= self.location_latitude <= 90.0):
+            raise ValueError(f"Invalid latitude: {self.location_latitude}")
+        if self.location_longitude is not None and not (-180.0 <= self.location_longitude <= 180.0):
+            raise ValueError(f"Invalid longitude: {self.location_longitude}")
 
     @property
     def aspect_ratio(self) -> float:

@@ -303,7 +303,7 @@ class ValidatedArgs:
     watermark_pos: str = "bottom-right"
     watermark_size: int = 48
     watermark_color: str = "white"
-    watermark_alpha: float = 1.0
+    watermark_alpha: float = 0.85
     notify: bool = False
     schedule: str | None = None
     quality_report: bool = False
@@ -352,7 +352,7 @@ class TranscodeOptions:
     watermark_pos: str = "bottom-right"
     watermark_size: int = 48
     watermark_color: str = "white"
-    watermark_alpha: float = 1.0
+    watermark_alpha: float = 0.85
 
 
 @dataclass(frozen=True)
@@ -1683,10 +1683,10 @@ def _make_watermark_text(video_file: VideoFile, metadata: VideoMetadata) -> str:
     """워터마크 텍스트 생성 (촬영 시각 + 위치 정보)."""
     shot_time = video_file.creation_time.strftime("%Y.%m.%d")
 
-    location = getattr(metadata, "location", None)
+    location = metadata.location
     if location is None:
-        lat = getattr(metadata, "location_latitude", None)
-        lon = getattr(metadata, "location_longitude", None)
+        lat = metadata.location_latitude
+        lon = metadata.location_longitude
         if lat is not None and lon is not None:
             location = f"{lat:.6f}, {lon:.6f}"
 
@@ -1723,6 +1723,7 @@ def _transcode_single(
 
         output_path, video_id, silence_segments = transcoder.transcode_video(
             video_file,
+            metadata=metadata,
             denoise=opts.denoise,
             denoise_level=opts.denoise_level,
             normalize_audio=opts.normalize_audio,
@@ -1856,6 +1857,7 @@ def _transcode_sequential(
             watermark_text = _make_watermark_text(video_file, metadata) if opts.watermark else None
             output_path, video_id, silence_segments = transcoder.transcode_video(
                 video_file,
+                metadata=metadata,
                 denoise=opts.denoise,
                 denoise_level=opts.denoise_level,
                 normalize_audio=opts.normalize_audio,

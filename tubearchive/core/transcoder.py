@@ -15,10 +15,6 @@ VideoToolbox 하드웨어 가속을 우선 사용하고, 실패 시 libx265로 �
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tubearchive.models.video import VideoMetadata
 
 from tubearchive.core.detector import detect_metadata
 from tubearchive.database.repository import TranscodingJobRepository, VideoRepository
@@ -38,7 +34,7 @@ from tubearchive.ffmpeg.effects import (
 from tubearchive.ffmpeg.executor import FFmpegError, FFmpegExecutor
 from tubearchive.ffmpeg.profiles import PROFILE_SDR, EncodingProfile, get_fallback_profile
 from tubearchive.models.job import JobStatus
-from tubearchive.models.video import VideoFile
+from tubearchive.models.video import VideoFile, VideoMetadata
 from tubearchive.utils.progress import ProgressInfo
 
 logger = logging.getLogger(__name__)
@@ -370,6 +366,7 @@ class Transcoder:
         auto_lut: bool = False,
         lut_before_hdr: bool = False,
         device_luts: dict[str, str] | None = None,
+        metadata: VideoMetadata | None = None,
         watermark_text: str | None = None,
         watermark_position: str = "bottom-right",
         watermark_size: int = 48,
@@ -397,14 +394,15 @@ class Transcoder:
             stabilize_strength: 안정화 강도 (light/medium/heavy)
             stabilize_crop: 안정화 후 크롭 모드 (crop/expand)
             lut_path: LUT 파일 경로 (직접 지정, auto_lut보다 우선)
-            auto_lut: 기기 모델 기반 자동 LUT 매칭 활성화
-            lut_before_hdr: LUT 필터를 HDR→SDR 변환 전에 적용
-            device_luts: 기기 키워드 → LUT 파일 경로 매핑
-            watermark_text: 워터마크 텍스트
-            watermark_position: 워터마크 위치
-            watermark_size: 워터마크 글자 크기
-            watermark_color: 워터마크 글자 색
-            watermark_alpha: 워터마크 투명도
+        auto_lut: 기기 모델 기반 자동 LUT 매칭 활성화
+        lut_before_hdr: LUT 필터를 HDR→SDR 변환 전에 적용
+        device_luts: 기기 키워드 → LUT 파일 경로 매핑
+        metadata: 외부에서 전달된 메타데이터(없으면 감지 실행)
+        watermark_text: 워터마크 텍스트
+        watermark_position: 워터마크 위치
+        watermark_size: 워터마크 글자 크기
+        watermark_color: 워터마크 글자 색
+        watermark_alpha: 워터마크 투명도
             progress_info_callback: 상세 진행률 콜백 (UI 업데이트용)
 
         Returns:
@@ -414,7 +412,7 @@ class Transcoder:
             FFmpegError: 트랜스코딩 실패
         """
         # 1. 메타데이터 감지 및 DB 등록
-        metadata = detect_metadata(video_file.path)
+        metadata = detect_metadata(video_file.path) if metadata is None else metadata
         logger.info(f"Detected: {metadata.device_model}, {metadata.width}x{metadata.height}")
         video_id = self._register_video(video_file, metadata)
 

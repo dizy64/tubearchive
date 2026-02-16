@@ -625,6 +625,8 @@ def create_watermark_filter(
     font_size: int = 48,
     color: str = "white",
     alpha: float = 1.0,
+    font: str = "monospace",
+    fontfile: str | None = None,
 ) -> str:
     """영상 오버레이용 워터마크 drawtext 필터 문자열을 생성한다."""
     if not text:
@@ -635,13 +637,28 @@ def create_watermark_filter(
         raise ValueError(f"Watermark alpha must be in [0.0, 1.0], got: {alpha}")
 
     normalized_color = color.split("@", 1)[0].strip() or "white"
+
+    def _escape_param(value: str) -> str:
+        return (
+            value.replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace(":", "\\:")
+            .replace(",", "\\,")
+            .replace(";", "\\;")
+        )
+
     escaped_text = (
         text.replace("\\", "\\\\")
         .replace("'", "\\'")
         .replace(":", "\\:")
         .replace(",", "\\,")
         .replace(";", "\\;")
+        .replace("%", "%%")
     )
+    normalized_font = font or "monospace"
+    font_expression = f"font='{_escape_param(normalized_font)}'"
+    if fontfile:
+        font_expression = f"fontfile='{_escape_param(fontfile)}'"
 
     normalized_position = position.strip().lower().replace("_", "-")
     padding = 24
@@ -663,6 +680,7 @@ def create_watermark_filter(
 
     return (
         f"drawtext=text='{escaped_text}':"
+        f"{font_expression}:"
         f"x={x_expr}:y={y_expr}:"
         f"fontsize={font_size}:"
         f"fontcolor={normalized_color}@{alpha:.2f}"

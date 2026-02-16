@@ -16,6 +16,7 @@ ffprobe를 서브프로세스로 실행하여 영상 파일의 기술 메타데�
 """
 
 import json
+import logging
 import re
 import subprocess
 from fractions import Fraction
@@ -23,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from tubearchive.models.video import VideoMetadata
+
+logger = logging.getLogger(__name__)
 
 _ISO6709_RE = re.compile(
     r"(?P<lat>[+-]\d+(?:\.\d+)?)(?P<lon>[+-]\d+(?:\.\d+)?)(?:[+-]\d+(?:\.\d+)?)?/?"
@@ -66,6 +69,12 @@ def _parse_iso6709(value: str) -> tuple[float, float] | None:
         return None
 
     if not _is_valid_lat_lon(lat, lon):
+        logger.warning(
+            "Invalid ISO6709 coordinate ignored: %s (parsed lat=%s, lon=%s)",
+            value,
+            lat,
+            lon,
+        )
         return None
     return lat, lon
 
@@ -92,13 +101,16 @@ def _parse_nsew(value: str) -> tuple[float, float] | None:
 
 def _extract_location_from_tags(tags: dict[str, Any]) -> tuple[float, float] | None:
     """메타데이터 태그에서 ISO6709 또는 lat/lon 키-값을 추출."""
-    # 키 상관없이 ISO6709 또는 NSEW 좌표가 들어간 값 우선 탐색
+    # 1) ISO6709 우선 탐색
     for value in tags.values():
         value_str = _coerce_tag_text(value)
         if not value_str:
             continue
 
-        if parsed := _parse_coordinates_from_text(value_str):
+        if parsed := _parse_iso6709(value_str):
+            return parsed
+
+        if parsed := _parse_nsew(value_str):
             return parsed
 
     # 키가 lat/lon 형태인 필드에서 개별 추출
@@ -124,6 +136,31 @@ def _extract_location_from_tags(tags: dict[str, Any]) -> tuple[float, float] | N
                     lon = float(match.group("lon"))
                 except ValueError:
                     lon = None
+
+    # 3) 키와 무관하게 값에서 'lat:'/'lon:' 패턴 폴백
+    if lat is None or lon is None:
+        for value in tags.values():
+            value_str = _coerce_tag_text(value)
+            if not value_str:
+                continue
+
+            if lat is None:
+                lat_match = _LATITUDE_RE.search(value_str)
+                if lat_match:
+                    try:
+                        lat = float(lat_match.group("lat"))
+                    except ValueError:
+                        lat = None
+            if lon is None:
+                lon_match = _LONGITUDE_RE.search(value_str)
+                if lon_match:
+                    try:
+                        lon = float(lon_match.group("lon"))
+                    except ValueError:
+                        lon = None
+
+            if lat is not None and lon is not None:
+                break
 
     if lat is None or lon is None:
         return None
