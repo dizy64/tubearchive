@@ -427,6 +427,117 @@ class TestYouTubeUploader:
         assert not prepared_thumbnail.exists()
 
 
+class TestYouTubeCaptions:
+    """자막 업로드 API 테스트."""
+
+    def test_set_captions_uploads_srt_file(self, tmp_path: Path) -> None:
+        """SRT 파일을 업로드한다."""
+        from tubearchive.youtube.uploader import YouTubeUploader
+
+        caption_file = tmp_path / "caption.srt"
+        caption_file.write_text("1\n00:00:00,000 --> 00:00:01,000\n안녕\n")
+
+        mock_service = MagicMock()
+        mock_insert = MagicMock()
+        mock_service.captions().insert.return_value = mock_insert
+
+        uploader = YouTubeUploader(mock_service)
+
+        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
+            mock_media_upload.return_value = MagicMock()
+            uploader.set_captions(
+                video_id="video123",
+                caption_path=caption_file,
+                language="ko",
+            )
+
+        mock_insert.execute.assert_called_once()
+        call_args = mock_service.captions().insert.call_args.kwargs
+        assert call_args["part"] == "snippet"
+        assert call_args["body"]["snippet"]["language"] == "ko"
+        assert call_args["body"]["snippet"]["name"] == "caption"
+
+    def test_set_captions_uploads_vtt_file_with_default_name(self, tmp_path: Path) -> None:
+        """VTT 파일은 파일명 기본값을 캡션명으로 사용한다."""
+        from tubearchive.youtube.uploader import YouTubeUploader
+
+        caption_file = tmp_path / "subtitle.vtt"
+        caption_file.write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n")
+
+        mock_service = MagicMock()
+        mock_insert = MagicMock()
+        mock_service.captions().insert.return_value = mock_insert
+
+        uploader = YouTubeUploader(mock_service)
+
+        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
+            mock_media_upload.return_value = MagicMock()
+            uploader.set_captions(
+                video_id="video123",
+                caption_path=caption_file,
+            )
+
+        call_args = mock_service.captions().insert.call_args.kwargs
+        assert call_args["body"]["snippet"]["name"] == "subtitle"
+
+    def test_set_captions_rejects_unsupported_format(self, tmp_path: Path) -> None:
+        """확장자가 지원되지 않으면 실패한다."""
+        from tubearchive.youtube.uploader import YouTubeUploader
+
+        caption_file = tmp_path / "caption.txt"
+        caption_file.write_text("invalid")
+        uploader = YouTubeUploader(MagicMock())
+
+        with pytest.raises(ValueError, match="Unsupported caption format"):
+            uploader.set_captions("video123", caption_file)
+
+    def test_set_captions_requires_existing_file(self) -> None:
+        """자막 파일이 없으면 실패한다."""
+        from tubearchive.youtube.uploader import YouTubeUploader
+
+        uploader = YouTubeUploader(MagicMock())
+        with pytest.raises(FileNotFoundError):
+            uploader.set_captions("video123", Path("missing.srt"))
+
+    def test_set_captions_requires_video_id(self, tmp_path: Path) -> None:
+        """video_id가 없으면 실패한다."""
+        from tubearchive.youtube.uploader import YouTubeUploader
+
+        caption_file = tmp_path / "caption.srt"
+        caption_file.write_text("1\n00:00:00,000 --> 00:00:01,000\n안녕\n")
+        uploader = YouTubeUploader(MagicMock())
+
+        with pytest.raises(ValueError):
+            uploader.set_captions("", caption_file)
+
+    def test_set_captions_handles_api_error(self, tmp_path: Path) -> None:
+        """API 에러를 YouTubeUploadError로 감싼다."""
+        from googleapiclient.errors import HttpError
+
+        from tubearchive.youtube.uploader import YouTubeUploader, YouTubeUploadError
+
+        caption_file = tmp_path / "caption.srt"
+        caption_file.write_text("1\n00:00:00,000 --> 00:00:01,000\n안녕\n")
+
+        mock_service = MagicMock()
+        mock_insert = MagicMock()
+        mock_service.captions().insert.return_value = mock_insert
+        mock_response = Mock()
+        mock_response.status = 403
+        mock_response.reason = "Forbidden"
+        mock_insert.execute.side_effect = HttpError(mock_response, b"forbidden")
+
+        uploader = YouTubeUploader(mock_service)
+
+        with (
+            patch("tubearchive.youtube.uploader.MediaFileUpload"),
+            pytest.raises(YouTubeUploadError) as exc_info,
+        ):
+            uploader.set_captions("video123", caption_file)
+
+        assert "video123" in str(exc_info.value)
+
+
 class TestYouTubeUploadError:
     """업로드 에러 처리 테스트."""
 
