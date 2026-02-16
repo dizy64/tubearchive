@@ -225,8 +225,10 @@ def _extract_freeform_location(tags: dict[str, Any]) -> str | None:
     return None
 
 
-def _find_metadata_location(video_path: Path, probe_data: dict[str, Any]) -> str | None:
-    """ffprobe 출력에서 위치 문자열을 안전하게 추출."""
+def _find_metadata_location(
+    video_path: Path, probe_data: dict[str, Any]
+) -> tuple[float, float] | str | None:
+    """ffprobe 출력에서 위치 문자열/좌표 쌍을 안전하게 추출."""
     tags = probe_data.get("format", {}).get("tags", {})
     stream_tags: dict[str, Any] = {}
     for stream in probe_data.get("streams", []):
@@ -237,12 +239,12 @@ def _find_metadata_location(video_path: Path, probe_data: dict[str, Any]) -> str
     if isinstance(tags, dict):
         coordinates = _extract_location_from_tags(tags)
         if coordinates:
-            return _format_coordinate_pair(*coordinates)
+            return coordinates
 
     if isinstance(stream_tags, dict):
         coordinates = _extract_location_from_tags(stream_tags)
         if coordinates:
-            return _format_coordinate_pair(*coordinates)
+            return coordinates
 
     if isinstance(tags, dict):
         location_text = _extract_freeform_location(tags)
@@ -256,7 +258,7 @@ def _find_metadata_location(video_path: Path, probe_data: dict[str, Any]) -> str
 
     sidecar_location = _extract_location_from_sidecar(video_path)
     if sidecar_location:
-        return _format_coordinate_pair(*sidecar_location)
+        return sidecar_location
 
     return None
 
@@ -324,25 +326,18 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
     color_primaries = video_stream.get("color_primaries")
     # tags와 stream_tags는 _find_metadata_location 내부에서 재사용
 
-    location = _find_metadata_location(video_path, probe_data)
+    location_raw = _find_metadata_location(video_path, probe_data)
+    location = None
     location_latitude = None
     location_longitude = None
-    if location and "," in location:
-        try:
-            lat_text, lon_text = location.split(",", 1)
-            location_latitude = float(lat_text.strip())
-            location_longitude = float(lon_text.strip())
-        except ValueError:
-            location_latitude = None
-            location_longitude = None
-
-        if (
-            location_latitude is not None
-            and location_longitude is not None
-            and not _is_valid_lat_lon(location_latitude, location_longitude)
-        ):
-            location_latitude = None
-            location_longitude = None
+    if isinstance(location_raw, tuple):
+        latitude, longitude = location_raw
+        if _is_valid_lat_lon(latitude, longitude):
+            location = _format_coordinate_pair(latitude, longitude)
+            location_latitude = latitude
+            location_longitude = longitude
+    elif location_raw:
+        location = location_raw
 
     # 오디오 스트림 존재 여부
     has_audio = any(s.get("codec_type") == "audio" for s in probe_data.get("streams", []))

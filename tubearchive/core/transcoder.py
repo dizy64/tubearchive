@@ -394,15 +394,15 @@ class Transcoder:
             stabilize_strength: 안정화 강도 (light/medium/heavy)
             stabilize_crop: 안정화 후 크롭 모드 (crop/expand)
             lut_path: LUT 파일 경로 (직접 지정, auto_lut보다 우선)
-        auto_lut: 기기 모델 기반 자동 LUT 매칭 활성화
-        lut_before_hdr: LUT 필터를 HDR→SDR 변환 전에 적용
-        device_luts: 기기 키워드 → LUT 파일 경로 매핑
-        metadata: 외부에서 전달된 메타데이터(없으면 감지 실행)
-        watermark_text: 워터마크 텍스트
-        watermark_position: 워터마크 위치
-        watermark_size: 워터마크 글자 크기
-        watermark_color: 워터마크 글자 색
-        watermark_alpha: 워터마크 투명도
+            auto_lut: 기기 모델 기반 자동 LUT 매칭 활성화
+            lut_before_hdr: LUT 필터를 HDR→SDR 변환 전에 적용
+            device_luts: 기기 키워드 → LUT 파일 경로 매핑
+            metadata: 외부에서 전달된 메타데이터(없으면 감지 실행)
+            watermark_text: 워터마크 텍스트
+            watermark_position: 워터마크 위치
+            watermark_size: 워터마크 글자 크기
+            watermark_color: 워터마크 글자 색
+            watermark_alpha: 워터마크 투명도
             progress_info_callback: 상세 진행률 콜백 (UI 업데이트용)
 
         Returns:
