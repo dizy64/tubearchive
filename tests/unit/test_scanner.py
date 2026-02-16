@@ -3,9 +3,11 @@
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import MagicMock
 
 import pytest
 
+from tubearchive.core import scanner
 from tubearchive.core.scanner import scan_videos
 from tubearchive.models.video import FadeConfig, VideoFile, VideoMetadata
 
@@ -120,6 +122,62 @@ class TestScanner:
         assert len(videos) >= 3
         filenames = [v.path.name for v in videos]
         assert "video1.mp4" in filenames
+
+    def test_resolves_network_root(self) -> None:
+        """``/Volumes`` 경로에서 원격 루트를 추출한다."""
+        path = Path("/Volumes/Backup/Trip2026/clip.mp4")
+
+        remote_root = scanner._get_remote_source_root(path)
+
+        assert remote_root == Path("/Volumes/Backup")
+
+    def test_resolves_no_remote_root(self, temp_video_dir: Path) -> None:
+        """로컬 경로는 원격 루트를 반환하지 않는다."""
+        remote_root = scanner._get_remote_source_root(temp_video_dir)
+
+        assert remote_root is None
+
+    def test_warns_slow_remote_source(
+        self, temp_video_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """느린 원격/외장 경로에서는 경고를 출력한다."""
+        mock_warning = MagicMock()
+        monkeypatch.setattr(scanner.logger, "warning", mock_warning)
+
+        monkeypatch.setattr(
+            scanner, "_get_remote_source_root", lambda *_args, **_kwargs: Path("/Volumes/RemoteNAS")
+        )
+        monkeypatch.setattr(scanner, "_check_remote_source", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            scanner, "_measure_source_read_speed", lambda *_args, **_kwargs: 2 * 1024 * 1024
+        )
+
+        scan_videos([temp_video_dir / "video1.mp4"])
+
+        assert any(
+            "로컬 복사 후 처리하는 것을 권장합니다" in str(call.args[0])
+            for call in mock_warning.call_args_list
+        )
+
+    def test_warns_when_remote_source_unreachable(
+        self, temp_video_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """원격/외장 경로 접근 실패 시에도 스캔은 계속되고 경고만 출력한다."""
+        mock_warning = MagicMock()
+        monkeypatch.setattr(scanner.logger, "warning", mock_warning)
+
+        monkeypatch.setattr(
+            scanner, "_get_remote_source_root", lambda *_args, **_kwargs: Path("/Volumes/RemoteNAS")
+        )
+        monkeypatch.setattr(
+            scanner,
+            "_check_remote_source",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("denied")),
+        )
+
+        scan_videos([temp_video_dir / "video1.mp4"])
+
+        assert any("접근 확인 실패" in str(call.args[0]) for call in mock_warning.call_args_list)
 
 
 class TestVideoMetadataProperties:
