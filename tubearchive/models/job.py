@@ -141,6 +141,20 @@ class SplitJob:
 
 
 @dataclass
+class BackupHistory:
+    """백업 이력 레코드."""
+
+    id: int | None
+    merge_job_id: int
+    source_path: Path
+    remote: str
+    source_type: str
+    success: bool
+    created_at: datetime
+    error_message: str | None = None
+
+
+@dataclass
 class Project:
     """프로젝트 레코드.
 

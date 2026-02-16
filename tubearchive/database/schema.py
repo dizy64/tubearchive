@@ -1,6 +1,6 @@
 """SQLite 데이터베이스 스키마 및 초기화.
 
-테이블 4개로 구성된 스키마를 정의하고, DB 연결·초기화·마이그레이션을 담당한다.
+테이블 7개로 구성된 스키마를 정의하고, DB 연결·초기화·마이그레이션을 담당한다.
 
 테이블:
     - ``videos``: 원본 영상 파일 메타데이터 (경로, 생성 시간, 기기 모델 등)
@@ -129,6 +129,20 @@ CREATE TABLE IF NOT EXISTS archive_history (
     FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
 );
 
+-- backup_history: 백업 이력
+CREATE TABLE IF NOT EXISTS backup_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    merge_job_id INTEGER NOT NULL,
+    source_path TEXT NOT NULL,
+    remote TEXT NOT NULL,
+    source_type TEXT NOT NULL
+        CHECK(source_type IN ('output', 'split', 'timelapse', 'original')),
+    success INTEGER NOT NULL CHECK(success IN (0, 1)),
+    error_message TEXT,
+    backed_up_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (merge_job_id) REFERENCES merge_jobs(id) ON DELETE CASCADE
+);
+
 -- projects: 프로젝트 관리 (여러 날의 촬영을 하나의 단위로 묶음)
 CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,6 +172,9 @@ CREATE INDEX IF NOT EXISTS idx_videos_path ON videos(original_path);
 CREATE INDEX IF NOT EXISTS idx_split_merge_job ON split_jobs(merge_job_id);
 CREATE INDEX IF NOT EXISTS idx_archive_video_id ON archive_history(video_id);
 CREATE INDEX IF NOT EXISTS idx_archive_operation ON archive_history(operation);
+CREATE INDEX IF NOT EXISTS idx_backup_merge_job_id ON backup_history(merge_job_id);
+CREATE INDEX IF NOT EXISTS idx_backup_source_type ON backup_history(source_type);
+CREATE INDEX IF NOT EXISTS idx_backup_success ON backup_history(success);
 CREATE INDEX IF NOT EXISTS idx_project_merge_jobs_merge ON project_merge_jobs(merge_job_id);
 CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
 """
@@ -241,6 +258,36 @@ def _migrate_add_projects_tables(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migrate_add_backup_history_table(conn: sqlite3.Connection) -> None:
+    """기존 DB에 ``backup_history`` 테이블 추가."""
+    cursor = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='backup_history'"
+    )
+    if cursor.fetchone() is not None:
+        return
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS backup_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            merge_job_id INTEGER NOT NULL,
+            source_path TEXT NOT NULL,
+            remote TEXT NOT NULL,
+            source_type TEXT NOT NULL
+                CHECK(source_type IN ('output', 'split', 'timelapse', 'original')),
+            success INTEGER NOT NULL CHECK(success IN (0, 1)),
+            error_message TEXT,
+            backed_up_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (merge_job_id) REFERENCES merge_jobs(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_backup_merge_job_id ON backup_history(merge_job_id);
+        CREATE INDEX IF NOT EXISTS idx_backup_source_type ON backup_history(source_type);
+        CREATE INDEX IF NOT EXISTS idx_backup_success ON backup_history(success);
+        """
+    )
+
+
 def init_database(db_path: Path | None = None) -> sqlite3.Connection:
     """
     데이터베이스 초기화.
@@ -268,6 +315,7 @@ def init_database(db_path: Path | None = None) -> sqlite3.Connection:
     _migrate_add_merged_status(conn)
     _migrate_split_jobs_columns(conn)
     _migrate_add_projects_tables(conn)
+    _migrate_add_backup_history_table(conn)
 
     conn.commit()
 

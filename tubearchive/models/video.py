@@ -85,6 +85,7 @@ class VideoMetadata:
     color_space: str | None
     color_transfer: str | None
     color_primaries: str | None
+    location: str | None = None
     has_audio: bool = True
 
     def __post_init__(self) -> None:
