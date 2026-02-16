@@ -26,6 +26,7 @@ from tubearchive.ffmpeg.effects import (
     create_timelapse_video_filter,
     create_vidstab_detect_filter,
     create_vidstab_transform_filter,
+    create_watermark_filter,
     parse_loudnorm_stats,
     parse_silence_segments,
 )
@@ -1135,3 +1136,66 @@ class TestCombinedFilterWithLut:
         )
         assert "lut3d=" in video_filter
         assert "vidstabtransform=" in video_filter
+
+
+class TestCombinedFilterWithWatermark:
+    """워터마크 필터 통합 테스트."""
+
+    def test_create_watermark_filter(self) -> None:
+        """워터마크 필터 문자열 생성."""
+        filter_str = create_watermark_filter(
+            text="2025.01.02 | Seoul Downtown",
+            position="top-left",
+            font_size=32,
+            color="yellow",
+            alpha=0.7,
+        )
+
+        assert "drawtext=" in filter_str
+        assert "text='2025.01.02 | Seoul Downtown'" in filter_str
+        assert "x=24" in filter_str
+        assert "fontsize=32" in filter_str
+        assert "font='monospace'" in filter_str
+        assert "fontcolor=yellow@0.70" in filter_str
+
+    def test_create_watermark_filter_escapes_percent(self) -> None:
+        """퍼센트 기호는 drawtext 파서에서 literal로 인식되도록 이스케이프된다."""
+        filter_str = create_watermark_filter(
+            text="100% safe",
+            position="bottom-right",
+            font_size=24,
+            color="white",
+            alpha=1.0,
+        )
+
+        assert "100%% safe" in filter_str
+
+    def test_combined_filter_includes_watermark(self) -> None:
+        """combined filter에서 watermark 텍스트가 적용되어야 함."""
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            watermark_text="2025.01.02 | Seoul Downtown",
+            watermark_position="center",
+            watermark_size=24,
+            watermark_color="white",
+            watermark_alpha=0.85,
+        )
+
+        assert "drawtext=" in video_filter
+        assert "text='2025.01.02 | Seoul Downtown'" in video_filter
+        assert "fontcolor=white@0.85" in video_filter
+
+    def test_combined_filter_without_watermark_text(self) -> None:
+        """워터마크 텍스트가 없으면 drawtext 미포함."""
+        video_filter, _ = create_combined_filter(
+            source_width=3840,
+            source_height=2160,
+            total_duration=60.0,
+            is_portrait=False,
+            watermark_text=None,
+        )
+
+        assert "drawtext=" not in video_filter

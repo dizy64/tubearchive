@@ -100,6 +100,20 @@ class TestTranscoderLoudnorm:
 
         mock_transcoder.executor.build_loudness_analysis_command.assert_not_called()
 
+    def test_transcode_with_metadata_does_not_redetect(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """메타데이터를 전달하면 detect_metadata를 재호출하지 않는다."""
+        with patch("tubearchive.core.transcoder.detect_metadata") as mock_detect:
+            mock_transcoder.executor.run.return_value = None
+            with contextlib.suppress(Exception):
+                mock_transcoder.transcode_video(video_file, metadata=mock_metadata)
+
+        mock_detect.assert_not_called()
+
     def test_transcode_with_normalize_runs_analysis(
         self,
         mock_transcoder: MagicMock,

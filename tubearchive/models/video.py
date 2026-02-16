@@ -71,6 +71,9 @@ class VideoMetadata:
         color_transfer: 색 전달 함수 (``smpte2084``, ``arib-std-b67`` 등)
         color_primaries: 색 원색 (``bt709``, ``bt2020`` 등)
         has_audio: 오디오 스트림 존재 여부 (기본 ``True``)
+        location: 위치 정보 문자열 (감지 시 값, 예: "37.500000, 127.000000")
+        location_latitude: 위도 값 (있을 경우)
+        location_longitude: 경도 값 (있을 경우)
     """
 
     width: int
@@ -85,8 +88,10 @@ class VideoMetadata:
     color_space: str | None
     color_transfer: str | None
     color_primaries: str | None
-    location: str | None = None
     has_audio: bool = True
+    location_latitude: float | None = None
+    location_longitude: float | None = None
+    location: str | None = None
 
     def __post_init__(self) -> None:
         """검증."""
@@ -96,6 +101,10 @@ class VideoMetadata:
             raise ValueError(f"Invalid duration: {self.duration_seconds}")
         if self.fps <= 0:
             raise ValueError(f"Invalid FPS: {self.fps}")
+        if self.location_latitude is not None and not (-90.0 <= self.location_latitude <= 90.0):
+            raise ValueError(f"Invalid latitude: {self.location_latitude}")
+        if self.location_longitude is not None and not (-180.0 <= self.location_longitude <= 180.0):
+            raise ValueError(f"Invalid longitude: {self.location_longitude}")
 
     @property
     def aspect_ratio(self) -> float:

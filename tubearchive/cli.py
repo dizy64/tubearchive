@@ -114,7 +114,7 @@ from tubearchive.database.repository import (
 )
 from tubearchive.database.schema import init_database
 from tubearchive.ffmpeg.effects import LUT_SUPPORTED_EXTENSIONS, SilenceSegment
-from tubearchive.models.video import FadeConfig, VideoFile
+from tubearchive.models.video import FadeConfig, VideoFile, VideoMetadata
 from tubearchive.utils import truncate_path
 from tubearchive.utils.progress import MultiProgressBar, ProgressInfo, format_size
 from tubearchive.utils.summary_generator import generate_single_file_description
@@ -324,6 +324,11 @@ class ValidatedArgs:
     device_luts: dict[str, str] | None = None
     template_intro: Path | None = None
     template_outro: Path | None = None
+    watermark: bool = False
+    watermark_pos: str = "bottom-right"
+    watermark_size: int = 48
+    watermark_color: str = "white"
+    watermark_alpha: float = 0.85
     watch: bool = False
     watch_paths: list[Path] = field(default_factory=list)
     watch_poll_interval: float = 1.0
@@ -362,6 +367,7 @@ class TranscodeOptions:
     normalize_audio: bool = False
     fade_map: dict[Path, FadeConfig] | None = None
     fade_duration: float = 0.5
+    watermark: bool = False
     trim_silence: bool = False
     silence_threshold: str = "-30dB"
     silence_min_duration: float = 2.0
@@ -372,6 +378,11 @@ class TranscodeOptions:
     auto_lut: bool = False
     lut_before_hdr: bool = False
     device_luts: dict[str, str] | None = None
+    watermark_text: str | None = None
+    watermark_pos: str = "bottom-right"
+    watermark_size: int = 48
+    watermark_color: str = "white"
+    watermark_alpha: float = 0.85
 
 
 @dataclass(frozen=True)
@@ -912,6 +923,46 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--watermark",
+        action="store_true",
+        help="트랜스코딩 영상을 워터마크 텍스트로 오버레이",
+    )
+
+    parser.add_argument(
+        "--watermark-pos",
+        type=str,
+        default="bottom-right",
+        choices=[
+            "top-left",
+            "top-right",
+            "bottom-left",
+            "bottom-right",
+            "center",
+        ],
+        help="워터마크 오버레이 위치 (기본: bottom-right)",
+    )
+
+    parser.add_argument(
+        "--watermark-size",
+        type=int,
+        default=48,
+        help="워터마크 글자 크기 (기본: 48)",
+    )
+
+    parser.add_argument(
+        "--watermark-color",
+        type=str,
+        default="white",
+        help="워터마크 글자 색상 (기본: white)",
+    )
+
+    parser.add_argument(
+        "--watermark-alpha",
+        type=float,
+        default=0.85,
+        help="워터마크 투명도 (0.0~1.0, 기본: 0.85)",
+    )
+    parser.add_argument(
         "--status",
         nargs="?",
         const=CATALOG_STATUS_SENTINEL,
@@ -1448,7 +1499,6 @@ def validate_args(
         auto_lut = get_default_auto_lut()
 
     lut_before_hdr: bool = getattr(args, "lut_before_hdr", False)
-
     # 템플릿 옵션 (CLI > env/config)
     template_intro_env = get_default_template_intro()
     template_outro_env = get_default_template_outro()
@@ -1464,6 +1514,18 @@ def validate_args(
         if template_outro_arg is not None
         else _resolve_template_path(template_outro_env)
     )
+
+    # 워터마크 옵션
+    watermark_enabled: bool = bool(getattr(args, "watermark", False))
+    watermark_pos: str = getattr(args, "watermark_pos", "bottom-right")
+    watermark_size: int = getattr(args, "watermark_size", 48)
+    watermark_color: str = getattr(args, "watermark_color", "white")
+    watermark_alpha: float = float(getattr(args, "watermark_alpha", 0.85))
+    if watermark_size <= 0:
+        raise ValueError(f"Watermark size must be > 0, got: {watermark_size}")
+    if not (0.0 <= watermark_alpha <= 1.0):
+        raise ValueError(f"Watermark alpha must be in [0.0, 1.0], got: {watermark_alpha}")
+
     # 스케줄 옵션 검증
     schedule_arg: str | None = getattr(args, "schedule", None)
     schedule: str | None = None
@@ -1524,6 +1586,11 @@ def validate_args(
         lut_path=lut_path,
         auto_lut=auto_lut,
         lut_before_hdr=lut_before_hdr,
+        watermark=watermark_enabled,
+        watermark_pos=watermark_pos,
+        watermark_size=watermark_size,
+        watermark_color=watermark_color,
+        watermark_alpha=watermark_alpha,
         device_luts=device_luts if device_luts else None,
         template_intro=template_intro,
         template_outro=template_outro,
@@ -2058,7 +2125,7 @@ def handle_single_file_upload(
     return video_file.path
 
 
-def _collect_clip_info(video_file: VideoFile) -> ClipInfo:
+def _collect_clip_info(video_file: VideoFile, metadata: VideoMetadata | None = None) -> ClipInfo:
     """영상 파일에서 Summary·타임라인용 클립 메타데이터를 수집한다.
 
     ffprobe로 해상도·코덱·길이 등을 추출하고, 파일 생성 시간에서
@@ -2071,7 +2138,8 @@ def _collect_clip_info(video_file: VideoFile) -> ClipInfo:
         ClipInfo(name, duration, device, shot_time)
     """
     try:
-        metadata = detect_metadata(video_file.path)
+        if metadata is None:
+            metadata = detect_metadata(video_file.path)
         creation_time_str = video_file.creation_time.strftime("%H:%M:%S")
         return ClipInfo(
             name=video_file.path.name,
@@ -2082,6 +2150,22 @@ def _collect_clip_info(video_file: VideoFile) -> ClipInfo:
     except Exception as e:
         logger.warning(f"Failed to get metadata for {video_file.path}: {e}")
         return ClipInfo(name=video_file.path.name, duration=0.0, device=None, shot_time=None)
+
+
+def _make_watermark_text(video_file: VideoFile, metadata: VideoMetadata) -> str:
+    """워터마크 텍스트 생성 (촬영 시각 + 위치 정보)."""
+    shot_time = video_file.creation_time.strftime("%Y.%m.%d")
+
+    location = metadata.location
+    if location is None:
+        lat = metadata.location_latitude
+        lon = metadata.location_longitude
+        if lat is not None and lon is not None:
+            location = f"{lat:.6f}, {lon:.6f}"
+
+    if location:
+        return f"{shot_time} | {location}"
+    return shot_time
 
 
 def _transcode_single(
@@ -2107,8 +2191,12 @@ def _transcode_single(
     fade_out = fade_config.fade_out if fade_config else None
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
+        metadata = detect_metadata(video_file.path)
+        watermark_text = _make_watermark_text(video_file, metadata) if opts.watermark else None
+
         output_path, video_id, silence_segments = transcoder.transcode_video(
             video_file,
+            metadata=metadata,
             denoise=opts.denoise,
             denoise_level=opts.denoise_level,
             normalize_audio=opts.normalize_audio,
@@ -2125,8 +2213,13 @@ def _transcode_single(
             auto_lut=opts.auto_lut,
             lut_before_hdr=opts.lut_before_hdr,
             device_luts=opts.device_luts,
+            watermark_text=watermark_text,
+            watermark_position=opts.watermark_pos,
+            watermark_size=opts.watermark_size,
+            watermark_color=opts.watermark_color,
+            watermark_alpha=opts.watermark_alpha,
         )
-        clip_info = _collect_clip_info(video_file)
+        clip_info = _collect_clip_info(video_file, metadata)
         return TranscodeResult(
             output_path=output_path,
             video_id=video_id,
@@ -2233,8 +2326,11 @@ def _transcode_sequential(
             fade_in = fade_config.fade_in if fade_config else None
             fade_out = fade_config.fade_out if fade_config else None
 
+            metadata = detect_metadata(video_file.path)
+            watermark_text = _make_watermark_text(video_file, metadata) if opts.watermark else None
             output_path, video_id, silence_segments = transcoder.transcode_video(
                 video_file,
+                metadata=metadata,
                 denoise=opts.denoise,
                 denoise_level=opts.denoise_level,
                 normalize_audio=opts.normalize_audio,
@@ -2251,9 +2347,14 @@ def _transcode_sequential(
                 auto_lut=opts.auto_lut,
                 lut_before_hdr=opts.lut_before_hdr,
                 device_luts=opts.device_luts,
+                watermark_text=watermark_text,
+                watermark_position=opts.watermark_pos,
+                watermark_size=opts.watermark_size,
+                watermark_color=opts.watermark_color,
+                watermark_alpha=opts.watermark_alpha,
                 progress_info_callback=on_progress_info,
             )
-            clip_info = _collect_clip_info(video_file)
+            clip_info = _collect_clip_info(video_file, metadata)
             results.append(
                 TranscodeResult(
                     output_path=output_path,
@@ -2524,6 +2625,11 @@ def run_pipeline(
         auto_lut=validated_args.auto_lut,
         lut_before_hdr=validated_args.lut_before_hdr,
         device_luts=validated_args.device_luts,
+        watermark=validated_args.watermark,
+        watermark_pos=validated_args.watermark_pos,
+        watermark_size=validated_args.watermark_size,
+        watermark_color=validated_args.watermark_color,
+        watermark_alpha=validated_args.watermark_alpha,
     )
 
     if validated_args.stabilize:
@@ -4019,6 +4125,16 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
         print(f"Stabilize: enabled (strength={strength}, crop={crop})")
     else:
         print("Stabilize: disabled")
+    if validated_args.watermark:
+        print("Watermark: enabled")
+        print(
+            f"  position={validated_args.watermark_pos}, "
+            f"size={validated_args.watermark_size}, "
+            f"color={validated_args.watermark_color}, "
+            f"alpha={validated_args.watermark_alpha}"
+        )
+    else:
+        print("Watermark: disabled")
     if validated_args.thumbnail:
         print(f"Thumbnail: enabled (quality={validated_args.thumbnail_quality})")
         if validated_args.thumbnail_timestamps:
