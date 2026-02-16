@@ -225,7 +225,8 @@ class NotificationConfig:
 class AppConfig:
     """애플리케이션 전체 설정.
 
-    [general] + [bgm] + [youtube] + [archive] + [color_grading] + [hooks] + [notification] 통합.
+    [general] + [bgm] + [youtube] + [archive] + [color_grading]
+    + [template] + [hooks] + [notification] 통합.
     """
 
     general: GeneralConfig = field(default_factory=GeneralConfig)
@@ -876,8 +877,8 @@ def generate_default_config() -> str:
 # gopro = "~/LUTs/gopro_flat_to_rec709.cube"
 
 [template]
-# intro = "~/templates/intro_intro.mp4"       # intro 템플릿 경로 (TUBEARCHIVE_TEMPLATE_INTRO)
-# outro = "~/templates/outro_outro.mp4"       # outro 템플릿 경로 (TUBEARCHIVE_TEMPLATE_OUTRO)
+# intro = "~/templates/intro.mp4"             # intro 템플릿 경로 (TUBEARCHIVE_TEMPLATE_INTRO)
+# outro = "~/templates/outro.mp4"             # outro 템플릿 경로 (TUBEARCHIVE_TEMPLATE_OUTRO)
 
 [notification]
 # enabled = false                         # 전역 알림 활성화 (TUBEARCHIVE_NOTIFY)

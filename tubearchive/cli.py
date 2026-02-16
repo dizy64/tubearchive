@@ -2043,9 +2043,7 @@ def run_pipeline(
             for i, video_file in enumerate(video_files)
         ]
 
-    fade_map = {
-        vf.path: FadeConfig(fade_in=0.0, fade_out=0.0) for vf in main_video_files if vf.path
-    }
+    fade_map = {vf.path: FadeConfig(fade_in=0.0, fade_out=0.0) for vf in main_video_files}
     fade_map.update(
         compute_fade_map(
             groups=groups,
@@ -2056,6 +2054,10 @@ def run_pipeline(
     video_files = list(main_video_files)
     if template_intro_video is not None:
         video_files.insert(0, template_intro_video)
+        fade_map[template_intro_video.path] = FadeConfig(
+            fade_in=validated_args.fade_duration,
+            fade_out=0.0,
+        )
         first_main = main_video_files[0]
         first_fade = fade_map.get(first_main.path)
         if first_fade is not None:
@@ -2066,6 +2068,10 @@ def run_pipeline(
 
     if template_outro_video is not None:
         video_files.append(template_outro_video)
+        fade_map[template_outro_video.path] = FadeConfig(
+            fade_in=0.0,
+            fade_out=validated_args.fade_duration,
+        )
         last_main = main_video_files[-1]
         last_fade = fade_map.get(last_main.path)
         if last_fade is not None:
@@ -2159,7 +2165,7 @@ def run_pipeline(
         notifier.notify(
             merge_complete_event(
                 output_path=str(final_path),
-                file_count=len(results),
+                file_count=len(main_results),
                 total_size_bytes=final_path.stat().st_size if final_path.exists() else 0,
             )
         )
