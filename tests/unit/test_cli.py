@@ -221,6 +221,35 @@ class TestCreateParser:
 
         assert args.set_thumbnail is None
 
+    def test_parses_subtitle_flag(self) -> None:
+        """--subtitle 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--subtitle"])
+
+        assert args.subtitle is True
+
+    def test_parses_subtitle_model(self) -> None:
+        """--subtitle-model 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(["--subtitle-model", "base"])
+
+        assert args.subtitle_model == "base"
+
+    def test_parses_subtitle_format(self) -> None:
+        """--subtitle-format 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(["--subtitle-format", "vtt"])
+
+        assert args.subtitle_format == "vtt"
+
+    def test_parses_subtitle_lang_and_burn(self) -> None:
+        """자막 언어/하드코딩 옵션 파싱."""
+        parser = create_parser()
+        args = parser.parse_args(["--subtitle-lang", "EN", "--subtitle-burn"])
+
+        assert args.subtitle_lang == "EN"
+        assert args.subtitle_burn is True
+
     def test_parses_quality_report_flag(self) -> None:
         """--quality-report 플래그."""
         parser = create_parser()
@@ -249,28 +278,28 @@ class TestCreateParser:
 
         assert args.config is None
 
-    def test_parses_template_intro(self) -> None:
+    def test_parses_template_intro_legacy(self) -> None:
         """--template-intro 파싱."""
         parser = create_parser()
         args = parser.parse_args(["--template-intro", "/tmp/intro.mov"])
 
         assert args.template_intro == "/tmp/intro.mov"
 
-    def test_template_intro_default_is_none(self) -> None:
+    def test_template_intro_default_is_none_legacy(self) -> None:
         """--template-intro 미지정 시 None."""
         parser = create_parser()
         args = parser.parse_args([])
 
         assert args.template_intro is None
 
-    def test_parses_template_outro(self) -> None:
+    def test_parses_template_outro_legacy(self) -> None:
         """--template-outro 파싱."""
         parser = create_parser()
         args = parser.parse_args(["--template-outro", "/tmp/outro.mov"])
 
         assert args.template_outro == "/tmp/outro.mov"
 
-    def test_template_outro_default_is_none(self) -> None:
+    def test_template_outro_default_is_none_legacy(self) -> None:
         """--template-outro 미지정 시 None."""
         parser = create_parser()
         args = parser.parse_args([])
@@ -311,6 +340,34 @@ class TestCreateParser:
 
         with pytest.raises(SystemExit):
             parser.parse_args(["--run-hook", "invalid"])
+
+    def test_parses_template_intro(self) -> None:
+        """--template-intro 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(["--template-intro", "/path/to/intro.mp4"])
+
+        assert args.template_intro == "/path/to/intro.mp4"
+
+    def test_template_intro_default_is_none(self) -> None:
+        """--template-intro 미지정 시 None."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.template_intro is None
+
+    def test_parses_template_outro(self) -> None:
+        """--template-outro 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(["--template-outro", "/path/to/outro.mp4"])
+
+        assert args.template_outro == "/path/to/outro.mp4"
+
+    def test_template_outro_default_is_none(self) -> None:
+        """--template-outro 미지정 시 None."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.template_outro is None
 
     def test_parses_exclude_single(self) -> None:
         """--exclude 단일 패턴."""
@@ -625,6 +682,195 @@ class TestValidateArgs:
         )
 
         with pytest.raises(ValueError, match="Unsupported thumbnail format"):
+            validate_args(args)
+
+    def test_template_intro_path_legacy(self, tmp_path: Path) -> None:
+        """템플릿 intro 경로를 Path로 변환한다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        intro = tmp_path / "intro.mp4"
+        intro.write_text("intro")
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            template_intro=str(intro),
+        )
+
+        result = validate_args(args)
+        assert result.template_intro == intro.resolve()
+
+    def test_template_outro_path_legacy(self, tmp_path: Path) -> None:
+        """템플릿 outro 경로를 Path로 변환한다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        outro = tmp_path / "outro.mp4"
+        outro.write_text("outro")
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            template_outro=str(outro),
+        )
+
+        result = validate_args(args)
+        assert result.template_outro == outro.resolve()
+
+    def test_template_intro_cli_precedence_legacy(self, tmp_path: Path) -> None:
+        """CLI로 지정한 템플릿이 환경변수보다 우선한다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        cli_intro = tmp_path / "cli_intro.mp4"
+        cli_intro.write_text("cli")
+        env_intro = tmp_path / "env_intro.mp4"
+        env_intro.write_text("env")
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            template_intro=str(cli_intro),
+        )
+
+        with patch.dict("os.environ", {"TUBEARCHIVE_TEMPLATE_INTRO": str(env_intro)}):
+            result = validate_args(args)
+
+        assert result.template_intro == cli_intro.resolve()
+
+    def test_template_outro_from_env(self, tmp_path: Path) -> None:
+        """템플릿 outro는 환경변수 기본값을 적용한다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        env_outro = tmp_path / "env_outro.mp4"
+        env_outro.write_text("env")
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+        )
+
+        with patch.dict("os.environ", {"TUBEARCHIVE_TEMPLATE_OUTRO": str(env_outro)}):
+            result = validate_args(args)
+
+        assert result.template_outro == env_outro.resolve()
+
+    def test_template_path_not_found_raises(self, tmp_path: Path) -> None:
+        """존재하지 않는 템플릿 경로는 FileNotFoundError."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            template_intro=str(tmp_path / "missing_intro.mp4"),
+            template_outro=str(tmp_path / "missing_outro.mp4"),
+        )
+
+        with pytest.raises(FileNotFoundError):
+            validate_args(args)
+
+    def test_default_subtitle_options(self) -> None:
+        """자막 기본값이 ValidatedArgs에 반영된다."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+        )
+
+        result = validate_args(args)
+
+        assert result.subtitle is False
+        assert result.subtitle_model == "tiny"
+        assert result.subtitle_format == "srt"
+        assert result.subtitle_lang is None
+        assert result.subtitle_burn is False
+
+    def test_custom_subtitle_options_are_normalized(self) -> None:
+        """자막 사용자 옵션이 전달되며 언어는 소문자 정규화."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            subtitle=True,
+            subtitle_model="base",
+            subtitle_format="vtt",
+            subtitle_lang="EN",
+            subtitle_burn=True,
+        )
+
+        result = validate_args(args)
+
+        assert result.subtitle is True
+        assert result.subtitle_model == "base"
+        assert result.subtitle_format == "vtt"
+        assert result.subtitle_lang == "en"
+        assert result.subtitle_burn is True
+
+    def test_rejects_invalid_subtitle_model(self) -> None:
+        """지원하지 않는 자막 모델은 에러."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            subtitle=True,
+            subtitle_model="invalid",
+        )
+
+        with pytest.raises(ValueError, match="Unsupported subtitle model"):
+            validate_args(args)
+
+    def test_rejects_invalid_subtitle_format(self) -> None:
+        """지원하지 않는 자막 포맷은 에러."""
+        args = argparse.Namespace(
+            targets=[],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            subtitle=True,
+            subtitle_format="invalid",
+        )
+
+        with pytest.raises(ValueError, match="Unsupported subtitle format"):
             validate_args(args)
 
     def test_validates_empty_targets_uses_cwd(self) -> None:
@@ -1616,6 +1862,49 @@ class TestUploadAfterPipeline:
 
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["thumbnail"] == thumbnail
+
+    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.cli.init_database")
+    def test_upload_after_pipeline_passes_subtitle_args(
+        self,
+        mock_db: MagicMock,
+        _mock_playlist: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """자막 경로와 언어가 업로드 인자로 전달된다."""
+        from tubearchive.cli import _upload_after_pipeline
+
+        mock_conn = MagicMock()
+        mock_db.return_value = mock_conn
+        mock_conn.close = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.get_latest.return_value = None
+
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        subtitle_path = tmp_path / "subtitle.srt"
+        subtitle_path.write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n테스트\n")
+        args = argparse.Namespace(
+            upload_privacy="unlisted",
+            playlist=None,
+            upload_chunk=32,
+        )
+
+        with patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo):
+            _upload_after_pipeline(
+                output_path,
+                args,
+                subtitle_path=subtitle_path,
+                subtitle_language="ko",
+            )
+
+        mock_upload.assert_called_once()
+        call_kwargs = mock_upload.call_args.kwargs
+        assert call_kwargs["subtitle_path"] == subtitle_path
+        assert call_kwargs["subtitle_language"] == "ko"
 
     @patch("tubearchive.cli.upload_to_youtube")
     @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])

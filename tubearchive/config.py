@@ -37,6 +37,8 @@ ENV_GROUP_SEQUENCES = "TUBEARCHIVE_GROUP_SEQUENCES"
 ENV_FADE_DURATION = "TUBEARCHIVE_FADE_DURATION"
 ENV_BACKUP_REMOTE = "TUBEARCHIVE_BACKUP_REMOTE"
 ENV_BACKUP_INCLUDE_ORIGINALS = "TUBEARCHIVE_BACKUP_INCLUDE_ORIGINALS"
+ENV_TEMPLATE_INTRO = "TUBEARCHIVE_TEMPLATE_INTRO"
+ENV_TEMPLATE_OUTRO = "TUBEARCHIVE_TEMPLATE_OUTRO"
 ENV_TRIM_SILENCE = "TUBEARCHIVE_TRIM_SILENCE"
 ENV_SILENCE_THRESHOLD = "TUBEARCHIVE_SILENCE_THRESHOLD"
 ENV_SILENCE_MIN_DURATION = "TUBEARCHIVE_SILENCE_MIN_DURATION"
@@ -257,7 +259,8 @@ class NotificationConfig:
 class AppConfig:
     """애플리케이션 전체 설정.
 
-    [general] + [bgm] + [youtube] + [archive] + [color_grading] + [hooks] + [notification] 통합.
+    [general] + [bgm] + [youtube] + [archive] + [color_grading]
+    + [template] + [hooks] + [notification] 통합.
     """
 
     general: GeneralConfig = field(default_factory=GeneralConfig)
@@ -1015,7 +1018,6 @@ def generate_default_config() -> str:
 [template]
 # intro = "~/templates/intro.mov"         # 병합 맨 앞에 붙일 템플릿
 # outro = "~/templates/outro.mov"         # 병합 맨 뒤에 붙일 템플릿
-
 [notification]
 # enabled = false                         # 전역 알림 활성화 (TUBEARCHIVE_NOTIFY)
 # on_transcode_complete = true            # 트랜스코딩 완료 알림
@@ -1225,6 +1227,29 @@ def get_default_archive_destination() -> Path | None:
     return None
 
 
+def _get_template_file_path(env_key: str) -> Path | None:
+    """템플릿 경로 환경변수 값을 파일 경로로 변환한다."""
+    env_path = os.environ.get(env_key)
+    if not env_path:
+        return None
+
+    path = Path(env_path).expanduser()
+    if path.is_file():
+        return path
+    logger.warning("%s=%s is not a valid file", env_key, env_path)
+    return None
+
+
+def get_default_template_intro() -> Path | None:
+    """환경변수 ``TUBEARCHIVE_TEMPLATE_INTRO`` 템플릿 경로를 반환한다."""
+    return _get_template_file_path(ENV_TEMPLATE_INTRO)
+
+
+def get_default_template_outro() -> Path | None:
+    """환경변수 ``TUBEARCHIVE_TEMPLATE_OUTRO`` 템플릿 경로를 반환한다."""
+    return _get_template_file_path(ENV_TEMPLATE_OUTRO)
+
+
 def get_default_bgm_path() -> Path | None:
     """환경변수에서 기본 BGM 파일 경로를 가져온다.
 
@@ -1364,28 +1389,6 @@ def get_default_watch_log_path() -> Path | None:
 def get_default_auto_lut() -> bool:
     """환경변수 ``TUBEARCHIVE_AUTO_LUT`` 에서 자동 LUT 적용 여부를 가져온다."""
     return _get_env_bool(ENV_AUTO_LUT)
-
-
-def get_default_template_intro() -> Path | None:
-    """환경변수 ``TUBEARCHIVE_TEMPLATE_INTRO`` 에서 템플릿 인트로 경로를 가져온다."""
-    env_intro = os.environ.get(ENV_TEMPLATE_INTRO)
-    if env_intro:
-        path = Path(env_intro).expanduser()
-        if path.is_file():
-            return path
-        logger.warning("%s=%s is not a valid file", ENV_TEMPLATE_INTRO, env_intro)
-    return None
-
-
-def get_default_template_outro() -> Path | None:
-    """환경변수 ``TUBEARCHIVE_TEMPLATE_OUTRO`` 에서 템플릿 아웃트로 경로를 가져온다."""
-    env_outro = os.environ.get(ENV_TEMPLATE_OUTRO)
-    if env_outro:
-        path = Path(env_outro).expanduser()
-        if path.is_file():
-            return path
-        logger.warning("%s=%s is not a valid file", ENV_TEMPLATE_OUTRO, env_outro)
-    return None
 
 
 def get_default_notify() -> bool:

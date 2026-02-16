@@ -11,10 +11,12 @@ E2E 파이프라인 테스트.
 
 import shutil
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tubearchive.cli import ValidatedArgs, run_pipeline
+from tubearchive.core.subtitle import SubtitleGenerationResult
 
 from .conftest import create_test_video, probe_video
 
@@ -340,3 +342,101 @@ class TestMixedInputs:
 
         assert int(video_stream["width"]) == 3840
         assert int(video_stream["height"]) == 2160
+
+
+class TestSubtitlePipeline:
+    """자막 생성 파이프라인 통합 테스트."""
+
+    @patch("tubearchive.core.subtitle.generate_subtitles")
+    def test_run_pipeline_generates_subtitles_without_burn(
+        self,
+        mock_generate: MagicMock,
+        single_landscape_video: Path,
+        e2e_output_dir: Path,
+        e2e_db: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """--subtitle 사용 시 SRT 파일 생성 로직이 호출된다."""
+        monkeypatch.setenv("TUBEARCHIVE_DB_PATH", str(e2e_db))
+
+        output_file = e2e_output_dir / "output_with_subtitle.mp4"
+        subtitle_file = output_file.with_suffix(".srt")
+        subtitle_file.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+
+        mock_generate.return_value = SubtitleGenerationResult(
+            subtitle_path=subtitle_file,
+            detected_language="en",
+            output_format="srt",
+        )
+
+        args = ValidatedArgs(
+            targets=[single_landscape_video],
+            output=output_file,
+            output_dir=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            subtitle=True,
+            subtitle_model="tiny",
+            subtitle_format="srt",
+            subtitle_lang="en",
+            subtitle_burn=False,
+        )
+
+        result_path = run_pipeline(args)
+
+        assert result_path.exists()
+        assert subtitle_file.exists()
+        assert result_path == output_file
+        mock_generate.assert_called_once()
+        assert mock_generate.call_args.kwargs["output_format"] == "srt"
+        assert mock_generate.call_args.kwargs["language"] == "en"
+        assert mock_generate.call_args.kwargs["model"] == "tiny"
+
+    @patch("tubearchive.cli._apply_subtitle_burn")
+    @patch("tubearchive.core.subtitle.generate_subtitles")
+    def test_run_pipeline_burns_subtitles(
+        self,
+        mock_generate: MagicMock,
+        mock_burn: MagicMock,
+        single_landscape_video: Path,
+        e2e_output_dir: Path,
+        e2e_db: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """--subtitle-burn 사용 시 하드코딩 단계 호출이 검증된다."""
+        monkeypatch.setenv("TUBEARCHIVE_DB_PATH", str(e2e_db))
+
+        output_file = e2e_output_dir / "output_burned.mp4"
+        subtitle_file = output_file.with_suffix(".srt")
+        subtitle_file.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+        burned_file = output_file.with_name("output_burned_subtitled.mp4")
+        burned_file.write_text("ok")
+
+        mock_generate.return_value = SubtitleGenerationResult(
+            subtitle_path=subtitle_file,
+            detected_language="en",
+            output_format="srt",
+        )
+        mock_burn.return_value = burned_file
+
+        args = ValidatedArgs(
+            targets=[single_landscape_video],
+            output=output_file,
+            output_dir=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            subtitle=True,
+            subtitle_model="tiny",
+            subtitle_format="srt",
+            subtitle_lang="en",
+            subtitle_burn=True,
+        )
+
+        result_path = run_pipeline(args)
+
+        assert result_path == burned_file
+        assert burned_file.exists()
+        assert mock_burn.call_count == 1
+        assert mock_burn.call_args.kwargs["subtitle_path"] == subtitle_file
