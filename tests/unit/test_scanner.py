@@ -3,9 +3,11 @@
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import MagicMock
 
 import pytest
 
+from tubearchive.core import scanner
 from tubearchive.core.scanner import scan_videos
 from tubearchive.models.video import FadeConfig, VideoFile, VideoMetadata
 
@@ -120,6 +122,47 @@ class TestScanner:
         assert len(videos) >= 3
         filenames = [v.path.name for v in videos]
         assert "video1.mp4" in filenames
+
+    def test_resolves_network_root(self) -> None:
+        """SMB/NFS 경로에서 최상위 마운트 경로를 추출한다."""
+        path = Path("/Volumes/Backup/Trip2026/clip.mp4")
+
+        remote_root = scanner._get_remote_source_root(path)
+
+        assert remote_root == Path("/Volumes/Backup")
+
+    def test_resolves_no_remote_root(self, temp_video_dir: Path) -> None:
+        """로컬 경로는 네트워크 루트를 반환하지 않는다."""
+        remote_root = scanner._get_remote_source_root(temp_video_dir)
+
+        assert remote_root is None
+
+    def test_warns_slow_remote_source(
+        self,
+        temp_video_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """느린 원격/외장 경로에서는 복사 권장 경고를 출력한다."""
+        mock_warning = MagicMock()
+        monkeypatch.setattr(scanner.logger, "warning", mock_warning)
+
+        def fake_remote_root(_: Path) -> Path | None:
+            return Path("/Volumes/RemoteNAS")
+
+        def no_remote_check(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        def measure_remote_speed(*_args: object, **_kwargs: object) -> int:
+            return 2 * 1024 * 1024
+
+        monkeypatch.setattr(scanner, "_get_remote_source_root", fake_remote_root)
+        monkeypatch.setattr(scanner, "_check_remote_source", no_remote_check)
+        monkeypatch.setattr(scanner, "_measure_source_read_speed", measure_remote_speed)
+
+        target = temp_video_dir / "video1.mp4"
+        scan_videos([target])
+
+        assert any("로컬 복사" in str(call.args[0]) for call in mock_warning.call_args_list)
 
 
 class TestVideoMetadataProperties:

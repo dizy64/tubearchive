@@ -16,12 +16,144 @@ ffprobe를 서브프로세스로 실행하여 영상 파일의 기술 메타데�
 """
 
 import json
+import re
 import subprocess
+from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
 from tubearchive.models.video import VideoMetadata
+
+
+def _coerce_str(value: Any) -> str | None:
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    if isinstance(value, (int, float)):
+        return str(value)
+    return None
+
+
+def _parse_geo_float(value: str | None) -> float | None:
+    if not value:
+        return None
+
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _parse_hemisphere_coordinate(text: str) -> tuple[float, float] | None:
+    match = re.search(
+        r"([NS])\s*([+-]?\d+(?:\.\d+)?).*?([EW])\s*([+-]?\d+(?:\.\d+)?)",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+
+    ns, lat_txt, ew, lon_txt = match.groups()
+    lat = _parse_geo_float(lat_txt)
+    lon = _parse_geo_float(lon_txt)
+    if lat is None or lon is None:
+        return None
+
+    lat = -abs(lat) if ns.upper() == "S" else abs(lat)
+    lon = -abs(lon) if ew.upper() == "W" else abs(lon)
+
+    return lat, lon
+
+
+def _parse_iso6709_coordinates(text: str) -> tuple[float, float] | None:
+    cleaned = text.strip().strip("/")
+    match = re.match(
+        r"^([+-]?\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)([NS]?)([EW]?)$",
+        cleaned,
+    )
+    if not match:
+        return None
+
+    lat_txt, lon_txt, ns, ew = match.groups()
+    lat = _parse_geo_float(lat_txt)
+    lon = _parse_geo_float(lon_txt)
+    if lat is None or lon is None:
+        return None
+
+    if ns and ns.upper() == "S":
+        lat = -abs(lat)
+    if ew and ew.upper() == "W":
+        lon = -abs(lon)
+
+    return lat, lon
+
+
+def _parse_coordinates_from_text(text: str) -> tuple[float, float] | None:
+    # 좌표 페어
+    for matcher in (_parse_hemisphere_coordinate, _parse_iso6709_coordinates):
+        parsed = matcher(text)
+        if parsed is not None:
+            return parsed
+
+    pair_match = re.search(
+        r"([+-]?\d+(?:\.\d+)?)\s*[ ,;/|]\s*([+-]?\d+(?:\.\d+)?)",
+        text,
+    )
+    if pair_match:
+        lat = _parse_geo_float(pair_match.group(1))
+        lon = _parse_geo_float(pair_match.group(2))
+        if lat is not None and lon is not None:
+            return lat, lon
+
+    return None
+
+
+def _extract_location_from_mapping(tags: Mapping[str, Any]) -> str | None:
+    lat: float | None = None
+    lon: float | None = None
+
+    for key, raw_value in tags.items():
+        value = _coerce_str(raw_value)
+        if value is None:
+            continue
+
+        key_l = key.lower()
+
+        if "lat" in key_l and lat is None:
+            lat = _parse_geo_float(value)
+            continue
+
+        if any(t in key_l for t in ["lon", "lng"]) and lon is None:
+            lon = _parse_geo_float(value)
+            continue
+
+        if "location" in key_l or "iso6709" in key_l:
+            coords = _parse_coordinates_from_text(value)
+            if coords:
+                return f"{coords[0]:.6f}, {coords[1]:.6f}"
+
+    if lat is None or lon is None:
+        return None
+
+    return f"{lat:.6f}, {lon:.6f}"
+
+
+def _extract_location(probe_data: dict[str, Any]) -> str | None:
+    format_tags = probe_data.get("format", {}).get("tags", {})
+    if isinstance(format_tags, Mapping):
+        location = _extract_location_from_mapping(format_tags)
+        if location:
+            return location
+
+    for stream in probe_data.get("streams", []):
+        tags = stream.get("tags", {})
+        if isinstance(tags, Mapping):
+            location = _extract_location_from_mapping(tags)
+            if location:
+                return location
+
+    return None
 
 
 def detect_metadata(video_path: Path) -> VideoMetadata:
@@ -81,6 +213,9 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
     # 기기 모델 감지
     device_model = probe_data.get("format", {}).get("tags", {}).get("com.apple.quicktime.model")
 
+    # 위치 감지: ISO6709 / Lat/Lon 개별 필드
+    location = _extract_location(probe_data)
+
     # 컬러 정보
     color_space = video_stream.get("color_space")
     color_transfer = video_stream.get("color_transfer")
@@ -102,6 +237,7 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
         color_space=color_space,
         color_transfer=color_transfer,
         color_primaries=color_primaries,
+        location=location,
         has_audio=has_audio,
     )
 
