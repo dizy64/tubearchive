@@ -7,12 +7,14 @@ dry-run, parallel 등 파이프라인 옵션의 동작을 실제 ffmpeg로 검�
     uv run pytest tests/e2e/test_pipeline_options.py -v
 """
 
+import logging
 import shutil
 from pathlib import Path
 
 import pytest
 
 from tubearchive.cli import _cmd_dry_run, run_pipeline
+from tubearchive.core import scanner
 
 from .conftest import create_test_video, make_pipeline_args, probe_video
 
@@ -49,6 +51,40 @@ class TestDryRun:
         _cmd_dry_run(args)
 
         assert not output_file.exists(), "dry-run에서는 출력 파일이 생성되면 안 됨"
+
+    def test_dry_run_warns_slow_remote_source(
+        self,
+        e2e_video_dir: Path,
+        e2e_output_dir: Path,
+        e2e_db: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """원격/외장 경로에서 느린 읽기 속도 경고가 출력된다."""
+        create_test_video(e2e_video_dir / "clip.mov", duration=2.0)
+
+        output_file = e2e_output_dir / "dry_run_remote.mp4"
+        args = make_pipeline_args(
+            [e2e_video_dir],
+            output_file,
+            db_path=e2e_db,
+            monkeypatch=monkeypatch,
+            dry_run=True,
+        )
+
+        caplog.set_level(logging.WARNING)
+
+        monkeypatch.setattr(
+            scanner, "_get_remote_source_root", lambda *_args, **_kwargs: Path("/Volumes/RemoteNAS")
+        )
+        monkeypatch.setattr(scanner, "_check_remote_source", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            scanner, "_measure_source_read_speed", lambda *_args, **_kwargs: 2 * 1024 * 1024
+        )
+
+        _cmd_dry_run(args)
+
+        assert any("로컬 복사 후 처리하는 것을 권장합니다" in rec.message for rec in caplog.records)
 
 
 class TestParallel:
