@@ -35,6 +35,7 @@ from tubearchive.config import (
 )
 from tubearchive.models.video import VideoFile, VideoMetadata
 from tubearchive.utils import truncate_path
+from tubearchive.utils.validators import ValidationError
 
 
 class TestCreateParser:
@@ -840,23 +841,41 @@ class TestValidateArgs:
 
     def test_default_subtitle_options(self) -> None:
         """자막 기본값이 ValidatedArgs에 반영된다."""
-        args = argparse.Namespace(
-            targets=[],
-            output=None,
-            no_resume=False,
-            keep_temp=False,
-            dry_run=False,
-            output_dir=None,
-            parallel=None,
-        )
+        env_snapshot = {
+            k: os.environ.get(k)
+            for k in (
+                "TUBEARCHIVE_SUBTITLE_MODEL",
+                "TUBEARCHIVE_SUBTITLE_FORMAT",
+                "TUBEARCHIVE_SUBTITLE_LANG",
+                "TUBEARCHIVE_SUBTITLE_BURN",
+            )
+        }
+        for key in env_snapshot:
+            os.environ.pop(key, None)
+        try:
+            args = argparse.Namespace(
+                targets=[],
+                output=None,
+                no_resume=False,
+                keep_temp=False,
+                dry_run=False,
+                output_dir=None,
+                parallel=None,
+            )
 
-        result = validate_args(args)
+            result = validate_args(args)
 
-        assert result.subtitle is False
-        assert result.subtitle_model == "tiny"
-        assert result.subtitle_format == "srt"
-        assert result.subtitle_lang is None
-        assert result.subtitle_burn is False
+            assert result.subtitle is False
+            assert result.subtitle_model == "tiny"
+            assert result.subtitle_format == "srt"
+            assert result.subtitle_lang is None
+            assert result.subtitle_burn is False
+        finally:
+            for key, value in env_snapshot.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def test_custom_subtitle_options_are_normalized(self) -> None:
         """자막 사용자 옵션이 전달되며 언어는 소문자 정규화."""
@@ -897,7 +916,7 @@ class TestValidateArgs:
             subtitle_model="invalid",
         )
 
-        with pytest.raises(ValueError, match="Unsupported subtitle model"):
+        with pytest.raises(ValidationError, match="Invalid subtitle model"):
             validate_args(args)
 
     def test_rejects_invalid_subtitle_format(self) -> None:
@@ -914,7 +933,7 @@ class TestValidateArgs:
             subtitle_format="invalid",
         )
 
-        with pytest.raises(ValueError, match="Unsupported subtitle format"):
+        with pytest.raises(ValidationError, match="Invalid subtitle format"):
             validate_args(args)
 
     def test_validates_empty_targets_uses_cwd(self) -> None:
@@ -2044,6 +2063,71 @@ class TestUploadAfterPipeline:
 
         mock_upload.assert_called_once()
         call_kwargs = mock_upload.call_args.kwargs
+        assert call_kwargs["subtitle_path"] == subtitle_path
+        assert call_kwargs["subtitle_language"] == "ko"
+
+    @patch("tubearchive.cli._upload_split_files")
+    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.cli.init_database")
+    def test_upload_after_pipeline_passes_subtitle_args_to_split_upload(
+        self,
+        mock_db: MagicMock,
+        _mock_playlist: MagicMock,
+        mock_upload_split: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """분할 업로드 시 자막 경로/언어가 split 업로더에 전달된다."""
+        from tubearchive.cli import _upload_after_pipeline
+
+        mock_conn = MagicMock()
+        mock_db.return_value = mock_conn
+        mock_conn.close = MagicMock()
+
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        split_file = tmp_path / "part1.mp4"
+        split_file.write_bytes(b"segment")
+        subtitle_path = tmp_path / "subtitle.srt"
+        subtitle_path.write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n테스트\n")
+
+        args = argparse.Namespace(
+            upload_privacy="unlisted",
+            playlist=None,
+            upload_chunk=32,
+        )
+
+        with (
+            patch(
+                "tubearchive.cli.MergeJobRepository",
+                return_value=MagicMock(
+                    get_latest=MagicMock(
+                        return_value=MagicMock(
+                            id=2,
+                            title="title",
+                            summary_markdown="",
+                            clips_info_json=None,
+                        ),
+                    ),
+                ),
+            ),
+            patch(
+                "tubearchive.cli.SplitJobRepository",
+                return_value=MagicMock(
+                    get_by_merge_job_id=MagicMock(
+                        return_value=[MagicMock(id=5, output_files=[split_file])]
+                    )
+                ),
+            ),
+        ):
+            _upload_after_pipeline(
+                output_path,
+                args,
+                subtitle_path=subtitle_path,
+                subtitle_language="ko",
+            )
+
+        mock_upload_split.assert_called_once()
+        call_kwargs = mock_upload_split.call_args.kwargs
         assert call_kwargs["subtitle_path"] == subtitle_path
         assert call_kwargs["subtitle_language"] == "ko"
 
