@@ -297,3 +297,86 @@ class TestDetector:
 
         # sample_ffprobe_output에는 오디오 스트림이 없다
         assert metadata.has_audio is False
+
+    def test_detects_location_from_iso6709_format_tag(
+        self, sample_ffprobe_output: dict, tmp_path: Path
+    ) -> None:
+        """ISO6709 좌표 태그에서 위치를 추출."""
+        video_file = tmp_path / "test.mp4"
+        video_file.write_text("")
+
+        sample_ffprobe_output["format"]["tags"] = {
+            "com.apple.quicktime.location.ISO6709": "+37.566500+126.978000/"
+        }
+
+        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+            mock_ffprobe.return_value = sample_ffprobe_output
+
+            metadata = detect_metadata(video_file)
+
+        assert metadata.location == "37.566500, 126.978000"
+        assert metadata.location_latitude == 37.5665
+        assert metadata.location_longitude == 126.9780
+
+    def test_detects_location_from_stream_nsew_tag(
+        self, sample_ffprobe_output: dict, tmp_path: Path
+    ) -> None:
+        """스트림 태그의 N/S/E/W 형식 좌표를 추출."""
+        video_file = tmp_path / "test.mp4"
+        video_file.write_text("")
+
+        sample_ffprobe_output["streams"][0]["tags"] = {
+            "com.apple.quicktime.location": "N 37.5665, E 126.9780"
+        }
+        sample_ffprobe_output["format"]["tags"] = {}
+
+        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+            mock_ffprobe.return_value = sample_ffprobe_output
+
+            metadata = detect_metadata(video_file)
+
+        assert metadata.location == "37.566500, 126.978000"
+        assert metadata.location_latitude == 37.5665
+        assert metadata.location_longitude == 126.9780
+
+    def test_detects_non_coordinate_location_text(
+        self, sample_ffprobe_output: dict, tmp_path: Path
+    ) -> None:
+        """좌표가 아닌 위치 텍스트는 원문을 반환."""
+        video_file = tmp_path / "test.mp4"
+        video_file.write_text("")
+
+        sample_ffprobe_output["format"]["tags"] = {
+            "location": "Seoul Downtown",
+            "quicktime:location": "ignored",
+        }
+
+        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+            mock_ffprobe.return_value = sample_ffprobe_output
+
+            metadata = detect_metadata(video_file)
+
+        assert metadata.location == "Seoul Downtown"
+        assert metadata.location_latitude is None
+        assert metadata.location_longitude is None
+
+    def test_detects_location_from_srt_sidecar(
+        self, sample_ffprobe_output: dict, tmp_path: Path
+    ) -> None:
+        """SRT sidecar에서 좌표 문자열을 추출."""
+        video_file = tmp_path / "test.mp4"
+        video_file.write_text("")
+        sidecar = tmp_path / "test.srt"
+        sidecar.write_text("1\n00:00:00,000 --> 00:00:01,000\n+37.566500+126.978000/\n")
+
+        sample_ffprobe_output["format"]["tags"] = {}
+        sample_ffprobe_output["streams"][0]["tags"] = {}
+
+        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+            mock_ffprobe.return_value = sample_ffprobe_output
+
+            metadata = detect_metadata(video_file)
+
+        assert metadata.location == "37.566500, 126.978000"
+        assert metadata.location_latitude == 37.5665
+        assert metadata.location_longitude == 126.9780
