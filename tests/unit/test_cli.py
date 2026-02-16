@@ -255,6 +255,34 @@ class TestCreateParser:
         with pytest.raises(SystemExit):
             parser.parse_args(["--run-hook", "invalid"])
 
+    def test_parses_template_intro(self) -> None:
+        """--template-intro 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(["--template-intro", "/path/to/intro.mp4"])
+
+        assert args.template_intro == "/path/to/intro.mp4"
+
+    def test_template_intro_default_is_none(self) -> None:
+        """--template-intro 미지정 시 None."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.template_intro is None
+
+    def test_parses_template_outro(self) -> None:
+        """--template-outro 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(["--template-outro", "/path/to/outro.mp4"])
+
+        assert args.template_outro == "/path/to/outro.mp4"
+
+    def test_template_outro_default_is_none(self) -> None:
+        """--template-outro 미지정 시 None."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.template_outro is None
+
     def test_parses_exclude_single(self) -> None:
         """--exclude 단일 패턴."""
         parser = create_parser()
@@ -568,6 +596,116 @@ class TestValidateArgs:
         )
 
         with pytest.raises(ValueError, match="Unsupported thumbnail format"):
+            validate_args(args)
+
+    def test_template_intro_path(self, tmp_path: Path) -> None:
+        """템플릿 intro 경로를 Path로 변환한다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        intro = tmp_path / "intro.mp4"
+        intro.write_text("intro")
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            template_intro=str(intro),
+        )
+
+        result = validate_args(args)
+        assert result.template_intro == intro.resolve()
+
+    def test_template_outro_path(self, tmp_path: Path) -> None:
+        """템플릿 outro 경로를 Path로 변환한다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        outro = tmp_path / "outro.mp4"
+        outro.write_text("outro")
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            template_outro=str(outro),
+        )
+
+        result = validate_args(args)
+        assert result.template_outro == outro.resolve()
+
+    def test_template_intro_cli_precedence(self, tmp_path: Path) -> None:
+        """CLI로 지정한 템플릿이 환경변수보다 우선한다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        cli_intro = tmp_path / "cli_intro.mp4"
+        cli_intro.write_text("cli")
+        env_intro = tmp_path / "env_intro.mp4"
+        env_intro.write_text("env")
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            template_intro=str(cli_intro),
+        )
+
+        with patch.dict("os.environ", {"TUBEARCHIVE_TEMPLATE_INTRO": str(env_intro)}):
+            result = validate_args(args)
+
+        assert result.template_intro == cli_intro.resolve()
+
+    def test_template_outro_from_env(self, tmp_path: Path) -> None:
+        """템플릿 outro는 환경변수 기본값을 적용한다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        env_outro = tmp_path / "env_outro.mp4"
+        env_outro.write_text("env")
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+        )
+
+        with patch.dict("os.environ", {"TUBEARCHIVE_TEMPLATE_OUTRO": str(env_outro)}):
+            result = validate_args(args)
+
+        assert result.template_outro == env_outro.resolve()
+
+    def test_template_path_not_found_raises(self, tmp_path: Path) -> None:
+        """존재하지 않는 템플릿 경로는 FileNotFoundError."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            template_intro=str(tmp_path / "missing_intro.mp4"),
+            template_outro=str(tmp_path / "missing_outro.mp4"),
+        )
+
+        with pytest.raises(FileNotFoundError):
             validate_args(args)
 
     def test_validates_empty_targets_uses_cwd(self) -> None:
