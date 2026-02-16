@@ -452,6 +452,61 @@ class YouTubeUploader:
             if prepared_thumbnail != thumbnail_path and prepared_thumbnail.exists():
                 prepared_thumbnail.unlink(missing_ok=True)
 
+    def set_captions(
+        self,
+        video_id: str,
+        caption_path: Path,
+        language: str | None = None,
+        name: str | None = None,
+    ) -> None:
+        """영상에 자막(캡션)을 업로드한다.
+
+        Args:
+            video_id: 대상 YouTube 영상 ID
+            caption_path: 자막 파일 경로 (`.srt`/`.vtt` 지원)
+            language: 언어 코드(미지정 시 `en`).
+            name: 캡션 트랙 이름(미지정 시 파일명 사용)
+        """
+        if not video_id:
+            raise ValueError("video_id is required")
+
+        caption_file = Path(caption_path)
+        if not caption_file.exists():
+            raise FileNotFoundError(f"Caption file not found: {caption_path}")
+
+        extension = caption_file.suffix.lower()
+        if extension not in {".srt", ".vtt"}:
+            raise ValueError(f"Unsupported caption format: {extension} (supported: .srt, .vtt)")
+
+        caption_name = name or caption_file.stem
+        caption_language = language.lower() if language else "en"
+
+        mimetype = "text/srt" if extension == ".srt" else "text/vtt"
+        media = MediaFileUpload(
+            str(caption_file),
+            mimetype=mimetype,
+            resumable=False,
+        )
+
+        body: dict[str, Any] = {
+            "snippet": {
+                "videoId": video_id,
+                "language": caption_language,
+                "name": caption_name,
+            }
+        }
+        try:
+            request = self.service.captions().insert(
+                part="snippet",
+                body=body,
+                media_body=media,
+            )
+            request.execute()
+        except HttpError as e:
+            raise YouTubeUploadError(
+                f"Failed to set captions for video {video_id}: {e.resp.status} {e.resp.reason}"
+            ) from e
+
     def _execute_upload(
         self,
         request: Any,

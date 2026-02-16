@@ -90,6 +90,10 @@ from tubearchive.core.ordering import (
 )
 from tubearchive.core.scanner import scan_videos
 from tubearchive.core.splitter import probe_duration
+from tubearchive.core.subtitle import (
+    SUPPORTED_SUBTITLE_FORMATS,
+    SUPPORTED_SUBTITLE_MODELS,
+)
 from tubearchive.core.transcoder import Transcoder
 from tubearchive.database.repository import (
     MergeJobRepository,
@@ -277,6 +281,11 @@ class ValidatedArgs:
     trim_silence: bool = False
     silence_threshold: str = "-30dB"
     silence_min_duration: float = 2.0
+    subtitle: bool = False
+    subtitle_model: str = "tiny"
+    subtitle_format: str = "srt"
+    subtitle_lang: str | None = None
+    subtitle_burn: bool = False
     bgm_path: Path | None = None
     bgm_volume: float = 0.2
     bgm_loop: bool = False
@@ -565,6 +574,43 @@ def create_parser() -> argparse.ArgumentParser:
         "--bgm-loop",
         action="store_true",
         help="BGM 길이 < 영상 길이일 때 루프 재생",
+    )
+
+    # 자막 생성/하드코딩 옵션
+    parser.add_argument(
+        "--subtitle",
+        action="store_true",
+        help="병합 영상 자막 생성",
+    )
+
+    parser.add_argument(
+        "--subtitle-model",
+        type=str,
+        default="tiny",
+        choices=list(SUPPORTED_SUBTITLE_MODELS),
+        help="Whisper 모델 (tiny/base/small/medium/large, 기본: tiny)",
+    )
+
+    parser.add_argument(
+        "--subtitle-format",
+        type=str,
+        default="srt",
+        choices=list(SUPPORTED_SUBTITLE_FORMATS),
+        help="자막 출력 포맷 (srt/vtt, 기본: srt)",
+    )
+
+    parser.add_argument(
+        "--subtitle-lang",
+        type=str,
+        default=None,
+        metavar="LANG",
+        help="자막 언어 코드 (예: en, ko). 미지정 시 자동 감지",
+    )
+
+    parser.add_argument(
+        "--subtitle-burn",
+        action="store_true",
+        help="자막을 영상에 하드코딩 (ffmpeg subtitles 필터)",
     )
 
     parser.add_argument(
@@ -1149,6 +1195,22 @@ def validate_args(
     if silence_min_duration <= 0:
         raise ValueError(f"Silence duration must be > 0, got: {silence_min_duration}")
 
+    # 자막 옵션
+    subtitle = bool(getattr(args, "subtitle", False))
+    subtitle_model = getattr(args, "subtitle_model", "tiny")
+    if subtitle_model not in SUPPORTED_SUBTITLE_MODELS:
+        raise ValueError(f"Unsupported subtitle model: {subtitle_model}")
+
+    subtitle_format = getattr(args, "subtitle_format", "srt")
+    if subtitle_format not in SUPPORTED_SUBTITLE_FORMATS:
+        raise ValueError(f"Unsupported subtitle format: {subtitle_format}")
+
+    subtitle_lang = getattr(args, "subtitle_lang", None)
+    if subtitle_lang is not None:
+        subtitle_lang = subtitle_lang.strip().lower() or None
+
+    subtitle_burn = bool(getattr(args, "subtitle_burn", False))
+
     # BGM 옵션 검증 (CLI 인자 > 환경 변수 > 기본값)
     bgm_path_arg = getattr(args, "bgm", None)
     bgm_path: Path | None = None
@@ -1287,6 +1349,11 @@ def validate_args(
         trim_silence=trim_silence,
         silence_threshold=silence_threshold,
         silence_min_duration=silence_min_duration,
+        subtitle=subtitle,
+        subtitle_model=subtitle_model,
+        subtitle_format=subtitle_format,
+        subtitle_lang=subtitle_lang,
+        subtitle_burn=subtitle_burn,
         bgm_path=bgm_path,
         bgm_volume=bgm_volume,
         bgm_loop=bgm_loop,
@@ -1915,6 +1982,7 @@ def run_pipeline(
     validated_args: ValidatedArgs,
     notifier: Notifier | None = None,
     generated_thumbnail_paths: list[Path] | None = None,
+    generated_subtitle_paths: list[Path] | None = None,
 ) -> Path:
     """
     전체 파이프라인 실행.
@@ -1925,6 +1993,7 @@ def run_pipeline(
         validated_args: 검증된 인자
         notifier: 알림 오케스트레이터 (None이면 알림 비활성화)
         generated_thumbnail_paths: 썸네일 생성 결과 저장용 출력 버퍼 (기본값 None)
+        generated_subtitle_paths: 자막 생성 결과 저장용 출력 버퍼 (기본값 None)
 
     Returns:
         최종 출력 파일 경로
@@ -2073,6 +2142,31 @@ def run_pipeline(
         # 원본을 BGM 믹싱된 파일로 대체
         shutil.move(str(bgm_mixed_path), str(final_path))
         logger.info(f"BGM mixing applied: {final_path}")
+
+    # 4.1 자막 생성/하드코딩 (선택)
+    subtitle_path: Path | None = None
+    if validated_args.subtitle:
+        from tubearchive.core.subtitle import generate_subtitles
+
+        logger.info("Generating subtitles for merged output...")
+        generated = final_path.with_suffix(f".{validated_args.subtitle_format}")
+        subtitle_result = generate_subtitles(
+            final_path,
+            model=validated_args.subtitle_model,
+            language=validated_args.subtitle_lang,
+            output_format=validated_args.subtitle_format,
+            output_path=generated,
+        )
+        subtitle_path = subtitle_result.subtitle_path
+        if generated_subtitle_paths is not None:
+            generated_subtitle_paths.append(subtitle_path)
+
+        if validated_args.subtitle_burn:
+            logger.info("Applying hardcoded subtitles...")
+            final_path = _apply_subtitle_burn(
+                input_path=final_path,
+                subtitle_path=subtitle_path,
+            )
 
     # 4.1 화질 리포트 출력 (선택)
     if validated_args.quality_report:
@@ -2341,6 +2435,37 @@ def _generate_thumbnails(
         return []
 
 
+def _apply_subtitle_burn(
+    input_path: Path,
+    subtitle_path: Path,
+) -> Path:
+    """자막을 비디오에 하드코딩한다."""
+    from tubearchive.core.subtitle import build_subtitle_filter
+
+    output_path = input_path.with_name(f"{input_path.stem}_subtitled{input_path.suffix}")
+    subtitle_filter = build_subtitle_filter(subtitle_path)
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vf",
+        subtitle_filter,
+        "-c:a",
+        "copy",
+        "-c:v",
+        "libx265",
+        str(output_path),
+    ]
+    logger.info("Applying hardcoded subtitle: %s", output_path.name)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error("Subtitle burn failed: %s", result.stderr)
+        raise RuntimeError(f"Failed to burn subtitle: {result.stderr}")
+    return output_path
+
+
 def _print_quality_report(
     video_files: list[VideoFile],
     results: list[TranscodeResult],
@@ -2549,6 +2674,8 @@ def upload_to_youtube(
     playlist_ids: list[str] | None = None,
     chunk_mb: int | None = None,
     thumbnail: Path | None = None,
+    subtitle_path: Path | None = None,
+    subtitle_language: str | None = None,
 ) -> str | None:
     """
     영상을 YouTube에 업로드.
@@ -2563,6 +2690,8 @@ def upload_to_youtube(
         playlist_ids: 추가할 플레이리스트 ID 리스트 (None이면 추가 안 함)
         chunk_mb: 업로드 청크 크기 MB (None이면 환경변수/기본값)
         thumbnail: 썸네일 이미지 경로
+        subtitle_path: 자막 파일 경로
+        subtitle_language: 자막 언어 코드
 
     Returns:
         업로드된 YouTube 영상 ID. 실패 시 None.
@@ -2671,6 +2800,18 @@ def upload_to_youtube(
             except Exception as e:
                 logger.warning(f"Failed to set thumbnail for {result.video_id}: {e}")
                 print(f"⚠️  썸네일 업로드 실패: {e}")
+
+        if subtitle_path is not None:
+            try:
+                uploader.set_captions(
+                    video_id=result.video_id,
+                    caption_path=subtitle_path,
+                    language=subtitle_language,
+                )
+                print("🧾 자막 업로드 완료")
+            except Exception as e:
+                logger.warning(f"Failed to set captions for {result.video_id}: {e}")
+                print(f"⚠️  자막 업로드 실패: {e}")
 
         print("\n✅ YouTube 업로드 완료!")
         print(f"🎬 URL: {result.url}")
@@ -3476,6 +3617,8 @@ def _upload_after_pipeline(
     notifier: Notifier | None = None,
     publish_at: str | None = None,
     generated_thumbnail_paths: list[Path] | None = None,
+    subtitle_path: Path | None = None,
+    subtitle_language: str | None = None,
     explicit_thumbnail: Path | None = None,
     hooks: HooksConfig | None = None,
 ) -> list[str]:
@@ -3490,6 +3633,8 @@ def _upload_after_pipeline(
         notifier: 알림 오케스트레이터 (None이면 알림 비활성화)
         publish_at: 예약 공개 시간 (이미 검증된 값, 재파싱하지 않음)
         generated_thumbnail_paths: 썸네일 후보 경로 목록 (생성된 썸네일)
+        subtitle_path: 자막 파일 경로
+        subtitle_language: 자막 언어 코드
         explicit_thumbnail: --set-thumbnail에서 지정한 썸네일 경로
     """
     print("\n📤 YouTube 업로드 시작...")
@@ -3574,6 +3719,8 @@ def _upload_after_pipeline(
             playlist_ids=playlist_ids,
             chunk_mb=args.upload_chunk,
             thumbnail=thumbnail,
+            subtitle_path=subtitle_path,
+            subtitle_language=subtitle_language,
         )
         if video_id:
             uploaded_ids = [video_id]
@@ -3795,10 +3942,15 @@ def main() -> None:
                 logger.info("알림 시스템 활성화 (%d개 채널)", notifier.provider_count)
 
         pipeline_generated_thumbnail_paths: list[Path] = []
+        pipeline_generated_subtitle_paths: list[Path] = []
         output_path = run_pipeline(
             validated_args,
             notifier=notifier,
             generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
+            generated_subtitle_paths=pipeline_generated_subtitle_paths,
+        )
+        subtitle_path = (
+            pipeline_generated_subtitle_paths[0] if pipeline_generated_subtitle_paths else None
         )
         print("\n✅ 완료!")
         print(f"📹 출력 파일: {output_path}")
@@ -3810,6 +3962,8 @@ def main() -> None:
                 notifier=notifier,
                 publish_at=validated_args.schedule,
                 generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
+                subtitle_path=subtitle_path,
+                subtitle_language=validated_args.subtitle_lang,
                 explicit_thumbnail=validated_args.set_thumbnail,
                 hooks=config.hooks,
             )
