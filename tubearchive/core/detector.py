@@ -29,6 +29,28 @@ _ISO6709_RE = re.compile(
 )
 _LATITUDE_RE = re.compile(r"\blat(?:itude)?\s*[:=]\s*(?P<lat>[+-]?\d+(?:\.\d+)?)", re.IGNORECASE)
 _LONGITUDE_RE = re.compile(r"\blon(?:gitude)?\s*[:=]\s*(?P<lon>[+-]?\d+(?:\.\d+)?)", re.IGNORECASE)
+_NSEW_COORD_RE = re.compile(
+    r"\b(?P<lat_dir>[NS])\s*(?P<lat>\d+(?:\.\d+)?)\s*,?\s*(?P<lon_dir>[EW])\s*(?P<lon>\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def _coerce_tag_text(value: Any) -> str | None:
+    """메타데이터 태그 값을 문자열로 정규화."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _is_valid_lat_lon(lat: float, lon: float) -> bool:
+    """위도/경도 범위를 검증한다."""
+    return -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
+
+
+def _format_coordinate_pair(lat: float, lon: float) -> str:
+    """좌표를 워터마크 표시용 문자열로 변환."""
+    return f"{lat:.6f}, {lon:.6f}"
 
 
 def _parse_iso6709(value: str) -> tuple[float, float] | None:
@@ -42,33 +64,61 @@ def _parse_iso6709(value: str) -> tuple[float, float] | None:
         lon = float(match.group("lon"))
     except (TypeError, ValueError):
         return None
+
+    if not _is_valid_lat_lon(lat, lon):
+        return None
+    return lat, lon
+
+
+def _parse_nsew(value: str) -> tuple[float, float] | None:
+    """N/S/E/W 표기 좌표(`N 35.12, E 129.31`)를 파싱."""
+    match = _NSEW_COORD_RE.search(value)
+    if not match:
+        return None
+
+    try:
+        lat = float(match.group("lat"))
+        lon = float(match.group("lon"))
+    except (TypeError, ValueError):
+        return None
+
+    lat = -abs(lat) if match.group("lat_dir").upper() == "S" else abs(lat)
+    lon = -abs(lon) if match.group("lon_dir").upper() == "W" else abs(lon)
+
+    if not _is_valid_lat_lon(lat, lon):
+        return None
     return lat, lon
 
 
 def _extract_location_from_tags(tags: dict[str, Any]) -> tuple[float, float] | None:
     """메타데이터 태그에서 ISO6709 또는 lat/lon 키-값을 추출."""
+    # 키 상관없이 ISO6709 또는 NSEW 좌표가 들어간 값 우선 탐색
     for value in tags.values():
-        if not isinstance(value, str):
+        value_str = _coerce_tag_text(value)
+        if not value_str:
             continue
 
-        if parsed := _parse_iso6709(value):
+        if parsed := _parse_coordinates_from_text(value_str):
             return parsed
 
+    # 키가 lat/lon 형태인 필드에서 개별 추출
     lat = None
     lon = None
     for key, value in tags.items():
-        if not isinstance(value, str):
+        value_str = _coerce_tag_text(value)
+        if not value_str:
             continue
+
         key_lower = str(key).lower()
         if lat is None and key_lower.startswith("lat"):
-            match = _LATITUDE_RE.search(value)
+            match = _LATITUDE_RE.search(value_str)
             if match:
                 try:
                     lat = float(match.group("lat"))
                 except ValueError:
                     lat = None
         elif lon is None and key_lower.startswith("lon"):
-            match = _LONGITUDE_RE.search(value)
+            match = _LONGITUDE_RE.search(value_str)
             if match:
                 try:
                     lon = float(match.group("lon"))
@@ -76,29 +126,9 @@ def _extract_location_from_tags(tags: dict[str, Any]) -> tuple[float, float] | N
                     lon = None
 
     if lat is None or lon is None:
-        for value in tags.values():
-            if not isinstance(value, str):
-                continue
-            if parsed := _parse_iso6709(value):
-                return parsed
-            if lat is None:
-                lat_match = _LATITUDE_RE.search(value)
-                if lat_match:
-                    try:
-                        lat = float(lat_match.group("lat"))
-                    except ValueError:
-                        lat = None
-            if lon is None:
-                lon_match = _LONGITUDE_RE.search(value)
-                if lon_match:
-                    try:
-                        lon = float(lon_match.group("lon"))
-                    except ValueError:
-                        lon = None
-        if lat is None or lon is None:
-            return None
-        return lat, lon
-
+        return None
+    if not _is_valid_lat_lon(lat, lon):
+        return None
     return lat, lon
 
 
@@ -119,6 +149,8 @@ def _extract_location_from_sidecar(video_path: Path) -> tuple[float, float] | No
 def _parse_coordinates_from_text(text: str) -> tuple[float, float] | None:
     """텍스트에서 위도/경도 추출."""
     if parsed := _parse_iso6709(text):
+        return parsed
+    if parsed := _parse_nsew(text):
         return parsed
 
     lat = None
@@ -141,6 +173,54 @@ def _parse_coordinates_from_text(text: str) -> tuple[float, float] | None:
 
     if lat is not None and lon is not None:
         return lat, lon
+    return None
+
+
+def _extract_freeform_location(tags: dict[str, Any]) -> str | None:
+    """lat/lon 외 위치 텍스트 태그에서 문자열 위치를 추출."""
+    for key, value in tags.items():
+        key_lower = str(key).lower()
+        if not any(token in key_lower for token in ("location", "gps", "address", "venue", "geo")):
+            continue
+        value_str = _coerce_tag_text(value)
+        if value_str:
+            return value_str
+    return None
+
+
+def _find_metadata_location(video_path: Path, probe_data: dict[str, Any]) -> str | None:
+    """ffprobe 출력에서 위치 문자열을 안전하게 추출."""
+    tags = probe_data.get("format", {}).get("tags", {})
+    stream_tags: dict[str, Any] = {}
+    for stream in probe_data.get("streams", []):
+        if isinstance(stream, dict) and stream.get("codec_type") == "video":
+            stream_tags = stream.get("tags", {})
+            break
+
+    if isinstance(tags, dict):
+        coordinates = _extract_location_from_tags(tags)
+        if coordinates:
+            return _format_coordinate_pair(*coordinates)
+
+    if isinstance(stream_tags, dict):
+        coordinates = _extract_location_from_tags(stream_tags)
+        if coordinates:
+            return _format_coordinate_pair(*coordinates)
+
+    if isinstance(tags, dict):
+        location_text = _extract_freeform_location(tags)
+        if location_text:
+            return location_text
+
+    if isinstance(stream_tags, dict):
+        location_text = _extract_freeform_location(stream_tags)
+        if location_text:
+            return location_text
+
+    sidecar_location = _extract_location_from_sidecar(video_path)
+    if sidecar_location:
+        return _format_coordinate_pair(*sidecar_location)
+
     return None
 
 
@@ -205,18 +285,27 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
     color_space = video_stream.get("color_space")
     color_transfer = video_stream.get("color_transfer")
     color_primaries = video_stream.get("color_primaries")
-    tags = probe_data.get("format", {}).get("tags", {})
-    stream_tags = video_stream.get("tags", {})
+    # tags와 stream_tags는 _find_metadata_location 내부에서 재사용
 
-    location = None
-    if isinstance(tags, dict):
-        location = _extract_location_from_tags(tags)
-    if location is None and isinstance(stream_tags, dict):
-        location = _extract_location_from_tags(stream_tags)
-    if location is None:
-        location = _extract_location_from_sidecar(video_path)
-    location_latitude = location[0] if location is not None else None
-    location_longitude = location[1] if location is not None else None
+    location = _find_metadata_location(video_path, probe_data)
+    location_latitude = None
+    location_longitude = None
+    if location and "," in location:
+        try:
+            lat_text, lon_text = location.split(",", 1)
+            location_latitude = float(lat_text.strip())
+            location_longitude = float(lon_text.strip())
+        except ValueError:
+            location_latitude = None
+            location_longitude = None
+
+        if (
+            location_latitude is not None
+            and location_longitude is not None
+            and not _is_valid_lat_lon(location_latitude, location_longitude)
+        ):
+            location_latitude = None
+            location_longitude = None
 
     # 오디오 스트림 존재 여부
     has_audio = any(s.get("codec_type") == "audio" for s in probe_data.get("streams", []))
@@ -236,6 +325,7 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
         color_space=color_space,
         color_transfer=color_transfer,
         color_primaries=color_primaries,
+        location=location,
         has_audio=has_audio,
     )
 

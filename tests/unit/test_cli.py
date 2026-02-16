@@ -1,6 +1,7 @@
 """CLI 인터페이스 테스트."""
 
 import argparse
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -10,12 +11,14 @@ from tubearchive.cli import (
     CATALOG_STATUS_SENTINEL,
     ClipInfo,
     TranscodeOptions,
+    _make_watermark_text,
     create_parser,
     database_session,
     main,
     validate_args,
 )
 from tubearchive.config import AppConfig, HooksConfig
+from tubearchive.models.video import VideoFile, VideoMetadata
 from tubearchive.utils import truncate_path
 
 
@@ -429,6 +432,47 @@ class TestCreateParser:
 
         assert args.lut_before_hdr is False
 
+    def test_parses_watermark_flag(self) -> None:
+        """--watermark 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--watermark"])
+
+        assert args.watermark is True
+
+    def test_parses_watermark_options(self) -> None:
+        """워터마크 옵션 값."""
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                "--watermark",
+                "--watermark-pos",
+                "top-left",
+                "--watermark-size",
+                "36",
+                "--watermark-color",
+                "yellow",
+                "--watermark-alpha",
+                "0.6",
+            ]
+        )
+
+        assert args.watermark is True
+        assert args.watermark_pos == "top-left"
+        assert args.watermark_size == 36
+        assert args.watermark_color == "yellow"
+        assert args.watermark_alpha == 0.6
+
+    def test_watermark_defaults(self) -> None:
+        """--watermark 기본값."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.watermark is False
+        assert args.watermark_pos == "bottom-right"
+        assert args.watermark_size == 48
+        assert args.watermark_color == "white"
+        assert args.watermark_alpha == 0.85
+
 
 class TestValidateArgs:
     """인자 검증 테스트."""
@@ -717,6 +761,103 @@ class TestValidateArgs:
 
         assert result.denoise is True
         assert result.denoise_level == "heavy"
+
+    def test_watermark_defaults(self, tmp_path: Path) -> None:
+        """워터마크 기본값은 False/기본값 유지."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+        )
+
+        result = validate_args(args)
+
+        assert result.watermark is False
+        assert result.watermark_pos == "bottom-right"
+        assert result.watermark_size == 48
+        assert result.watermark_color == "white"
+        assert result.watermark_alpha == 0.85
+
+    def test_watermark_options(self, tmp_path: Path) -> None:
+        """워터마크 인자 값이 ValidatedArgs에 반영."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            watermark=True,
+            watermark_pos="top-left",
+            watermark_size=36,
+            watermark_color="yellow",
+            watermark_alpha=0.6,
+        )
+
+        result = validate_args(args)
+
+        assert result.watermark is True
+        assert result.watermark_pos == "top-left"
+        assert result.watermark_size == 36
+        assert result.watermark_color == "yellow"
+        assert result.watermark_alpha == 0.6
+
+    def test_watermark_invalid_size_raises(self, tmp_path: Path) -> None:
+        """워터마크 크기 0 이하면 ValueError."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            watermark=True,
+            watermark_pos="bottom-right",
+            watermark_size=0,
+            watermark_color="white",
+            watermark_alpha=0.8,
+        )
+
+        with pytest.raises(ValueError, match="Watermark size must be > 0"):
+            validate_args(args)
+
+    def test_watermark_invalid_alpha_raises(self, tmp_path: Path) -> None:
+        """워터마크 투명도 범위 초과 시 ValueError."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            watermark=True,
+            watermark_pos="bottom-right",
+            watermark_size=24,
+            watermark_color="white",
+            watermark_alpha=1.2,
+        )
+
+        with pytest.raises(ValueError, match="Watermark alpha must be in"):
+            validate_args(args)
 
     def test_raises_for_invalid_output_parent(self) -> None:
         """출력 파일 부모 디렉토리 없으면 에러."""
@@ -1438,8 +1579,10 @@ class TestUploadSplitFiles:
         f2.touch()
 
         clips_json = (
-            '[{"name":"A.mp4","duration":3600,"start":0,"end":3600,"device":"Nikon","shot_time":"10:00"},'
-            '{"name":"B.mp4","duration":3600,"start":3600,"end":7200,"device":"GoPro","shot_time":"11:00"}]'
+            '[{"name":"A.mp4","duration":3600,"start":0,"end":3600,'
+            '"device":"Nikon","shot_time":"10:00"},'
+            '{"name":"B.mp4","duration":3600,"start":3600,"end":7200,'
+            '"device":"GoPro","shot_time":"11:00"}]'
         )
 
         _upload_split_files(
@@ -1548,7 +1691,7 @@ class TestUploadSplitFiles:
         mock_upload: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """분할 파일이 DB에 있고 디스크에 존재하면 분할 파일을 업로드한다."""
+        """분할 파일이 DB에 있는 경우 분할 파일을 업로드한다."""
         from tubearchive.cli import _upload_after_pipeline
 
         mock_conn = MagicMock()
@@ -1663,7 +1806,10 @@ class TestUploadOnly:
         _upload_split_files(
             split_files=[f1, f2],
             title="Test",
-            clips_info_json='[{"name":"A.mp4","duration":3600,"start":0,"end":3600,"device":null,"shot_time":null}]',
+            clips_info_json=(
+                '[{"name":"A.mp4","duration":3600,"start":0,"end":3600,'
+                '"device":null,"shot_time":null}]'
+            ),
             privacy="unlisted",
             merge_job_id=1,
             playlist_ids=None,
@@ -1855,6 +2001,32 @@ class TestTranscodeOptions:
         assert opts.lut_before_hdr is True
         assert opts.device_luts == device_luts
 
+    def test_watermark_default_values(self) -> None:
+        """워터마크 기본값 확인."""
+        opts = TranscodeOptions()
+        assert opts.watermark is False
+        assert opts.watermark_pos == "bottom-right"
+        assert opts.watermark_size == 48
+        assert opts.watermark_color == "white"
+        assert opts.watermark_alpha == 1.0
+
+    def test_watermark_custom_values(self) -> None:
+        """워터마크 커스텀 값 확인."""
+        opts = TranscodeOptions(
+            watermark=True,
+            watermark_pos="center",
+            watermark_size=32,
+            watermark_color="yellow",
+            watermark_alpha=0.7,
+            watermark_text="sample",
+        )
+        assert opts.watermark is True
+        assert opts.watermark_pos == "center"
+        assert opts.watermark_size == 32
+        assert opts.watermark_color == "yellow"
+        assert opts.watermark_alpha == 0.7
+        assert opts.watermark_text == "sample"
+
 
 class TestDatabaseSession:
     """database_session context manager 테스트."""
@@ -1927,6 +2099,94 @@ class TestClipInfo:
         info = ClipInfo(name="a.mp4", duration=1.0, device=None, shot_time=None)
         with pytest.raises(AttributeError):
             info.name = "b.mp4"  # type: ignore[misc]
+
+
+class TestWatermarkText:
+    """워터마크 텍스트 생성."""
+
+    def test_make_watermark_text_includes_location(self, tmp_path: Path) -> None:
+        """위치 문자열이 있으면 날짜와 합쳐서 반환."""
+        video_path = tmp_path / "a.mp4"
+        video_path.write_text("")
+        video = VideoFile(
+            path=video_path,
+            creation_time=datetime(2025, 1, 2),
+            size_bytes=10,
+        )
+        metadata = VideoMetadata(
+            width=1920,
+            height=1080,
+            duration_seconds=12.5,
+            fps=30.0,
+            codec="h264",
+            pixel_format="yuv420p",
+            is_portrait=False,
+            is_vfr=False,
+            device_model=None,
+            color_space=None,
+            color_transfer=None,
+            color_primaries=None,
+            location="Seoul Downtown",
+        )
+
+        assert _make_watermark_text(video, metadata) == "2025.01.02 | Seoul Downtown"
+
+    def test_make_watermark_text_uses_coordinates_when_no_location(self, tmp_path: Path) -> None:
+        """location이 없으면 위도/경도 문자열로 fallback."""
+        video_path = tmp_path / "a.mp4"
+        video_path.write_text("")
+        video = VideoFile(
+            path=video_path,
+            creation_time=datetime(2025, 1, 2),
+            size_bytes=10,
+        )
+        metadata = VideoMetadata(
+            width=1920,
+            height=1080,
+            duration_seconds=12.5,
+            fps=30.0,
+            codec="h264",
+            pixel_format="yuv420p",
+            is_portrait=False,
+            is_vfr=False,
+            device_model=None,
+            color_space=None,
+            color_transfer=None,
+            color_primaries=None,
+            location_latitude=37.5665,
+            location_longitude=126.9780,
+        )
+
+        assert _make_watermark_text(video, metadata) == "2025.01.02 | 37.566500, 126.978000"
+
+    def test_make_watermark_text_without_location(self, tmp_path: Path) -> None:
+        """location 정보가 없으면 날짜만 반환."""
+        video_path = tmp_path / "a.mp4"
+        video_path.write_text("")
+        video = VideoFile(
+            path=video_path,
+            creation_time=datetime(2025, 1, 2),
+            size_bytes=10,
+        )
+        metadata = VideoMetadata(
+            width=1920,
+            height=1080,
+            duration_seconds=12.5,
+            fps=30.0,
+            codec="h264",
+            pixel_format="yuv420p",
+            is_portrait=False,
+            is_vfr=False,
+            device_model=None,
+            color_space=None,
+            color_transfer=None,
+            color_primaries=None,
+            location=None,
+            location_latitude=None,
+            location_longitude=None,
+        )
+
+        assert _make_watermark_text(video, metadata) == "2025.01.02"
 
 
 class TestSaveMergeJobToDb:

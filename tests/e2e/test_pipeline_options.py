@@ -82,3 +82,36 @@ class TestParallel:
         info = probe_video(result_path)
         video_stream = next(s for s in info["streams"] if s["codec_type"] == "video")
         assert video_stream["codec_name"] == "hevc"
+
+
+class TestWatermark:
+    """워터마크 옵션 테스트."""
+
+    def test_pipeline_with_watermark(
+        self,
+        e2e_video_dir: Path,
+        e2e_output_dir: Path,
+        e2e_db: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """워터마크 옵션으로 run_pipeline 실행."""
+        create_test_video(e2e_video_dir / "clip.mov", duration=2.0)
+
+        output_file = e2e_output_dir / "watermark_output.mp4"
+        args = make_pipeline_args(
+            [e2e_video_dir],
+            output_file,
+            db_path=e2e_db,
+            monkeypatch=monkeypatch,
+            watermark=True,
+            watermark_pos="top-left",
+            watermark_size=36,
+            watermark_color="yellow",
+            watermark_alpha=0.7,
+        )
+
+        result_path = run_pipeline(args)
+
+        assert result_path == output_file
+        assert result_path.exists()
+        assert result_path.stat().st_size > 0

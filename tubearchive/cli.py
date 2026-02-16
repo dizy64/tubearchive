@@ -1681,13 +1681,17 @@ def _collect_clip_info(video_file: VideoFile, metadata: VideoMetadata | None = N
 
 def _make_watermark_text(video_file: VideoFile, metadata: VideoMetadata) -> str:
     """워터마크 텍스트 생성 (촬영 시각 + 위치 정보)."""
-    shot_time = video_file.creation_time.strftime("%Y-%m-%d %H:%M:%S")
+    shot_time = video_file.creation_time.strftime("%Y.%m.%d")
 
-    lat = getattr(metadata, "location_latitude", None)
-    lon = getattr(metadata, "location_longitude", None)
+    location = getattr(metadata, "location", None)
+    if location is None:
+        lat = getattr(metadata, "location_latitude", None)
+        lon = getattr(metadata, "location_longitude", None)
+        if lat is not None and lon is not None:
+            location = f"{lat:.6f}, {lon:.6f}"
 
-    if lat is not None and lon is not None:
-        return f"{shot_time} | {lat:.6f}, {lon:.6f}"
+    if location:
+        return f"{shot_time} | {location}"
     return shot_time
 
 
@@ -2087,6 +2091,7 @@ def run_pipeline(
         auto_lut=validated_args.auto_lut,
         lut_before_hdr=validated_args.lut_before_hdr,
         device_luts=validated_args.device_luts,
+        watermark=validated_args.watermark,
         watermark_pos=validated_args.watermark_pos,
         watermark_size=validated_args.watermark_size,
         watermark_color=validated_args.watermark_color,
@@ -3391,6 +3396,16 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
         print(f"Stabilize: enabled (strength={strength}, crop={crop})")
     else:
         print("Stabilize: disabled")
+    if validated_args.watermark:
+        print("Watermark: enabled")
+        print(
+            f"  position={validated_args.watermark_pos}, "
+            f"size={validated_args.watermark_size}, "
+            f"color={validated_args.watermark_color}, "
+            f"alpha={validated_args.watermark_alpha}"
+        )
+    else:
+        print("Watermark: disabled")
     if validated_args.thumbnail:
         print(f"Thumbnail: enabled (quality={validated_args.thumbnail_quality})")
         if validated_args.thumbnail_timestamps:
