@@ -845,11 +845,12 @@ def load_config(path: Path | None = None) -> AppConfig:
     )
 
 
-def apply_config_to_env(config: AppConfig) -> None:
+def apply_config_to_env(config: AppConfig, *, overwrite: bool = False) -> None:
     """
-    설정값을 환경변수에 주입 (미설정인 경우만).
+    설정값을 환경변수에 주입.
 
-    이미 설정된 환경변수는 보존된다 (환경변수 > config).
+    기본 동작은 기존 환경변수를 보존한다.
+    reload 모드에서 최신 config 값을 반영하려면 overwrite=True로 호출한다.
     """
     mappings: list[tuple[str, str | None]] = [
         (ENV_OUTPUT_DIR, config.general.output_dir),
@@ -956,7 +957,7 @@ def apply_config_to_env(config: AppConfig) -> None:
         mappings.append((ENV_SLACK_WEBHOOK_URL, notif.slack.webhook_url))
 
     for env_key, value in mappings:
-        if value is not None and env_key not in os.environ:
+        if value is not None and (overwrite or env_key not in os.environ):
             os.environ[env_key] = value
 
 

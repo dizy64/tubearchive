@@ -2,6 +2,10 @@
 
 import argparse
 import os
+import signal
+import threading
+import time
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,6 +15,7 @@ from tubearchive.cli import (
     CATALOG_STATUS_SENTINEL,
     ClipInfo,
     TranscodeOptions,
+    _run_watch_mode,
     create_parser,
     database_session,
     main,
@@ -750,6 +755,92 @@ class TestValidateArgs:
         assert result.watch_poll_interval == 1.0
         assert result.watch_stability_checks == 2
         assert result.watch_log is None
+
+    def test_watch_mode_reload_uses_updated_hook_config(self, tmp_path: Path) -> None:
+        """SIGHUP 시 재로딩된 config의 hook 설정을 사용."""
+        if not hasattr(signal, "SIGHUP"):
+            pytest.skip("SIGHUP is not supported on this platform.")
+
+        watch_dir = tmp_path / "watch"
+        watch_dir.mkdir()
+
+        args = create_parser().parse_args(["--watch", str(watch_dir)])
+        baseline_args = replace(validate_args(args), watch_poll_interval=0.01)
+        initial_hooks = HooksConfig(on_merge=("echo-initial",))
+        reloaded_hooks = HooksConfig(on_merge=("echo-reloaded",))
+        validated_args = replace(
+            baseline_args,
+            watch=True,
+            watch_paths=[watch_dir],
+            hooks=initial_hooks,
+        )
+
+        signal_handlers: dict[int, object] = {}
+
+        class _DummyObserver:
+            def stop(self) -> None:
+                pass
+
+            def join(self) -> None:
+                pass
+
+        captured_calls: list[HooksConfig] = []
+
+        def _register_signal(signum: int, handler: object) -> object:
+            signal_handlers[signum] = handler
+            return object()
+
+        def _capture_validate_args(
+            parsed_args: argparse.Namespace,
+            device_luts: dict[str, str] | None = None,
+            hooks: HooksConfig | None = None,
+        ) -> object:
+            # reload 시점에 validate_args로 들어오는 hook 설정을 기록
+            if hooks is not None:
+                captured_calls.append(hooks)
+            return replace(validated_args, hooks=hooks)
+
+        with (
+            patch("tubearchive.cli.signal.signal", side_effect=_register_signal),
+            patch(
+                "tubearchive.cli._setup_file_observer",
+                return_value=(_DummyObserver(), object()),
+            ),
+            patch("tubearchive.cli.load_config", return_value=AppConfig(hooks=reloaded_hooks)),
+            patch("tubearchive.cli.validate_args", side_effect=_capture_validate_args),
+        ):
+            watch_thread = threading.Thread(
+                target=_run_watch_mode,
+                args=(args, validated_args),
+                kwargs={
+                    "config_path": tmp_path / "config.toml",
+                    "hooks": initial_hooks,
+                    "verbose": False,
+                },
+            )
+            watch_thread.start()
+
+            for _ in range(100):
+                if signal.SIGINT in signal_handlers and signal.SIGHUP in signal_handlers:
+                    break
+                time.sleep(0.01)
+
+            assert signal.SIGINT in signal_handlers, "SIGINT handler not registered"
+            assert signal.SIGHUP in signal_handlers, "SIGHUP handler not registered"
+
+            signal_handlers[signal.SIGHUP](signal.SIGHUP, None)
+
+            for _ in range(100):
+                if captured_calls:
+                    break
+                time.sleep(0.01)
+
+            assert captured_calls
+            assert captured_calls[0] == reloaded_hooks
+            signal_handlers[signal.SIGINT](signal.SIGINT, None)
+            watch_thread.join(timeout=2.0)
+
+        assert not watch_thread.is_alive()
 
     def test_validates_output_parent_exists(self, tmp_path: Path) -> None:
         """출력 파일 부모 디렉토리 존재 확인."""

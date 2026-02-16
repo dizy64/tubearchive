@@ -466,6 +466,21 @@ class TestApplyConfigToEnv:
             else:
                 os.environ.pop("TUBEARCHIVE_PARALLEL", None)
 
+    def test_overwrites_existing_env_when_requested(self) -> None:
+        """reload용으로 기존 환경변수를 강제 덮어쓴다."""
+        config = AppConfig(
+            general=GeneralConfig(parallel=8),
+        )
+
+        os.environ["TUBEARCHIVE_PARALLEL"] = "2"
+
+        try:
+            apply_config_to_env(config, overwrite=True)
+
+            assert os.environ.get("TUBEARCHIVE_PARALLEL") == "8"
+        finally:
+            os.environ.pop("TUBEARCHIVE_PARALLEL", None)
+
     def test_playlist_csv_conversion(self) -> None:
         """playlist 리스트 → CSV 변환."""
         config = AppConfig(

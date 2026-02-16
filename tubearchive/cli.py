@@ -1642,8 +1642,12 @@ def _run_watch_mode(
         if config_path is None:
             return validate_args(parsed_args, hooks=hooks)
         updated_config = load_config(config_path)
-        apply_config_to_env(updated_config)
-        return validate_args(parsed_args, hooks=hooks)
+        apply_config_to_env(updated_config, overwrite=True)
+        return validate_args(
+            parsed_args,
+            device_luts=updated_config.color_grading.device_luts or None,
+            hooks=updated_config.hooks,
+        )
 
     def _signal_handler(signum: int, _frame: object | None) -> None:
         if signum == signal.SIGINT:
