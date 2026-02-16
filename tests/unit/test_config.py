@@ -11,6 +11,10 @@ from tubearchive.config import (
     ENV_STABILIZE,
     ENV_STABILIZE_CROP,
     ENV_STABILIZE_STRENGTH,
+    ENV_SUBTITLE_BURN,
+    ENV_SUBTITLE_FORMAT,
+    ENV_SUBTITLE_LANG,
+    ENV_SUBTITLE_MODEL,
     AppConfig,
     ColorGradingConfig,
     GeneralConfig,
@@ -22,6 +26,10 @@ from tubearchive.config import (
     get_default_stabilize,
     get_default_stabilize_crop,
     get_default_stabilize_strength,
+    get_default_subtitle_burn,
+    get_default_subtitle_format,
+    get_default_subtitle_lang,
+    get_default_subtitle_model,
     load_config,
 )
 
@@ -52,6 +60,10 @@ parallel = 4
 db_path = "/tmp/test.db"
 group_sequences = true
 fade_duration = 0.75
+subtitle_lang = "en"
+subtitle_model = "base"
+subtitle_format = "vtt"
+subtitle_burn = true
 
 [youtube]
 client_secrets = "/tmp/secrets.json"
@@ -67,6 +79,10 @@ upload_privacy = "private"
         assert config.general.db_path == "/tmp/test.db"
         assert config.general.group_sequences is True
         assert config.general.fade_duration == 0.75
+        assert config.general.subtitle_lang == "en"
+        assert config.general.subtitle_model == "base"
+        assert config.general.subtitle_format == "vtt"
+        assert config.general.subtitle_burn is True
         assert config.youtube.client_secrets == "/tmp/secrets.json"
         assert config.youtube.token == "/tmp/token.json"
         assert config.youtube.playlist == ["PL111", "PL222"]
@@ -293,6 +309,10 @@ class TestApplyConfigToEnv:
                 db_path="/tmp/db.sqlite",
                 group_sequences=False,
                 fade_duration=0.25,
+                subtitle_lang="en",
+                subtitle_model="base",
+                subtitle_format="vtt",
+                subtitle_burn=False,
             ),
             youtube=YouTubeConfig(
                 client_secrets="/tmp/secrets.json",
@@ -313,6 +333,10 @@ class TestApplyConfigToEnv:
             "TUBEARCHIVE_UPLOAD_CHUNK_MB",
             "TUBEARCHIVE_GROUP_SEQUENCES",
             "TUBEARCHIVE_FADE_DURATION",
+            "TUBEARCHIVE_SUBTITLE_LANG",
+            "TUBEARCHIVE_SUBTITLE_MODEL",
+            "TUBEARCHIVE_SUBTITLE_FORMAT",
+            "TUBEARCHIVE_SUBTITLE_BURN",
         ]
         saved = {}
         for key in env_keys:
@@ -330,6 +354,10 @@ class TestApplyConfigToEnv:
             assert os.environ.get("TUBEARCHIVE_UPLOAD_CHUNK_MB") == "64"
             assert os.environ.get("TUBEARCHIVE_GROUP_SEQUENCES") == "false"
             assert os.environ.get("TUBEARCHIVE_FADE_DURATION") == "0.25"
+            assert os.environ.get("TUBEARCHIVE_SUBTITLE_LANG") == "en"
+            assert os.environ.get("TUBEARCHIVE_SUBTITLE_MODEL") == "base"
+            assert os.environ.get("TUBEARCHIVE_SUBTITLE_FORMAT") == "vtt"
+            assert os.environ.get("TUBEARCHIVE_SUBTITLE_BURN") == "false"
         finally:
             # 환경변수 복원
             for key in env_keys:
@@ -415,6 +443,10 @@ class TestGenerateDefaultConfig:
             "normalize_audio",
             "group_sequences",
             "fade_duration",
+            "subtitle_lang",
+            "subtitle_model",
+            "subtitle_format",
+            "subtitle_burn",
             "client_secrets",
             "token",
             "playlist",
@@ -974,6 +1006,80 @@ class TestStabilizeConfig:
         config = ColorGradingConfig(auto_lut=True)
         with pytest.raises(AttributeError):
             config.auto_lut = False  # type: ignore[misc]
+
+
+class TestSubtitleConfig:
+    """[general] 자막 설정 테스트."""
+
+    def test_toml_parses_subtitle_general_fields(self, tmp_path: Path) -> None:
+        """subtitle 관련 필드를 파싱한다."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            """\
+[general]
+subtitle_lang = "EN"
+subtitle_model = "base"
+subtitle_format = "vtt"
+subtitle_burn = true
+"""
+        )
+        config = load_config(config_file)
+
+        assert config.general.subtitle_lang == "en"
+        assert config.general.subtitle_model == "base"
+        assert config.general.subtitle_format == "vtt"
+        assert config.general.subtitle_burn is True
+
+    def test_toml_invalid_subtitle_model_ignored(self, tmp_path: Path) -> None:
+        """유효하지 않은 subtitle_model은 무시."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            """\
+[general]
+subtitle_model = "giant"
+"""
+        )
+        config = load_config(config_file)
+        assert config.general.subtitle_model is None
+
+    def test_apply_config_to_env_subtitle_settings(self) -> None:
+        """자막 설정을 환경변수에 주입한다."""
+        config = AppConfig(
+            general=GeneralConfig(
+                subtitle_lang="EN",
+                subtitle_model="base",
+                subtitle_format="srt",
+                subtitle_burn=False,
+            )
+        )
+
+        with patch.dict(os.environ, {}, clear=True):
+            apply_config_to_env(config)
+            assert os.environ.get(ENV_SUBTITLE_LANG) == "EN"
+            assert os.environ.get(ENV_SUBTITLE_MODEL) == "base"
+            assert os.environ.get(ENV_SUBTITLE_FORMAT) == "srt"
+            assert os.environ.get(ENV_SUBTITLE_BURN) == "false"
+
+    def test_get_default_subtitle_lang_lowercase(self) -> None:
+        """자막 언어 기본값은 소문자 정규화."""
+        with patch.dict(os.environ, {ENV_SUBTITLE_LANG: "EN"}):
+            assert get_default_subtitle_lang() == "en"
+
+    def test_get_default_subtitle_model_unset(self) -> None:
+        """subtitle_model 미설정 시 None."""
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop(ENV_SUBTITLE_MODEL, None)
+            assert get_default_subtitle_model() is None
+
+    def test_get_default_subtitle_burn_default_false(self) -> None:
+        """subtitle_burn 미설정 시 False."""
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_default_subtitle_burn() is False
+
+    def test_get_default_subtitle_format_invalid(self) -> None:
+        """유효하지 않은 subtitle_format은 None."""
+        with patch.dict(os.environ, {ENV_SUBTITLE_FORMAT: "ass"}):
+            assert get_default_subtitle_format() is None
 
 
 class TestColorGradingConfig:

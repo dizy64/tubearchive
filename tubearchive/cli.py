@@ -70,6 +70,10 @@ from tubearchive.config import (
     get_default_stabilize,
     get_default_stabilize_crop,
     get_default_stabilize_strength,
+    get_default_subtitle_burn,
+    get_default_subtitle_format,
+    get_default_subtitle_lang,
+    get_default_subtitle_model,
     load_config,
 )
 from tubearchive.core.detector import detect_metadata
@@ -93,6 +97,8 @@ from tubearchive.core.splitter import probe_duration
 from tubearchive.core.subtitle import (
     SUPPORTED_SUBTITLE_FORMATS,
     SUPPORTED_SUBTITLE_MODELS,
+    SubtitleFormat,
+    SubtitleModel,
 )
 from tubearchive.core.transcoder import Transcoder
 from tubearchive.database.repository import (
@@ -107,6 +113,7 @@ from tubearchive.models.video import FadeConfig, VideoFile
 from tubearchive.utils import truncate_path
 from tubearchive.utils.progress import MultiProgressBar, ProgressInfo, format_size
 from tubearchive.utils.summary_generator import generate_single_file_description
+from tubearchive.utils.validators import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -585,18 +592,18 @@ def create_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--subtitle-model",
-        type=str,
-        default="tiny",
+        type=SubtitleModel,
+        default=None,
         choices=list(SUPPORTED_SUBTITLE_MODELS),
-        help="Whisper 모델 (tiny/base/small/medium/large, 기본: tiny)",
+        help="Whisper 모델 (tiny/base/small/medium/large, 기본: config/env/기본값)",
     )
 
     parser.add_argument(
         "--subtitle-format",
-        type=str,
-        default="srt",
+        type=SubtitleFormat,
+        default=None,
         choices=list(SUPPORTED_SUBTITLE_FORMATS),
-        help="자막 출력 포맷 (srt/vtt, 기본: srt)",
+        help="자막 출력 포맷 (srt/vtt, 기본: config/env/기본값)",
     )
 
     parser.add_argument(
@@ -1197,19 +1204,37 @@ def validate_args(
 
     # 자막 옵션
     subtitle = bool(getattr(args, "subtitle", False))
-    subtitle_model = getattr(args, "subtitle_model", "tiny")
+    subtitle_model = getattr(args, "subtitle_model", None)
+    if isinstance(subtitle_model, SubtitleModel):
+        subtitle_model = subtitle_model.value
+    if subtitle_model is None:
+        subtitle_model = get_default_subtitle_model() or "tiny"
     if subtitle_model not in SUPPORTED_SUBTITLE_MODELS:
-        raise ValueError(f"Unsupported subtitle model: {subtitle_model}")
+        raise ValidationError(
+            f"Invalid subtitle model: {subtitle_model!r} (supported: "
+            f"{[m.value for m in SUPPORTED_SUBTITLE_MODELS]})"
+        )
 
-    subtitle_format = getattr(args, "subtitle_format", "srt")
+    subtitle_format = getattr(args, "subtitle_format", None)
+    if isinstance(subtitle_format, SubtitleFormat):
+        subtitle_format = subtitle_format.value
+    if subtitle_format is None:
+        subtitle_format = get_default_subtitle_format() or "srt"
     if subtitle_format not in SUPPORTED_SUBTITLE_FORMATS:
-        raise ValueError(f"Unsupported subtitle format: {subtitle_format}")
+        raise ValidationError(
+            f"Invalid subtitle format: {subtitle_format!r} (supported: "
+            f"{[f.value for f in SUPPORTED_SUBTITLE_FORMATS]})"
+        )
 
     subtitle_lang = getattr(args, "subtitle_lang", None)
+    if subtitle_lang is None:
+        subtitle_lang = get_default_subtitle_lang()
     if subtitle_lang is not None:
         subtitle_lang = subtitle_lang.strip().lower() or None
 
     subtitle_burn = bool(getattr(args, "subtitle_burn", False))
+    if not subtitle_burn:
+        subtitle_burn = get_default_subtitle_burn()
 
     # BGM 옵션 검증 (CLI 인자 > 환경 변수 > 기본값)
     bgm_path_arg = getattr(args, "bgm", None)
@@ -2158,6 +2183,8 @@ def run_pipeline(
             output_path=generated,
         )
         subtitle_path = subtitle_result.subtitle_path
+        if subtitle_result.detected_language and validated_args.subtitle_lang is None:
+            validated_args.subtitle_lang = subtitle_result.detected_language
         if generated_subtitle_paths is not None:
             generated_subtitle_paths.append(subtitle_path)
 
@@ -2461,8 +2488,19 @@ def _apply_subtitle_burn(
     logger.info("Applying hardcoded subtitle: %s", output_path.name)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
+        from tubearchive.ffmpeg.executor import FFmpegError
+
         logger.error("Subtitle burn failed: %s", result.stderr)
-        raise RuntimeError(f"Failed to burn subtitle: {result.stderr}")
+        context = (
+            f"input_path={input_path!s}, "
+            f"subtitle_path={subtitle_path!s}, "
+            f"output_path={output_path!s}, "
+            f"stderr={result.stderr}"
+        )
+        raise FFmpegError(
+            f"Failed to burn subtitles ({context})",
+            result.stderr,
+        )
     return output_path
 
 
@@ -2808,10 +2846,17 @@ def upload_to_youtube(
                     caption_path=subtitle_path,
                     language=subtitle_language,
                 )
-                print("🧾 자막 업로드 완료")
+                logger.info(
+                    "Subtitles uploaded for video_id=%s from %s",
+                    result.video_id,
+                    subtitle_path,
+                )
             except Exception as e:
-                logger.warning(f"Failed to set captions for {result.video_id}: {e}")
-                print(f"⚠️  자막 업로드 실패: {e}")
+                logger.warning(
+                    "Failed to set captions for %s: %s",
+                    result.video_id,
+                    e,
+                )
 
         print("\n✅ YouTube 업로드 완료!")
         print(f"🎬 URL: {result.url}")
@@ -3456,6 +3501,8 @@ def _upload_split_files(
     split_job_id: int | None = None,
     publish_at: str | None = None,
     thumbnail: Path | None = None,
+    subtitle_path: Path | None = None,
+    subtitle_language: str | None = None,
 ) -> list[str]:
     """분할 파일을 순차적으로 YouTube에 업로드한다.
 
@@ -3474,6 +3521,8 @@ def _upload_split_files(
         split_job_id: SplitJob DB ID (파트별 youtube_id 저장용)
         publish_at: 예약 공개 시간 (ISO 8601 형식, 설정 시 privacy는 private로 자동 변경)
         thumbnail: 썸네일 이미지 경로
+        subtitle_path: 자막 파일 경로
+        subtitle_language: 자막 언어 코드
     """
     from tubearchive.utils.summary_generator import (
         generate_split_youtube_description,
@@ -3529,6 +3578,8 @@ def _upload_split_files(
                 playlist_ids=playlist_ids,
                 chunk_mb=chunk_mb,
                 thumbnail=thumbnail,
+                subtitle_path=subtitle_path,
+                subtitle_language=subtitle_language,
             )
             # 파트별 youtube_id를 split_job에 저장
             if video_id and split_job_id is not None:
@@ -3707,6 +3758,8 @@ def _upload_after_pipeline(
             split_job_id=split_job_id,
             publish_at=publish_at,
             thumbnail=thumbnail,
+            subtitle_path=subtitle_path,
+            subtitle_language=subtitle_language,
         )
     else:
         video_id = upload_to_youtube(
@@ -3973,6 +4026,10 @@ def main() -> None:
         logger.error(str(e))
         sys.exit(1)
     except ValueError as e:
+        _run_error_hook(config.hooks, e, output_path=output_path, validated_args=validated_args)
+        logger.error(str(e))
+        sys.exit(1)
+    except ValidationError as e:
         _run_error_hook(config.hooks, e, output_path=output_path, validated_args=validated_args)
         logger.error(str(e))
         sys.exit(1)

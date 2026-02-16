@@ -465,23 +465,25 @@ class YouTubeUploader:
             video_id: 대상 YouTube 영상 ID
             caption_path: 자막 파일 경로 (`.srt`/`.vtt` 지원)
             language: 언어 코드(미지정 시 `en`).
-            name: 캡션 트랙 이름(미지정 시 파일명 사용)
+        name: 캡션 트랙 이름(미지정 시 파일명 사용)
         """
         if not video_id:
-            raise ValueError("video_id is required")
+            raise YouTubeUploadError("video_id is required")
 
         caption_file = Path(caption_path)
         if not caption_file.exists():
-            raise FileNotFoundError(f"Caption file not found: {caption_path}")
+            raise YouTubeUploadError(f"Caption file not found: {caption_path}")
 
         extension = caption_file.suffix.lower()
         if extension not in {".srt", ".vtt"}:
-            raise ValueError(f"Unsupported caption format: {extension} (supported: .srt, .vtt)")
+            raise YouTubeUploadError(
+                f"Unsupported caption format: {extension} (supported: .srt, .vtt)"
+            )
 
         caption_name = name or caption_file.stem
         caption_language = language.lower() if language else "en"
 
-        mimetype = "text/srt" if extension == ".srt" else "text/vtt"
+        mimetype = "application/octet-stream"
         media = MediaFileUpload(
             str(caption_file),
             mimetype=mimetype,

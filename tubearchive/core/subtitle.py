@@ -4,14 +4,41 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-SUPPORTED_SUBTITLE_FORMATS = frozenset({"srt", "vtt"})
-SUPPORTED_SUBTITLE_MODELS = ("tiny", "base", "small", "medium", "large")
+from tubearchive.utils.validators import ValidationError
 
 
-class SubtitleGenerationError(RuntimeError):
+class SubtitleModel(StrEnum):
+    """자막 전사에 사용되는 Whisper 모델."""
+
+    TINY = "tiny"
+    BASE = "base"
+    SMALL = "small"
+    MEDIUM = "medium"
+    LARGE = "large"
+
+
+class SubtitleFormat(StrEnum):
+    """자막 출력 포맷."""
+
+    SRT = "srt"
+    VTT = "vtt"
+
+
+SUPPORTED_SUBTITLE_FORMATS = frozenset({SubtitleFormat.SRT, SubtitleFormat.VTT})
+SUPPORTED_SUBTITLE_MODELS = (
+    SubtitleModel.TINY,
+    SubtitleModel.BASE,
+    SubtitleModel.SMALL,
+    SubtitleModel.MEDIUM,
+    SubtitleModel.LARGE,
+)
+
+
+class SubtitleGenerationError(ValidationError):
     """Whisper 자막 생성 실패 시 발생."""
 
 
@@ -30,8 +57,8 @@ def _load_whisper_module() -> Any:
     try:
         return importlib.import_module("whisper")
     except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "openai-whisper is not installed. Install with: pip install openai-whisper"
+        raise SubtitleGenerationError(
+            "Failed to load module 'whisper'. Install with: pip install openai-whisper"
         ) from exc
 
 
@@ -103,40 +130,50 @@ def _build_vtt(segments: list[dict[str, object]]) -> str:
 def build_subtitle_filter(subtitle_path: Path) -> str:
     """`subtitles` 필터에 사용할 경로 문자열을 반환."""
 
-    escaped = str(subtitle_path).replace("\\", "\\\\").replace("'", "\\'")
+    escaped = str(subtitle_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     return f"subtitles='{escaped}'"
 
 
 def generate_subtitles(
     video_path: Path,
     *,
-    model: str = "tiny",
+    model: str | SubtitleModel = SubtitleModel.TINY,
     language: str | None = None,
-    output_format: str = "srt",
+    output_format: str | SubtitleFormat = SubtitleFormat.SRT,
     output_path: Path | None = None,
 ) -> SubtitleGenerationResult:
     """Whisper로 자막을 생성하고 저장 경로를 반환."""
 
     if not video_path.exists():
-        raise FileNotFoundError(f"Video file not found: {video_path}")
+        raise SubtitleGenerationError(f"Video file not found: {video_path!r}")
 
-    if model not in SUPPORTED_SUBTITLE_MODELS:
-        raise ValueError(f"Unsupported subtitle model: {model}")
+    model_value = model.value if isinstance(model, SubtitleModel) else model
+    if model_value not in SUPPORTED_SUBTITLE_MODELS:
+        raise SubtitleGenerationError(
+            f"Unsupported subtitle model: {model_value!r} (supported: "
+            f"{[m.value for m in SUPPORTED_SUBTITLE_MODELS]})"
+        )
 
-    if output_format not in SUPPORTED_SUBTITLE_FORMATS:
-        raise ValueError(f"Unsupported subtitle format: {output_format}")
+    output_format_value = (
+        output_format.value if isinstance(output_format, SubtitleFormat) else output_format
+    )
+    if output_format_value not in SUPPORTED_SUBTITLE_FORMATS:
+        raise SubtitleGenerationError(
+            f"Unsupported subtitle format: {output_format_value!r} (supported: "
+            f"{[f.value for f in SUPPORTED_SUBTITLE_FORMATS]})"
+        )
 
     whisper = _load_whisper_module()
     options: dict[str, object] = {"fp16": False}
     try:
-        model_instance = whisper.load_model(model)
+        model_instance = whisper.load_model(model_value)
         if language:
             options["language"] = language
         transcribe_result = model_instance.transcribe(str(video_path), **options)
     except Exception as exc:
         raise SubtitleGenerationError(f"Failed to generate subtitle: {exc}") from exc
 
-    output = output_path or video_path.with_suffix(f".{output_format}")
+    output = output_path or video_path.with_suffix(f".{output_format_value}")
     output = output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -160,22 +197,28 @@ def generate_subtitles(
     if not isinstance(detected_language, str):
         detected_language = None
 
-    content = _build_srt(segments) if output_format == "srt" else _build_vtt(segments)
+    content = (
+        _build_srt(segments)
+        if output_format_value == SubtitleFormat.SRT.value
+        else _build_vtt(segments)
+    )
 
     output.write_text(content, encoding="utf-8")
 
     return SubtitleGenerationResult(
         subtitle_path=output,
         detected_language=detected_language,
-        output_format=output_format,
+        output_format=output_format_value,
     )
 
 
 __all__ = [
     "SUPPORTED_SUBTITLE_FORMATS",
     "SUPPORTED_SUBTITLE_MODELS",
+    "SubtitleFormat",
     "SubtitleGenerationError",
     "SubtitleGenerationResult",
+    "SubtitleModel",
     "build_subtitle_filter",
     "generate_subtitles",
 ]

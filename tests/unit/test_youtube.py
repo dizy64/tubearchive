@@ -482,32 +482,41 @@ class TestYouTubeCaptions:
 
     def test_set_captions_rejects_unsupported_format(self, tmp_path: Path) -> None:
         """확장자가 지원되지 않으면 실패한다."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.youtube.uploader import (
+            YouTubeUploader,
+            YouTubeUploadError,
+        )
 
         caption_file = tmp_path / "caption.txt"
         caption_file.write_text("invalid")
         uploader = YouTubeUploader(MagicMock())
 
-        with pytest.raises(ValueError, match="Unsupported caption format"):
+        with pytest.raises(YouTubeUploadError, match="Unsupported caption format"):
             uploader.set_captions("video123", caption_file)
 
     def test_set_captions_requires_existing_file(self) -> None:
         """자막 파일이 없으면 실패한다."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.youtube.uploader import (
+            YouTubeUploader,
+            YouTubeUploadError,
+        )
 
         uploader = YouTubeUploader(MagicMock())
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(YouTubeUploadError, match="Caption file not found"):
             uploader.set_captions("video123", Path("missing.srt"))
 
     def test_set_captions_requires_video_id(self, tmp_path: Path) -> None:
         """video_id가 없으면 실패한다."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.youtube.uploader import (
+            YouTubeUploader,
+            YouTubeUploadError,
+        )
 
         caption_file = tmp_path / "caption.srt"
         caption_file.write_text("1\n00:00:00,000 --> 00:00:01,000\n안녕\n")
         uploader = YouTubeUploader(MagicMock())
 
-        with pytest.raises(ValueError):
+        with pytest.raises(YouTubeUploadError):
             uploader.set_captions("", caption_file)
 
     def test_set_captions_handles_api_error(self, tmp_path: Path) -> None:
