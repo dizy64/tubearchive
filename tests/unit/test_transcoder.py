@@ -933,13 +933,25 @@ class TestTranscoderFallback:
             # resume_mgr.calculate_resume_position이 호출됐는지 확인
             mock_transcoder.resume_mgr.calculate_resume_position.assert_called_once()
 
+    @pytest.mark.parametrize(
+        "drawtext_error",
+        [
+            "No such filter: 'drawtext'",
+            (
+                "Failed to set value 'drawtext=text=2026.03.03' "
+                "for option 'filter_complex': Filter not found"
+            ),
+            "Unable to find filter 'drawtext'",
+        ],
+    )
     def test_missing_drawtext_retries_without_watermark(
         self,
         mock_transcoder: MagicMock,
         mock_metadata: MagicMock,
         video_file: MagicMock,
+        drawtext_error: str,
     ) -> None:
-        """drawtext 미지원 환경이면 워터마크 없이 재시도한다."""
+        """drawtext 미지원 패턴이면 워터마크 없이 재시도한다."""
         from tubearchive.infra.ffmpeg.executor import FFmpegError
 
         with (
@@ -958,7 +970,7 @@ class TestTranscoderFallback:
             ) as mock_build_cmd,
         ):
             mock_transcoder.executor.run.side_effect = [
-                FFmpegError("failed", stderr="No such filter: 'drawtext'"),
+                FFmpegError("failed", stderr=drawtext_error),
                 None,
             ]
 
@@ -974,3 +986,138 @@ class TestTranscoderFallback:
         assert mock_build_cmd.call_args_list[0].args[4] == "vf_with_wm"
         assert mock_build_cmd.call_args_list[1].args[4] == "vf_no_wm"
         mock_transcoder.job_repo.mark_completed.assert_called_once()
+
+    def test_missing_drawtext_detects_exception_message_without_stderr(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """stderr가 비어도 예외 메시지로 drawtext 미지원을 감지해 재시도한다."""
+        from tubearchive.infra.ffmpeg.executor import FFmpegError
+
+        with (
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata",
+                return_value=mock_metadata,
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_combined_filter",
+                side_effect=[("vf_with_wm", "af"), ("vf_no_wm", "af")],
+            ),
+            patch.object(
+                mock_transcoder,
+                "_build_transcode_cmd",
+                side_effect=[["ffmpeg", "wm"], ["ffmpeg", "no-wm"]],
+            ) as mock_build_cmd,
+        ):
+            mock_transcoder.executor.run.side_effect = [
+                FFmpegError("Filter not found: drawtext"),
+                None,
+            ]
+
+            result_path, video_id, silence_segments = mock_transcoder.transcode_video(
+                video_file,
+                watermark_text="2026.03.03",
+            )
+
+        assert result_path == mock_transcoder.temp_dir / "transcoded_1.mp4"
+        assert video_id == 1
+        assert silence_segments is None
+        assert mock_transcoder.executor.run.call_count == 2
+        assert mock_build_cmd.call_args_list[0].args[4] == "vf_with_wm"
+        assert mock_build_cmd.call_args_list[1].args[4] == "vf_no_wm"
+        mock_transcoder.job_repo.mark_completed.assert_called_once()
+
+    def test_fallback_drawtext_retries_without_watermark(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """폴백 경로에서도 drawtext 미지원이면 워터마크 없이 재시도한다."""
+        from tubearchive.infra.ffmpeg.executor import FFmpegError
+
+        with (
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata",
+                return_value=mock_metadata,
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_combined_filter",
+                side_effect=[("vf_with_wm", "af"), ("vf_no_wm", "af")],
+            ),
+            patch.object(
+                mock_transcoder,
+                "_build_transcode_cmd",
+                side_effect=[
+                    ["ffmpeg", "wm"],
+                    ["ffmpeg", "fallback-wm"],
+                    ["ffmpeg", "fallback-no-wm"],
+                ],
+            ) as mock_build_cmd,
+        ):
+            mock_transcoder.executor.run.side_effect = [
+                FFmpegError("videotoolbox failed", stderr="VideoToolbox encoder failure"),
+                FFmpegError("fallback drawtext", stderr="Filter not found: drawtext"),
+                None,
+            ]
+
+            result_path, video_id, silence_segments = mock_transcoder.transcode_video(
+                video_file,
+                watermark_text="2026.03.03",
+            )
+
+        assert result_path == mock_transcoder.temp_dir / "transcoded_1.mp4"
+        assert video_id == 1
+        assert silence_segments is None
+        assert mock_transcoder.executor.run.call_count == 3
+        assert mock_build_cmd.call_args_list[0].args[4] == "vf_with_wm"
+        assert mock_build_cmd.call_args_list[1].args[4] == "vf_with_wm"
+        assert mock_build_cmd.call_args_list[2].args[4] == "vf_no_wm"
+        mock_transcoder.job_repo.mark_completed.assert_called_once()
+        mock_transcoder.job_repo.mark_failed.assert_not_called()
+
+    def test_fallback_drawtext_retry_failure_marks_failed(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """폴백의 워터마크 제거 재시도까지 실패하면 실패 상태로 마킹한다."""
+        from tubearchive.infra.ffmpeg.executor import FFmpegError
+
+        retry_error = FFmpegError("retry failed", stderr="fallback retry failed")
+        with (
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata",
+                return_value=mock_metadata,
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_combined_filter",
+                side_effect=[("vf_with_wm", "af"), ("vf_no_wm", "af")],
+            ),
+            patch.object(
+                mock_transcoder,
+                "_build_transcode_cmd",
+                side_effect=[
+                    ["ffmpeg", "wm"],
+                    ["ffmpeg", "fallback-wm"],
+                    ["ffmpeg", "fallback-no-wm"],
+                ],
+            ),
+        ):
+            mock_transcoder.executor.run.side_effect = [
+                FFmpegError("videotoolbox failed", stderr="VideoToolbox encoder failure"),
+                FFmpegError("fallback drawtext", stderr="Unable to find filter drawtext"),
+                retry_error,
+            ]
+
+            with pytest.raises(FFmpegError):
+                mock_transcoder.transcode_video(
+                    video_file,
+                    watermark_text="2026.03.03",
+                )
+
+        mock_transcoder.job_repo.mark_completed.assert_not_called()
+        mock_transcoder.job_repo.mark_failed.assert_called_once_with(1, str(retry_error))

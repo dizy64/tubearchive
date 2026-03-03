@@ -539,11 +539,11 @@ class Transcoder:
             )
 
         def _is_missing_drawtext_filter(error: FFmpegError) -> bool:
-            stderr = (error.stderr or "").lower()
-            if "drawtext" not in stderr:
+            error_text = f"{error}\n{error.stderr or ''}".lower()
+            if "drawtext" not in error_text:
                 return False
             indicators = ("no such filter", "filter not found", "unable to find filter")
-            return any(indicator in stderr for indicator in indicators)
+            return any(indicator in error_text for indicator in indicators)
 
         # 6. 프로파일 및 필터 준비 (항상 SDR, HDR은 필터에서 변환)
         profile = PROFILE_SDR
@@ -551,6 +551,27 @@ class Transcoder:
 
         watermark_enabled = bool(watermark_text)
         video_filter, audio_filter = _build_filters(include_watermark=watermark_enabled)
+
+        def _retry_without_watermark(
+            encoder_profile: EncodingProfile, success_message: str
+        ) -> tuple[Path, int, list[SilenceSegment] | None]:
+            nonlocal watermark_enabled, video_filter, audio_filter
+
+            watermark_enabled = False
+            video_filter, audio_filter = _build_filters(include_watermark=False)
+            cmd = self._build_transcode_cmd(
+                video_file,
+                metadata,
+                output_path,
+                encoder_profile,
+                video_filter,
+                audio_filter,
+                seek_start,
+            )
+            self._run_transcode(cmd, metadata.duration_seconds, job_id, progress_info_callback)
+            self.job_repo.mark_completed(job_id, output_path)
+            logger.info(success_message)
+            return output_path, video_id, silence_segments
 
         # 7. 실행: VideoToolbox → (실패 시) libx265 폴백
         # Note: vidstab trf 파일은 vidstabtransform 필터가 트랜스코딩 중 참조하므로
@@ -573,24 +594,11 @@ class Transcoder:
         except FFmpegError as e:
             if watermark_enabled and _is_missing_drawtext_filter(e):
                 logger.warning("drawtext filter unavailable, retrying without watermark")
-                watermark_enabled = False
-                video_filter, audio_filter = _build_filters(include_watermark=False)
                 try:
-                    cmd = self._build_transcode_cmd(
-                        video_file,
-                        metadata,
-                        output_path,
+                    return _retry_without_watermark(
                         profile,
-                        video_filter,
-                        audio_filter,
-                        seek_start,
+                        f"Transcoding completed without watermark: {output_path}",
                     )
-                    self._run_transcode(
-                        cmd, metadata.duration_seconds, job_id, progress_info_callback
-                    )
-                    self.job_repo.mark_completed(job_id, output_path)
-                    logger.info(f"Transcoding completed without watermark: {output_path}")
-                    return output_path, video_id, silence_segments
                 except FFmpegError as retry_error:
                     e = retry_error
 
@@ -623,26 +631,11 @@ class Transcoder:
                 if watermark_enabled and _is_missing_drawtext_filter(fallback_error):
                     logger.warning("drawtext filter unavailable in fallback encoder")
                     logger.warning("Retrying fallback transcoding without watermark")
-                    watermark_enabled = False
-                    video_filter, audio_filter = _build_filters(include_watermark=False)
                     try:
-                        cmd = self._build_transcode_cmd(
-                            video_file,
-                            metadata,
-                            output_path,
+                        return _retry_without_watermark(
                             fallback,
-                            video_filter,
-                            audio_filter,
-                            seek_start,
+                            f"Fallback transcoding completed without watermark: {output_path}",
                         )
-                        self._run_transcode(
-                            cmd, metadata.duration_seconds, job_id, progress_info_callback
-                        )
-                        self.job_repo.mark_completed(job_id, output_path)
-                        logger.info(
-                            f"Fallback transcoding completed without watermark: {output_path}"
-                        )
-                        return output_path, video_id, silence_segments
                     except FFmpegError as retry_error:
                         self.job_repo.mark_failed(job_id, str(retry_error))
                         raise
