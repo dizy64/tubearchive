@@ -540,7 +540,10 @@ class Transcoder:
 
         def _is_missing_drawtext_filter(error: FFmpegError) -> bool:
             stderr = (error.stderr or "").lower()
-            return "no such filter: 'drawtext'" in stderr or 'no such filter: "drawtext"' in stderr
+            if "drawtext" not in stderr:
+                return False
+            indicators = ("no such filter", "filter not found", "unable to find filter")
+            return any(indicator in stderr for indicator in indicators)
 
         # 6. 프로파일 및 필터 준비 (항상 SDR, HDR은 필터에서 변환)
         profile = PROFILE_SDR

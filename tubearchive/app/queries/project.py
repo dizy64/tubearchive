@@ -11,12 +11,12 @@ import sqlite3
 import sys
 from typing import TextIO
 
-from tubearchive.app.cli.main import database_session
 from tubearchive.app.queries.catalog import (
     format_duration,
     render_table,
 )
 from tubearchive.domain.models.job import Project
+from tubearchive.infra.db import database_session
 from tubearchive.infra.db.repository import ProjectRepository
 from tubearchive.shared import truncate_path
 from tubearchive.shared.progress import format_size

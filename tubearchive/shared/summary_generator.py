@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING
 from tubearchive.shared.progress import format_size
 
 if TYPE_CHECKING:
-    from tubearchive.app.cli.main import ClipInfo
     from tubearchive.domain.media.grouper import FileSequenceGroup
+    from tubearchive.domain.models.clip import ClipInfo
 
 
 def format_timestamp(seconds: float) -> str:

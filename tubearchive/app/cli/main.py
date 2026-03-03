@@ -28,14 +28,14 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
 from threading import Event, Lock
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from tubearchive import __version__
 
@@ -112,6 +112,7 @@ from tubearchive.domain.media.subtitle import (
     SubtitleModel,
 )
 from tubearchive.domain.media.transcoder import Transcoder
+from tubearchive.domain.models.clip import ClipInfo
 from tubearchive.domain.models.video import FadeConfig, VideoFile, VideoMetadata
 from tubearchive.infra.db.repository import (
     MergeJobRepository,
@@ -119,7 +120,7 @@ from tubearchive.infra.db.repository import (
     TranscodingJobRepository,
     VideoRepository,
 )
-from tubearchive.infra.db.schema import init_database
+from tubearchive.infra.db.schema import init_database as _init_database
 from tubearchive.infra.ffmpeg.effects import LUT_SUPPORTED_EXTENSIONS, SilenceSegment
 from tubearchive.shared import truncate_path
 from tubearchive.shared.progress import MultiProgressBar, ProgressInfo, format_size
@@ -129,6 +130,19 @@ from tubearchive.shared.validators import VIDEO_EXTENSIONS, ValidationError
 logger = logging.getLogger(__name__)
 
 SUPPORTED_THUMBNAIL_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png"})
+
+# 호환성: 기존 테스트/모킹 코드에서 `tubearchive.app.cli.main.init_database`를 패치한다.
+init_database = _init_database
+
+
+@contextmanager
+def database_session() -> Iterator[sqlite3.Connection]:
+    """DB 연결을 열고 사용 후 반드시 close 한다."""
+    conn = init_database()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 # NOTE: STATUS_ICONS, CATALOG_STATUS_SENTINEL, format_duration, normalize_status_filter 등
@@ -172,43 +186,6 @@ def safe_input(prompt: str) -> str:
 
 # NOTE: 환경변수 상수(ENV_*)와 기본값 헬퍼(get_default_*)는
 #       tubearchive.config 모듈에서 import합니다.
-
-
-@contextmanager
-def database_session() -> Generator[sqlite3.Connection]:
-    """DB 연결을 자동으로 닫아주는 context manager.
-
-    ``init_database()`` 로 연결을 열고, 블록이 끝나면 (예외 발생 포함)
-    자동으로 ``conn.close()`` 를 호출한다.
-
-    Yields:
-        sqlite3.Connection: 초기화된 DB 연결
-    """
-    conn = init_database()
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
-class ClipInfo(NamedTuple):
-    """영상 클립 메타데이터 (Summary·타임라인용).
-
-    ``_collect_clip_info`` 의 반환값으로, 기존 ``tuple[str, float, str|None, str|None]``
-    을 대체하여 필드 의미를 명확히 한다. NamedTuple이므로 기존 tuple 언패킹과
-    역호환된다.
-
-    Attributes:
-        name: 파일명 (예: ``GH010042.MP4``)
-        duration: 재생시간 (초)
-        device: 촬영 기기명 (예: ``Nikon Z6III``, ``GoPro HERO12``)
-        shot_time: 촬영 시각 문자열 (``HH:MM:SS``, None이면 알 수 없음)
-    """
-
-    name: str
-    duration: float
-    device: str | None
-    shot_time: str | None
 
 
 # YYYYMMDD 패턴 (파일명 시작 부분)
