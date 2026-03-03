@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.core.transcoder import _resolve_auto_lut
-from tubearchive.ffmpeg.effects import LUT_SUPPORTED_EXTENSIONS, create_lut_filter
+from tubearchive.domain.media.transcoder import _resolve_auto_lut
+from tubearchive.infra.ffmpeg.effects import LUT_SUPPORTED_EXTENSIONS, create_lut_filter
 
 
 class TestCreateLutFilter:

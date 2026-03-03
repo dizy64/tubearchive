@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.cli import run_pipeline
-from tubearchive.database.repository import ProjectRepository
-from tubearchive.database.schema import init_database
+from tubearchive.app.cli.main import run_pipeline
+from tubearchive.infra.db.repository import ProjectRepository
+from tubearchive.infra.db.schema import init_database
 
 from .conftest import create_test_video, make_pipeline_args
 

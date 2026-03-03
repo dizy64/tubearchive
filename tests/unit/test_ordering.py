@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.core.ordering import (
+from tubearchive.domain.media.ordering import (
     SortKey,
     _cmd_move,
     _cmd_remove,
@@ -19,7 +19,7 @@ from tubearchive.core.ordering import (
     interactive_reorder,
     sort_videos,
 )
-from tubearchive.models.video import VideoFile
+from tubearchive.domain.models.video import VideoFile
 
 
 def _make_video(

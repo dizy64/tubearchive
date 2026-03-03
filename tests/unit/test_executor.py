@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.ffmpeg.executor import (
+from tubearchive.infra.ffmpeg.executor import (
     FFmpegError,
     FFmpegExecutor,
     parse_progress_line,
@@ -74,7 +74,7 @@ class TestFFmpegExecutor:
         """트랜스코딩 명령어 빌드."""
         from pathlib import Path
 
-        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+        from tubearchive.infra.ffmpeg.profiles import PROFILE_SDR
 
         cmd = executor.build_transcode_command(
             input_path=Path("/input/video.mp4"),
@@ -98,7 +98,7 @@ class TestFFmpegExecutor:
         """filter_complex 사용 시."""
         from pathlib import Path
 
-        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+        from tubearchive.infra.ffmpeg.profiles import PROFILE_SDR
 
         cmd = executor.build_transcode_command(
             input_path=Path("/input/video.mp4"),
@@ -115,7 +115,7 @@ class TestFFmpegExecutor:
         """덮어쓰기 옵션."""
         from pathlib import Path
 
-        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+        from tubearchive.infra.ffmpeg.profiles import PROFILE_SDR
 
         cmd = executor.build_transcode_command(
             input_path=Path("/input/video.mp4"),
@@ -224,7 +224,7 @@ class TestRunAnalysis:
         executor = FFmpegExecutor()
         expected_stderr = '{"input_i": "-20.0"}'
 
-        with patch("tubearchive.ffmpeg.executor.subprocess.run") as mock_run:
+        with patch("tubearchive.infra.ffmpeg.executor.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stderr=expected_stderr,
@@ -237,7 +237,7 @@ class TestRunAnalysis:
         """실패 시 FFmpegError 발생."""
         executor = FFmpegExecutor()
 
-        with patch("tubearchive.ffmpeg.executor.subprocess.run") as mock_run:
+        with patch("tubearchive.infra.ffmpeg.executor.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=1,
                 stderr="Error: no audio stream",
@@ -318,7 +318,7 @@ class TestBuildTranscodeNoAudio:
 
     def test_no_audio_with_video_filter_generates_silent_audio(self) -> None:
         """has_audio=False + video_filter 시 anullsrc로 무음 생성."""
-        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+        from tubearchive.infra.ffmpeg.profiles import PROFILE_SDR
 
         executor = FFmpegExecutor()
         cmd = executor.build_transcode_command(
@@ -340,7 +340,7 @@ class TestBuildTranscodeNoAudio:
 
     def test_no_audio_with_filter_complex_generates_silent_audio(self) -> None:
         """has_audio=False + filter_complex 시 anullsrc로 무음 생성."""
-        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+        from tubearchive.infra.ffmpeg.profiles import PROFILE_SDR
 
         executor = FFmpegExecutor()
         cmd = executor.build_transcode_command(
@@ -362,7 +362,7 @@ class TestBuildTranscodeNoAudio:
 
     def test_has_audio_true_maps_input_audio(self) -> None:
         """has_audio=True (기본값) 시 기존 방식대로 0:a:0 매핑."""
-        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+        from tubearchive.infra.ffmpeg.profiles import PROFILE_SDR
 
         executor = FFmpegExecutor()
         cmd = executor.build_transcode_command(
@@ -379,7 +379,7 @@ class TestBuildTranscodeNoAudio:
 
     def test_default_has_audio_is_true(self) -> None:
         """has_audio 미지정 시 기본값 True (기존 동작 호환)."""
-        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+        from tubearchive.infra.ffmpeg.profiles import PROFILE_SDR
 
         executor = FFmpegExecutor()
         cmd = executor.build_transcode_command(
@@ -394,7 +394,7 @@ class TestBuildTranscodeNoAudio:
 
     def test_no_audio_no_audio_filter_applied(self) -> None:
         """has_audio=False 시 -af 오디오 필터가 적용되지 않아야 한다."""
-        from tubearchive.ffmpeg.profiles import PROFILE_SDR
+        from tubearchive.infra.ffmpeg.profiles import PROFILE_SDR
 
         executor = FFmpegExecutor()
         cmd = executor.build_transcode_command(

@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tubearchive.cli import ValidatedArgs, run_pipeline
+from tubearchive.app.cli.main import ValidatedArgs, run_pipeline
 from tubearchive.config import (
     DiscordConfig,
     MacOSNotifyConfig,
@@ -22,8 +22,8 @@ from tubearchive.config import (
     SlackConfig,
     TelegramConfig,
 )
-from tubearchive.notification.events import EventType
-from tubearchive.notification.notifier import Notifier
+from tubearchive.infra.notification.events import EventType
+from tubearchive.infra.notification.notifier import Notifier
 
 from .conftest import create_test_video
 

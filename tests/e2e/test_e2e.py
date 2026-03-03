@@ -15,8 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.cli import ValidatedArgs, run_pipeline
-from tubearchive.core.subtitle import SubtitleGenerationResult
+from tubearchive.app.cli.main import ValidatedArgs, run_pipeline
+from tubearchive.domain.media.subtitle import SubtitleGenerationResult
 
 from .conftest import create_test_video, probe_video
 
@@ -347,7 +347,7 @@ class TestMixedInputs:
 class TestSubtitlePipeline:
     """자막 생성 파이프라인 통합 테스트."""
 
-    @patch("tubearchive.core.subtitle.generate_subtitles")
+    @patch("tubearchive.domain.media.subtitle.generate_subtitles")
     def test_run_pipeline_generates_subtitles_without_burn(
         self,
         mock_generate: MagicMock,
@@ -393,8 +393,8 @@ class TestSubtitlePipeline:
         assert mock_generate.call_args.kwargs["language"] == "en"
         assert mock_generate.call_args.kwargs["model"] == "tiny"
 
-    @patch("tubearchive.cli._apply_subtitle_burn")
-    @patch("tubearchive.core.subtitle.generate_subtitles")
+    @patch("tubearchive.app.cli.main._apply_subtitle_burn")
+    @patch("tubearchive.domain.media.subtitle.generate_subtitles")
     def test_run_pipeline_burns_subtitles(
         self,
         mock_generate: MagicMock,

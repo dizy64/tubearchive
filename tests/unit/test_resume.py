@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.database.repository import TranscodingJobRepository, VideoRepository
-from tubearchive.database.resume import ResumeManager
-from tubearchive.database.schema import init_database
-from tubearchive.models.job import JobStatus
-from tubearchive.models.video import VideoFile, VideoMetadata
+from tubearchive.domain.models.job import JobStatus
+from tubearchive.domain.models.video import VideoFile, VideoMetadata
+from tubearchive.infra.db.repository import TranscodingJobRepository, VideoRepository
+from tubearchive.infra.db.resume import ResumeManager
+from tubearchive.infra.db.schema import init_database
 
 
 class TestResumeManager:

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tubearchive.core.archiver import ArchivePolicy, Archiver, ArchiveStats
+from tubearchive.domain.media.archiver import ArchivePolicy, Archiver, ArchiveStats
 
 
 @pytest.fixture

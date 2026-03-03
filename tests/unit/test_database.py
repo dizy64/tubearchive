@@ -7,15 +7,15 @@ from unittest.mock import patch
 
 import pytest
 
-from tubearchive.database.repository import (
+from tubearchive.domain.models.job import JobStatus, SplitJob
+from tubearchive.domain.models.video import VideoFile, VideoMetadata
+from tubearchive.infra.db.repository import (
     MergeJobRepository,
     SplitJobRepository,
     TranscodingJobRepository,
     VideoRepository,
 )
-from tubearchive.database.schema import get_connection, get_default_db_path, init_database
-from tubearchive.models.job import JobStatus, SplitJob
-from tubearchive.models.video import VideoFile, VideoMetadata
+from tubearchive.infra.db.schema import get_connection, get_default_db_path, init_database
 
 
 class TestSchema:

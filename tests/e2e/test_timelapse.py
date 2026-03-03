@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.cli import run_pipeline
-from tubearchive.core.timelapse import TimelapseGenerator
+from tubearchive.app.cli.main import run_pipeline
+from tubearchive.domain.media.timelapse import TimelapseGenerator
 
 from .conftest import (
     create_test_video,

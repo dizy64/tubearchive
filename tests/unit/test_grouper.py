@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from tubearchive.core.grouper import (
+from tubearchive.domain.media.grouper import (
     compute_fade_map,
     detect_sequence_key,
     group_sequences,
     reorder_with_groups,
 )
-from tubearchive.models.video import FadeConfig, VideoFile
+from tubearchive.domain.models.video import FadeConfig, VideoFile
 
 
 def _make_video(

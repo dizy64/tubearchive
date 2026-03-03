@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.core.subtitle import (
+from tubearchive.domain.media.subtitle import (
     SubtitleGenerationError,
     SubtitleGenerationResult,
     _build_timestamp,
@@ -55,7 +55,7 @@ def test_generate_subtitles_writes_srt_file(tmp_path: Path) -> None:
     fake_module = MagicMock()
     fake_module.load_model.return_value = FakeWhisper()
 
-    with patch("tubearchive.core.subtitle._load_whisper_module", return_value=fake_module):
+    with patch("tubearchive.domain.media.subtitle._load_whisper_module", return_value=fake_module):
         result = generate_subtitles(
             video,
             model="tiny",
@@ -79,7 +79,7 @@ def test_generate_subtitles_writes_vtt_file(tmp_path: Path) -> None:
     fake_module = MagicMock()
     fake_module.load_model.return_value = FakeWhisper()
 
-    with patch("tubearchive.core.subtitle._load_whisper_module", return_value=fake_module):
+    with patch("tubearchive.domain.media.subtitle._load_whisper_module", return_value=fake_module):
         result = generate_subtitles(
             video,
             model="tiny",
@@ -118,7 +118,7 @@ def test_generate_subtitles_wraps_transcription_error(tmp_path: Path) -> None:
     fake_module.load_model.return_value.transcribe.side_effect = RuntimeError("boom")
 
     with (
-        patch("tubearchive.core.subtitle._load_whisper_module", return_value=fake_module),
+        patch("tubearchive.domain.media.subtitle._load_whisper_module", return_value=fake_module),
         pytest.raises(SubtitleGenerationError),
     ):
         generate_subtitles(video)

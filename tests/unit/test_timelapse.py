@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.core.timelapse import RESOLUTION_PRESETS, TimelapseGenerator
+from tubearchive.domain.media.timelapse import RESOLUTION_PRESETS, TimelapseGenerator
 
 
 class TestTimelapseGenerator:
@@ -16,8 +16,8 @@ class TestTimelapseGenerator:
         generator = TimelapseGenerator()
         assert generator.executor is not None
 
-    @patch("tubearchive.core.timelapse.detect_metadata")
-    @patch("tubearchive.core.timelapse.FFmpegExecutor")
+    @patch("tubearchive.domain.media.timelapse.detect_metadata")
+    @patch("tubearchive.domain.media.timelapse.FFmpegExecutor")
     def test_generate_calls_ffmpeg_with_correct_args(
         self,
         mock_executor_class: MagicMock,
@@ -60,8 +60,8 @@ class TestTimelapseGenerator:
         # 오디오 제거 확인 (keep_audio=False)
         assert "-an" in cmd_args
 
-    @patch("tubearchive.core.timelapse.detect_metadata")
-    @patch("tubearchive.core.timelapse.FFmpegExecutor")
+    @patch("tubearchive.domain.media.timelapse.detect_metadata")
+    @patch("tubearchive.domain.media.timelapse.FFmpegExecutor")
     def test_generate_with_audio(
         self,
         mock_executor_class: MagicMock,
@@ -101,8 +101,8 @@ class TestTimelapseGenerator:
         codec_idx = cmd_args.index("-c:a")
         assert cmd_args[codec_idx + 1] == "aac"
 
-    @patch("tubearchive.core.timelapse.detect_metadata")
-    @patch("tubearchive.core.timelapse.FFmpegExecutor")
+    @patch("tubearchive.domain.media.timelapse.detect_metadata")
+    @patch("tubearchive.domain.media.timelapse.FFmpegExecutor")
     def test_generate_with_resolution(
         self,
         mock_executor_class: MagicMock,
@@ -176,7 +176,7 @@ class TestTimelapseGenerator:
                 speed=61,
             )
 
-    @patch("tubearchive.core.timelapse.detect_metadata")
+    @patch("tubearchive.domain.media.timelapse.detect_metadata")
     def test_warns_on_short_video(
         self,
         mock_detect_metadata: MagicMock,

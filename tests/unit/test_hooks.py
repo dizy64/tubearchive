@@ -6,8 +6,8 @@ from typing import cast
 from unittest.mock import MagicMock, patch
 
 from tubearchive.config import HooksConfig
-from tubearchive.core import hooks
-from tubearchive.core.hooks import HookContext, HookEvent, run_hooks
+from tubearchive.domain.media import hooks
+from tubearchive.domain.media.hooks import HookContext, HookEvent, run_hooks
 
 
 class TestHookContext:
@@ -48,7 +48,7 @@ class TestRunHooks:
         """훅 이벤트에 등록된 명령을 모두 실행한다."""
         context = HookContext(input_paths=(Path("/a"), Path("/b")), output_path=Path("/out.mp4"))
 
-        with patch("tubearchive.core.hooks.subprocess.run") as mock_run:
+        with patch("tubearchive.domain.media.hooks.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
 
             run_hooks(
@@ -73,14 +73,14 @@ class TestRunHooks:
 
     def test_no_commands_no_execution(self) -> None:
         """훅 정의가 없으면 외부 실행을 시도하지 않는다."""
-        with patch("tubearchive.core.hooks.subprocess.run") as mock_run:
+        with patch("tubearchive.domain.media.hooks.subprocess.run") as mock_run:
             run_hooks(HooksConfig(), "on_transcode", context=HookContext())
 
         mock_run.assert_not_called()
 
     def test_unknown_event_is_ignored(self) -> None:
         """알 수 없는 이벤트는 안전하게 무시한다."""
-        with patch("tubearchive.core.hooks.subprocess.run") as mock_run:
+        with patch("tubearchive.domain.media.hooks.subprocess.run") as mock_run:
             run_hooks(
                 HooksConfig(on_transcode=("x.sh",)),
                 cast(HookEvent, "invalid"),
@@ -91,7 +91,7 @@ class TestRunHooks:
 
     def test_timeout_is_handled(self) -> None:
         """타임아웃은 예외로 노출되지 않고 경고만 기록한다."""
-        with patch("tubearchive.core.hooks.subprocess.run") as mock_run:
+        with patch("tubearchive.domain.media.hooks.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired("cmd", 1)
 
             run_hooks(
@@ -105,7 +105,7 @@ class TestRunHooks:
 
     def test_error_does_not_stop_following_hooks(self) -> None:
         """한 훅 실패가 나머지 훅 실행을 막지 않는다."""
-        with patch("tubearchive.core.hooks.subprocess.run") as mock_run:
+        with patch("tubearchive.domain.media.hooks.subprocess.run") as mock_run:
             mock_run.side_effect = [RuntimeError("boom"), MagicMock(returncode=0)]
 
             run_hooks(

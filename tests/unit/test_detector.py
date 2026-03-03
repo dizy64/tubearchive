@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tubearchive.core.detector import detect_metadata
+from tubearchive.domain.media.detector import detect_metadata
 
 
 class TestDetector:
@@ -114,7 +114,7 @@ class TestDetector:
         video_file = tmp_path / "test.mp4"
         video_file.write_text("")
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = sample_ffprobe_output
 
             metadata = detect_metadata(video_file)
@@ -133,7 +133,7 @@ class TestDetector:
         video_file = tmp_path / "test.mov"
         video_file.write_text("")
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = portrait_ffprobe_output
 
             metadata = detect_metadata(video_file)
@@ -148,7 +148,7 @@ class TestDetector:
         video_file = tmp_path / "test.mp4"
         video_file.write_text("")
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = vfr_ffprobe_output
 
             metadata = detect_metadata(video_file)
@@ -160,7 +160,7 @@ class TestDetector:
         video_file = tmp_path / "test.mov"
         video_file.write_text("")
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = nikon_nlog_output
 
             metadata = detect_metadata(video_file)
@@ -198,7 +198,7 @@ class TestDetector:
             },
         }
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = ffprobe_output
 
             metadata = detect_metadata(video_file)
@@ -236,7 +236,7 @@ class TestDetector:
             },
         }
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = ffprobe_output
 
             metadata = detect_metadata(video_file)
@@ -278,7 +278,7 @@ class TestDetector:
             },
         }
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = ffprobe_output
 
             metadata = detect_metadata(video_file)
@@ -290,7 +290,7 @@ class TestDetector:
         video_file = tmp_path / "test.mp4"
         video_file.write_text("")
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = sample_ffprobe_output
 
             metadata = detect_metadata(video_file)
@@ -309,7 +309,7 @@ class TestDetector:
             "com.apple.quicktime.location.ISO6709": "+37.566500+126.978000/"
         }
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = sample_ffprobe_output
 
             metadata = detect_metadata(video_file)
@@ -330,7 +330,7 @@ class TestDetector:
         }
         sample_ffprobe_output["format"]["tags"] = {}
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = sample_ffprobe_output
 
             metadata = detect_metadata(video_file)
@@ -351,7 +351,7 @@ class TestDetector:
             "quicktime:location": "ignored",
         }
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = sample_ffprobe_output
 
             metadata = detect_metadata(video_file)
@@ -372,7 +372,7 @@ class TestDetector:
         sample_ffprobe_output["format"]["tags"] = {}
         sample_ffprobe_output["streams"][0]["tags"] = {}
 
-        with patch("tubearchive.core.detector._run_ffprobe") as mock_ffprobe:
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock_ffprobe:
             mock_ffprobe.return_value = sample_ffprobe_output
 
             metadata = detect_metadata(video_file)

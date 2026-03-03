@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.core.splitter import (
+from tubearchive.domain.media.splitter import (
     SplitOptions,
     VideoSplitter,
     probe_bitrate,
@@ -234,8 +234,8 @@ class TestVideoSplitterIntegration:
         """각 테스트 전 초기화."""
         self.splitter = VideoSplitter()
 
-    @patch("tubearchive.core.splitter.subprocess.run")
-    @patch("tubearchive.core.splitter.Path.exists")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.Path.exists")
     def test_split_video_duration_success(
         self, mock_exists: MagicMock, mock_run: MagicMock
     ) -> None:
@@ -259,7 +259,7 @@ class TestVideoSplitterIntegration:
             assert isinstance(result, list)
             assert all(isinstance(p, Path) for p in result)
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_split_video_ffmpeg_failure(self, mock_run: MagicMock) -> None:
         """FFmpeg 실패 시 에러."""
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="FFmpeg error")
@@ -303,7 +303,7 @@ class TestVideoSplitterIntegration:
 class TestProbeDuration:
     """probe_duration 단위 테스트."""
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_returns_duration_on_success(self, mock_run: MagicMock) -> None:
         """ffprobe 성공 시 올바른 duration을 반환한다."""
         mock_run.return_value = MagicMock(
@@ -313,21 +313,21 @@ class TestProbeDuration:
         assert result == pytest.approx(123.456)
         mock_run.assert_called_once()
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_returns_zero_on_ffprobe_failure(self, mock_run: MagicMock) -> None:
         """ffprobe 실패 시 0.0을 반환한다."""
         mock_run.side_effect = subprocess.CalledProcessError(1, "ffprobe")
         result = probe_duration(Path("/fake/video.mp4"))
         assert result == 0.0
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_returns_zero_on_invalid_json(self, mock_run: MagicMock) -> None:
         """유효하지 않은 JSON 출력 시 0.0을 반환한다."""
         mock_run.return_value = MagicMock(stdout="not json")
         result = probe_duration(Path("/fake/video.mp4"))
         assert result == 0.0
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_returns_zero_on_missing_duration(self, mock_run: MagicMock) -> None:
         """duration 필드가 없으면 0.0을 반환한다."""
         mock_run.return_value = MagicMock(
@@ -336,13 +336,13 @@ class TestProbeDuration:
         result = probe_duration(Path("/fake/video.mp4"))
         assert result == 0.0
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_returns_zero_on_non_dict_response(self, mock_run: MagicMock) -> None:
         """ffprobe 응답이 dict가 아니면 0.0을 반환한다."""
         mock_run.return_value = MagicMock(stdout=json.dumps([1, 2, 3]))
         assert probe_duration(Path("/fake/video.mp4")) == 0.0
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_returns_zero_on_null_duration(self, mock_run: MagicMock) -> None:
         """duration이 null이면 0.0을 반환한다."""
         mock_run.return_value = MagicMock(
@@ -350,7 +350,7 @@ class TestProbeDuration:
         )
         assert probe_duration(Path("/fake/video.mp4")) == 0.0
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_returns_zero_on_empty_stdout(self, mock_run: MagicMock) -> None:
         """빈 stdout이면 0.0을 반환한다."""
         mock_run.return_value = MagicMock(stdout="")
@@ -360,7 +360,7 @@ class TestProbeDuration:
 class TestProbeBitrate:
     """probe_bitrate 단위 테스트."""
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_returns_bitrate_on_success(self, mock_run: MagicMock) -> None:
         """ffprobe 성공 시 올바른 bit_rate를 반환한다."""
         mock_run.return_value = MagicMock(
@@ -369,13 +369,13 @@ class TestProbeBitrate:
         result = probe_bitrate(Path("/fake/video.mp4"))
         assert result == 50_000_000
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_returns_zero_on_failure(self, mock_run: MagicMock) -> None:
         """ffprobe 실패 시 0을 반환한다."""
         mock_run.side_effect = subprocess.CalledProcessError(1, "ffprobe")
         assert probe_bitrate(Path("/fake/video.mp4")) == 0
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_returns_zero_on_missing_bitrate(self, mock_run: MagicMock) -> None:
         """bit_rate 필드 누락 시 0을 반환한다."""
         mock_run.return_value = MagicMock(
@@ -383,7 +383,7 @@ class TestProbeBitrate:
         )
         assert probe_bitrate(Path("/fake/video.mp4")) == 0
 
-    @patch("tubearchive.core.splitter.subprocess.run")
+    @patch("tubearchive.domain.media.splitter.subprocess.run")
     def test_returns_zero_on_invalid_json(self, mock_run: MagicMock) -> None:
         """잘못된 JSON 시 0을 반환한다."""
         mock_run.return_value = MagicMock(stdout="not json")

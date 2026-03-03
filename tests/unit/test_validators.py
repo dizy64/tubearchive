@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tubearchive.utils.validators import (
+from tubearchive.shared.validators import (
     VIDEO_EXTENSIONS,
     ValidationError,
     check_disk_space,
@@ -112,7 +112,7 @@ class TestCheckDiskSpace:
         # 정상적으로 통과해야 함
         check_disk_space(tmp_path, required_bytes)
 
-    @patch("tubearchive.utils.validators.shutil.disk_usage")
+    @patch("tubearchive.shared.validators.shutil.disk_usage")
     def test_insufficient_disk_space_raises_error(
         self,
         mock_disk_usage: patch,
@@ -137,7 +137,7 @@ class TestCheckDiskSpace:
         video.write_bytes(b"x" * 1000)  # 1KB
 
         # 1KB * 1.5 = 1.5KB 필요 (기본 배수)
-        from tubearchive.utils.validators import estimate_required_space
+        from tubearchive.shared.validators import estimate_required_space
 
         required = estimate_required_space([video])
         assert required >= 1500

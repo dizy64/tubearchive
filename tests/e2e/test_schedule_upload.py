@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.cli import create_parser, parse_schedule_datetime, validate_args
-from tubearchive.youtube.uploader import UploadResult
+from tubearchive.app.cli.main import create_parser, parse_schedule_datetime, validate_args
+from tubearchive.infra.youtube.uploader import UploadResult
 
 from .conftest import create_test_video
 
@@ -107,7 +107,7 @@ class TestScheduleWithCLI:
 class TestScheduleUploadIntegration:
     """스케줄 업로드 통합 테스트 (mock YouTube)."""
 
-    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
     def test_upload_with_schedule(
         self,
         mock_upload: MagicMock,
@@ -116,7 +116,7 @@ class TestScheduleUploadIntegration:
         future_schedule: str,
     ) -> None:
         """--upload --schedule에서 업로드 예약 시각 전달을 검증."""
-        from tubearchive.cli import (
+        from tubearchive.app.cli.main import (
             _upload_after_pipeline,
             create_parser,
             run_pipeline,
@@ -168,10 +168,10 @@ class TestScheduleUploadIntegration:
         assert mock_upload.call_count == 1
         assert mock_upload.call_args.kwargs["publish_at"] == future_schedule
 
-    @patch("tubearchive.youtube.auth.get_authenticated_service")
-    @patch("tubearchive.youtube.auth.check_auth_status")
-    @patch("tubearchive.youtube.uploader.validate_upload")
-    @patch("tubearchive.youtube.uploader.YouTubeUploader")
+    @patch("tubearchive.infra.youtube.auth.get_authenticated_service")
+    @patch("tubearchive.infra.youtube.auth.check_auth_status")
+    @patch("tubearchive.infra.youtube.uploader.validate_upload")
+    @patch("tubearchive.infra.youtube.uploader.YouTubeUploader")
     def test_upload_passes_publish_at_correctly(
         self,
         mock_uploader_class: MagicMock,
@@ -182,8 +182,8 @@ class TestScheduleUploadIntegration:
         future_schedule: str,
     ) -> None:
         """업로드 시 publish_at이 올바르게 전달됨."""
-        from tubearchive.cli import upload_to_youtube
-        from tubearchive.youtube.uploader import UploadValidation
+        from tubearchive.app.cli.main import upload_to_youtube
+        from tubearchive.infra.youtube.uploader import UploadValidation
 
         # Validation mock
         mock_validate.return_value = UploadValidation(
@@ -229,7 +229,7 @@ class TestScheduleUploadIntegration:
         call_kwargs = mock_uploader.upload.call_args.kwargs
         assert call_kwargs["publish_at"] == future_schedule
 
-    @patch("tubearchive.cli.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
     def test_upload_uses_set_thumbnail_option(
         self,
         mock_upload: MagicMock,
@@ -237,7 +237,7 @@ class TestScheduleUploadIntegration:
         e2e_output_dir: Path,
     ) -> None:
         """--set-thumbnail 지정 시 업로드 요청 인자에 썸네일 경로가 전달된다."""
-        from tubearchive.cli import (
+        from tubearchive.app.cli.main import (
             _upload_after_pipeline,
             create_parser,
             run_pipeline,
@@ -282,7 +282,7 @@ class TestScheduleUploadIntegration:
         future_schedule: str,
     ) -> None:
         """--schedule만 있고 --upload 없으면 병합까지만 실행."""
-        from tubearchive.cli import create_parser, run_pipeline, validate_args
+        from tubearchive.app.cli.main import create_parser, run_pipeline, validate_args
 
         # 출력 파일명 지정
         output_file = e2e_output_dir / "merged.mp4"

@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.ffmpeg.effects import parse_silence_segments
-from tubearchive.ffmpeg.executor import FFmpegExecutor
+from tubearchive.infra.ffmpeg.effects import parse_silence_segments
+from tubearchive.infra.ffmpeg.executor import FFmpegExecutor
 
 from .conftest import get_video_duration
 
@@ -121,7 +121,7 @@ class TestSilenceDetection:
 
     def test_detect_silence_finds_segments(self, sample_video_with_silence: Path) -> None:
         """무음 구간 감지 확인."""
-        from tubearchive.ffmpeg.effects import create_silence_detect_filter
+        from tubearchive.infra.ffmpeg.effects import create_silence_detect_filter
 
         executor = FFmpegExecutor()
 
@@ -152,7 +152,7 @@ class TestSilenceDetection:
 
     def test_detect_silence_on_video_without_audio(self, sample_video_no_audio: Path) -> None:
         """오디오 트랙이 없는 영상에서는 무음 구간이 감지되지 않음."""
-        from tubearchive.ffmpeg.effects import create_silence_detect_filter
+        from tubearchive.infra.ffmpeg.effects import create_silence_detect_filter
 
         executor = FFmpegExecutor()
 
@@ -183,8 +183,8 @@ class TestSilenceRemoval:
         self, sample_video_with_silence: Path, tmp_path: Path
     ) -> None:
         """무음 제거 확인 (영상 길이 변화)."""
-        from tubearchive.core.transcoder import Transcoder
-        from tubearchive.models.video import VideoFile
+        from tubearchive.domain.media.transcoder import Transcoder
+        from tubearchive.domain.models.video import VideoFile
 
         db_path = tmp_path / "test.db"
 
@@ -226,8 +226,8 @@ class TestSilenceRemoval:
         self, sample_video_with_silence: Path, tmp_path: Path
     ) -> None:
         """커스텀 threshold 설정 확인."""
-        from tubearchive.core.transcoder import Transcoder
-        from tubearchive.models.video import VideoFile
+        from tubearchive.domain.media.transcoder import Transcoder
+        from tubearchive.domain.models.video import VideoFile
 
         db_path = tmp_path / "test.db"
 

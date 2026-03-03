@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.core.merger import Merger, create_concat_file
+from tubearchive.domain.media.merger import Merger, create_concat_file
 
 
 class TestCreateConcatFile:
@@ -98,7 +98,7 @@ class TestMerger:
 
         assert "-y" in cmd
 
-    @patch("tubearchive.core.merger.subprocess.run")
+    @patch("tubearchive.domain.media.merger.subprocess.run")
     def test_merge_videos(
         self,
         mock_run: MagicMock,
@@ -126,7 +126,7 @@ class TestMerger:
         assert "-f" in cmd
         assert "concat" in cmd
 
-    @patch("tubearchive.core.merger.subprocess.run")
+    @patch("tubearchive.domain.media.merger.subprocess.run")
     def test_merge_cleans_up_concat_file(
         self,
         mock_run: MagicMock,
@@ -146,7 +146,7 @@ class TestMerger:
         concat_files = list(merger.temp_dir.glob("concat_*.txt"))
         assert len(concat_files) == 0
 
-    @patch("tubearchive.core.merger.subprocess.run")
+    @patch("tubearchive.domain.media.merger.subprocess.run")
     def test_merge_failure_raises_error(
         self,
         mock_run: MagicMock,

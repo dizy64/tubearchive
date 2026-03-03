@@ -7,9 +7,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tubearchive.core import scanner
-from tubearchive.core.scanner import scan_videos
-from tubearchive.models.video import FadeConfig, VideoFile, VideoMetadata
+from tubearchive.domain.media import scanner
+from tubearchive.domain.media.scanner import scan_videos
+from tubearchive.domain.models.video import FadeConfig, VideoFile, VideoMetadata
 
 
 class TestScanner:
