@@ -1,6 +1,6 @@
 """진행률 표시 테스트."""
 
-from tubearchive.utils.progress import (
+from tubearchive.shared.progress import (
     MultiProgressBar,
     ProgressBar,
     ProgressInfo,

@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.cli import run_pipeline
-from tubearchive.ffmpeg.thumbnail import extract_thumbnails, prepare_thumbnail_for_youtube
+from tubearchive.app.cli.main import run_pipeline
+from tubearchive.infra.ffmpeg.thumbnail import extract_thumbnails, prepare_thumbnail_for_youtube
 
 from .conftest import (
     create_test_video,

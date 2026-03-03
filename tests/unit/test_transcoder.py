@@ -17,12 +17,14 @@ class TestTranscoderLoudnorm:
     def mock_transcoder(self, tmp_path: Path) -> Generator[MagicMock]:
         """DB/FFmpeg를 mock한 Transcoder 인스턴스."""
         with (
-            patch("tubearchive.core.transcoder.init_database"),
-            patch("tubearchive.core.transcoder.VideoRepository"),
-            patch("tubearchive.core.transcoder.TranscodingJobRepository") as mock_job_repo_cls,
-            patch("tubearchive.core.transcoder.ResumeManager") as mock_resume_cls,
+            patch("tubearchive.domain.media.transcoder.init_database"),
+            patch("tubearchive.domain.media.transcoder.VideoRepository"),
+            patch(
+                "tubearchive.domain.media.transcoder.TranscodingJobRepository"
+            ) as mock_job_repo_cls,
+            patch("tubearchive.domain.media.transcoder.ResumeManager") as mock_resume_cls,
         ):
-            from tubearchive.core.transcoder import Transcoder
+            from tubearchive.domain.media.transcoder import Transcoder
 
             t = Transcoder(db_path=tmp_path / "test.db", temp_dir=tmp_path)
             t.executor = MagicMock()
@@ -61,7 +63,7 @@ class TestTranscoderLoudnorm:
     @pytest.fixture
     def video_file(self, tmp_path: Path) -> MagicMock:
         """VideoFile mock."""
-        from tubearchive.models.video import VideoFile
+        from tubearchive.domain.models.video import VideoFile
 
         vf = MagicMock(spec=VideoFile)
         vf.path = tmp_path / "test_video.mp4"
@@ -93,7 +95,9 @@ class TestTranscoderLoudnorm:
         video_file: MagicMock,
     ) -> None:
         """normalize_audio=False이면 분석 패스를 실행하지 않는다."""
-        with patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata):
+        with patch(
+            "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+        ):
             mock_transcoder.executor.run.return_value = None
             with contextlib.suppress(Exception):
                 mock_transcoder.transcode_video(video_file, normalize_audio=False)
@@ -107,7 +111,7 @@ class TestTranscoderLoudnorm:
         video_file: MagicMock,
     ) -> None:
         """메타데이터를 전달하면 detect_metadata를 재호출하지 않는다."""
-        with patch("tubearchive.core.transcoder.detect_metadata") as mock_detect:
+        with patch("tubearchive.domain.media.transcoder.detect_metadata") as mock_detect:
             mock_transcoder.executor.run.return_value = None
             with contextlib.suppress(Exception):
                 mock_transcoder.transcode_video(video_file, metadata=mock_metadata)
@@ -122,7 +126,9 @@ class TestTranscoderLoudnorm:
         loudnorm_stderr: str,
     ) -> None:
         """normalize_audio=True이면 loudness 분석 패스를 실행한다."""
-        with patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata):
+        with patch(
+            "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+        ):
             mock_transcoder.executor.run.return_value = None
             mock_transcoder.executor.run_analysis.return_value = loudnorm_stderr
             mock_transcoder.executor.build_loudness_analysis_command.return_value = [
@@ -151,8 +157,10 @@ class TestTranscoderLoudnorm:
     ) -> None:
         """normalize_audio=True이면 분석 결과를 create_combined_filter에 전달한다."""
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-            patch("tubearchive.core.transcoder.create_combined_filter") as mock_filter,
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch("tubearchive.domain.media.transcoder.create_combined_filter") as mock_filter,
         ):
             mock_filter.return_value = ("scale=3840:2160", "afade=t=in:st=0:d=0.5")
             mock_transcoder.executor.run.return_value = None
@@ -175,12 +183,14 @@ class TestTranscoderVidstab:
     def mock_transcoder(self, tmp_path: Path) -> Generator[MagicMock]:
         """DB/FFmpeg를 mock한 Transcoder 인스턴스."""
         with (
-            patch("tubearchive.core.transcoder.init_database"),
-            patch("tubearchive.core.transcoder.VideoRepository"),
-            patch("tubearchive.core.transcoder.TranscodingJobRepository") as mock_job_repo_cls,
-            patch("tubearchive.core.transcoder.ResumeManager") as mock_resume_cls,
+            patch("tubearchive.domain.media.transcoder.init_database"),
+            patch("tubearchive.domain.media.transcoder.VideoRepository"),
+            patch(
+                "tubearchive.domain.media.transcoder.TranscodingJobRepository"
+            ) as mock_job_repo_cls,
+            patch("tubearchive.domain.media.transcoder.ResumeManager") as mock_resume_cls,
         ):
-            from tubearchive.core.transcoder import Transcoder
+            from tubearchive.domain.media.transcoder import Transcoder
 
             t = Transcoder(db_path=tmp_path / "test.db", temp_dir=tmp_path)
             t.executor = MagicMock()
@@ -219,7 +229,7 @@ class TestTranscoderVidstab:
     @pytest.fixture
     def video_file(self, tmp_path: Path) -> MagicMock:
         """VideoFile mock."""
-        from tubearchive.models.video import VideoFile
+        from tubearchive.domain.models.video import VideoFile
 
         vf = MagicMock(spec=VideoFile)
         vf.path = tmp_path / "test_video.mp4"
@@ -232,7 +242,9 @@ class TestTranscoderVidstab:
         video_file: MagicMock,
     ) -> None:
         """stabilize=False이면 vidstab 분석을 실행하지 않는다."""
-        with patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata):
+        with patch(
+            "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+        ):
             mock_transcoder.executor.run.return_value = None
             with contextlib.suppress(Exception):
                 mock_transcoder.transcode_video(video_file, stabilize=False)
@@ -247,9 +259,15 @@ class TestTranscoderVidstab:
     ) -> None:
         """stabilize=True이면 vidstab detect + transform을 실행한다."""
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-            patch("tubearchive.core.transcoder.create_vidstab_detect_filter") as mock_detect,
-            patch("tubearchive.core.transcoder.create_vidstab_transform_filter") as mock_transform,
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_vidstab_detect_filter"
+            ) as mock_detect,
+            patch(
+                "tubearchive.domain.media.transcoder.create_vidstab_transform_filter"
+            ) as mock_transform,
         ):
             mock_detect.return_value = "vidstabdetect=shakiness=5"
             mock_transform.return_value = "vidstabtransform=smoothing=10"
@@ -277,10 +295,16 @@ class TestTranscoderVidstab:
     ) -> None:
         """stabilize=True이면 transform 필터를 create_combined_filter에 전달한다."""
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-            patch("tubearchive.core.transcoder.create_vidstab_detect_filter") as mock_detect,
-            patch("tubearchive.core.transcoder.create_vidstab_transform_filter") as mock_transform,
-            patch("tubearchive.core.transcoder.create_combined_filter") as mock_combined,
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_vidstab_detect_filter"
+            ) as mock_detect,
+            patch(
+                "tubearchive.domain.media.transcoder.create_vidstab_transform_filter"
+            ) as mock_transform,
+            patch("tubearchive.domain.media.transcoder.create_combined_filter") as mock_combined,
         ):
             mock_detect.return_value = "vidstabdetect=shakiness=5"
             mock_transform.return_value = "vidstabtransform=smoothing=10:crop=keep"
@@ -307,12 +331,18 @@ class TestTranscoderVidstab:
         video_file: MagicMock,
     ) -> None:
         """fileformat 옵션 미지원 시 1회 재시도 후 안정화를 계속 진행한다."""
-        from tubearchive.ffmpeg.executor import FFmpegError
+        from tubearchive.infra.ffmpeg.executor import FFmpegError
 
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-            patch("tubearchive.core.transcoder.create_vidstab_detect_filter") as mock_detect,
-            patch("tubearchive.core.transcoder.create_vidstab_transform_filter") as mock_transform,
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_vidstab_detect_filter"
+            ) as mock_detect,
+            patch(
+                "tubearchive.domain.media.transcoder.create_vidstab_transform_filter"
+            ) as mock_transform,
         ):
             mock_detect.side_effect = [
                 "vidstabdetect=shakiness=8:accuracy=15:result=/tmp/test.trf:fileformat=ascii",
@@ -355,12 +385,16 @@ class TestTranscoderVidstab:
         video_file: MagicMock,
     ) -> None:
         """vidstab detect 실패 시 graceful degradation (스킵 + warning)."""
-        from tubearchive.ffmpeg.executor import FFmpegError
+        from tubearchive.infra.ffmpeg.executor import FFmpegError
 
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-            patch("tubearchive.core.transcoder.create_vidstab_detect_filter") as mock_detect,
-            patch("tubearchive.core.transcoder.create_combined_filter") as mock_combined,
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_vidstab_detect_filter"
+            ) as mock_detect,
+            patch("tubearchive.domain.media.transcoder.create_combined_filter") as mock_combined,
         ):
             mock_detect.return_value = "vidstabdetect=shakiness=5"
             mock_combined.return_value = ("video_filter", "audio_filter")
@@ -389,9 +423,15 @@ class TestTranscoderVidstab:
     ) -> None:
         """vidstab trf 임시 파일이 정리된다."""
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-            patch("tubearchive.core.transcoder.create_vidstab_detect_filter") as mock_detect,
-            patch("tubearchive.core.transcoder.create_vidstab_transform_filter") as mock_transform,
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_vidstab_detect_filter"
+            ) as mock_detect,
+            patch(
+                "tubearchive.domain.media.transcoder.create_vidstab_transform_filter"
+            ) as mock_transform,
         ):
             mock_detect.return_value = "vidstabdetect=shakiness=5"
             mock_transform.return_value = "vidstabtransform=smoothing=10"
@@ -424,10 +464,15 @@ class TestTranscoderVidstab:
         """각 strength별 올바른 파라미터 전달."""
         for strength in ("light", "medium", "heavy"):
             with (
-                patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-                patch("tubearchive.core.transcoder.create_vidstab_detect_filter") as mock_detect,
                 patch(
-                    "tubearchive.core.transcoder.create_vidstab_transform_filter",
+                    "tubearchive.domain.media.transcoder.detect_metadata",
+                    return_value=mock_metadata,
+                ),
+                patch(
+                    "tubearchive.domain.media.transcoder.create_vidstab_detect_filter"
+                ) as mock_detect,
+                patch(
+                    "tubearchive.domain.media.transcoder.create_vidstab_transform_filter",
                 ) as mock_transform,
             ):
                 mock_detect.return_value = "vidstabdetect"
@@ -444,7 +489,7 @@ class TestTranscoderVidstab:
                     )
 
                 # StabilizeStrength enum으로 변환되어 전달되는지 확인
-                from tubearchive.ffmpeg.effects import StabilizeStrength
+                from tubearchive.infra.ffmpeg.effects import StabilizeStrength
 
                 mock_detect.assert_called_once()
                 call_kwargs = mock_detect.call_args.kwargs
@@ -458,12 +503,14 @@ class TestTranscoderSilenceAnalysis:
     def mock_transcoder(self, tmp_path: Path) -> Generator[MagicMock]:
         """DB/FFmpeg를 mock한 Transcoder 인스턴스."""
         with (
-            patch("tubearchive.core.transcoder.init_database"),
-            patch("tubearchive.core.transcoder.VideoRepository"),
-            patch("tubearchive.core.transcoder.TranscodingJobRepository") as mock_job_repo_cls,
-            patch("tubearchive.core.transcoder.ResumeManager") as mock_resume_cls,
+            patch("tubearchive.domain.media.transcoder.init_database"),
+            patch("tubearchive.domain.media.transcoder.VideoRepository"),
+            patch(
+                "tubearchive.domain.media.transcoder.TranscodingJobRepository"
+            ) as mock_job_repo_cls,
+            patch("tubearchive.domain.media.transcoder.ResumeManager") as mock_resume_cls,
         ):
-            from tubearchive.core.transcoder import Transcoder
+            from tubearchive.domain.media.transcoder import Transcoder
 
             t = Transcoder(db_path=tmp_path / "test.db", temp_dir=tmp_path)
             t.executor = MagicMock()
@@ -512,13 +559,18 @@ class TestTranscoderSilenceAnalysis:
     ) -> None:
         """trim_silence=True → 무음 분석 실행."""
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
             patch(
-                "tubearchive.ffmpeg.effects.create_silence_detect_filter",
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_combined_filter",
+                return_value=("vf", "af"),
+            ),
+            patch(
+                "tubearchive.infra.ffmpeg.effects.create_silence_detect_filter",
                 return_value="silencedetect",
             ),
-            patch("tubearchive.ffmpeg.effects.parse_silence_segments", return_value=[]),
+            patch("tubearchive.infra.ffmpeg.effects.parse_silence_segments", return_value=[]),
         ):
             mock_transcoder.executor.run.return_value = None
             mock_transcoder.executor.run_analysis.return_value = ""
@@ -539,8 +591,13 @@ class TestTranscoderSilenceAnalysis:
         mock_metadata.has_audio = False
 
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_combined_filter",
+                return_value=("vf", "af"),
+            ),
         ):
             mock_transcoder.executor.run.return_value = None
 
@@ -557,13 +614,18 @@ class TestTranscoderSilenceAnalysis:
         video_file: MagicMock,
     ) -> None:
         """무음 분석 실패 → 경고 후 트랜스코딩 계속."""
-        from tubearchive.ffmpeg.executor import FFmpegError
+        from tubearchive.infra.ffmpeg.executor import FFmpegError
 
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
             patch(
-                "tubearchive.ffmpeg.effects.create_silence_detect_filter",
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_combined_filter",
+                return_value=("vf", "af"),
+            ),
+            patch(
+                "tubearchive.infra.ffmpeg.effects.create_silence_detect_filter",
                 return_value="silencedetect",
             ),
         ):
@@ -584,12 +646,14 @@ class TestTranscoderNoAudioPaths:
     @pytest.fixture
     def mock_transcoder(self, tmp_path: Path) -> Generator[MagicMock]:
         with (
-            patch("tubearchive.core.transcoder.init_database"),
-            patch("tubearchive.core.transcoder.VideoRepository"),
-            patch("tubearchive.core.transcoder.TranscodingJobRepository") as mock_job_repo_cls,
-            patch("tubearchive.core.transcoder.ResumeManager") as mock_resume_cls,
+            patch("tubearchive.domain.media.transcoder.init_database"),
+            patch("tubearchive.domain.media.transcoder.VideoRepository"),
+            patch(
+                "tubearchive.domain.media.transcoder.TranscodingJobRepository"
+            ) as mock_job_repo_cls,
+            patch("tubearchive.domain.media.transcoder.ResumeManager") as mock_resume_cls,
         ):
-            from tubearchive.core.transcoder import Transcoder
+            from tubearchive.domain.media.transcoder import Transcoder
 
             t = Transcoder(db_path=tmp_path / "test.db", temp_dir=tmp_path)
             t.executor = MagicMock()
@@ -638,8 +702,13 @@ class TestTranscoderNoAudioPaths:
     ) -> None:
         """has_audio=False + normalize_audio=True → loudnorm 분석 스킵."""
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_combined_filter",
+                return_value=("vf", "af"),
+            ),
         ):
             mock_transcoder.executor.run.return_value = None
 
@@ -655,7 +724,7 @@ class TestTranscoderNoAudioPaths:
         video_file: MagicMock,
     ) -> None:
         """loudnorm 분석 실패 → 정규화 없이 진행."""
-        from tubearchive.ffmpeg.executor import FFmpegError
+        from tubearchive.infra.ffmpeg.executor import FFmpegError
 
         meta = MagicMock()
         meta.width = 3840
@@ -669,10 +738,13 @@ class TestTranscoderNoAudioPaths:
         meta.has_audio = True
 
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=meta),
-            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
+            patch("tubearchive.domain.media.transcoder.detect_metadata", return_value=meta),
             patch(
-                "tubearchive.core.transcoder.create_loudnorm_analysis_filter",
+                "tubearchive.domain.media.transcoder.create_combined_filter",
+                return_value=("vf", "af"),
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_loudnorm_analysis_filter",
                 return_value="loudnorm",
             ),
         ):
@@ -692,7 +764,7 @@ class TestTranscoderLutResolution:
 
     def test_lut_path_priority(self, tmp_path: Path) -> None:
         """lut_path + auto_lut=True → lut_path 우선."""
-        from tubearchive.core.transcoder import _resolve_auto_lut
+        from tubearchive.domain.media.transcoder import _resolve_auto_lut
 
         lut_file = tmp_path / "manual.cube"
         lut_file.touch()
@@ -707,7 +779,7 @@ class TestTranscoderLutResolution:
 
     def test_auto_lut_from_device(self, tmp_path: Path) -> None:
         """auto_lut=True + device_luts → 기기 매칭."""
-        from tubearchive.core.transcoder import _resolve_auto_lut
+        from tubearchive.domain.media.transcoder import _resolve_auto_lut
 
         lut_file = tmp_path / "nikon.cube"
         lut_file.touch()
@@ -717,14 +789,14 @@ class TestTranscoderLutResolution:
 
     def test_auto_lut_no_match(self) -> None:
         """매칭 안되면 None."""
-        from tubearchive.core.transcoder import _resolve_auto_lut
+        from tubearchive.domain.media.transcoder import _resolve_auto_lut
 
         result = _resolve_auto_lut("Canon R5", {"nikon": "/nonexistent.cube"})
         assert result is None
 
     def test_auto_lut_empty_model(self) -> None:
         """빈 device_model이면 None."""
-        from tubearchive.core.transcoder import _resolve_auto_lut
+        from tubearchive.domain.media.transcoder import _resolve_auto_lut
 
         result = _resolve_auto_lut("", {"nikon": "/some.cube"})
         assert result is None
@@ -736,12 +808,14 @@ class TestTranscoderFallback:
     @pytest.fixture
     def mock_transcoder(self, tmp_path: Path) -> Generator[MagicMock]:
         with (
-            patch("tubearchive.core.transcoder.init_database"),
-            patch("tubearchive.core.transcoder.VideoRepository"),
-            patch("tubearchive.core.transcoder.TranscodingJobRepository") as mock_job_repo_cls,
-            patch("tubearchive.core.transcoder.ResumeManager") as mock_resume_cls,
+            patch("tubearchive.domain.media.transcoder.init_database"),
+            patch("tubearchive.domain.media.transcoder.VideoRepository"),
+            patch(
+                "tubearchive.domain.media.transcoder.TranscodingJobRepository"
+            ) as mock_job_repo_cls,
+            patch("tubearchive.domain.media.transcoder.ResumeManager") as mock_resume_cls,
         ):
-            from tubearchive.core.transcoder import Transcoder
+            from tubearchive.domain.media.transcoder import Transcoder
 
             t = Transcoder(db_path=tmp_path / "test.db", temp_dir=tmp_path)
             t.executor = MagicMock()
@@ -790,12 +864,12 @@ class TestTranscoderFallback:
     ) -> None:
         """이미 처리된 영상은 즉시 반환."""
         with (
-            patch("tubearchive.core.transcoder.init_database"),
-            patch("tubearchive.core.transcoder.VideoRepository"),
-            patch("tubearchive.core.transcoder.TranscodingJobRepository"),
-            patch("tubearchive.core.transcoder.ResumeManager") as mock_resume_cls,
+            patch("tubearchive.domain.media.transcoder.init_database"),
+            patch("tubearchive.domain.media.transcoder.VideoRepository"),
+            patch("tubearchive.domain.media.transcoder.TranscodingJobRepository"),
+            patch("tubearchive.domain.media.transcoder.ResumeManager") as mock_resume_cls,
         ):
-            from tubearchive.core.transcoder import Transcoder
+            from tubearchive.domain.media.transcoder import Transcoder
 
             t = Transcoder(db_path=tmp_path / "test.db", temp_dir=tmp_path)
             t.executor = MagicMock()
@@ -807,7 +881,7 @@ class TestTranscoderFallback:
             existing_path = tmp_path / "existing.mp4"
             existing_path.touch()
 
-            from tubearchive.models.job import JobStatus
+            from tubearchive.domain.models.job import JobStatus
 
             mock_job = MagicMock()
             mock_job.status = JobStatus.COMPLETED
@@ -816,7 +890,9 @@ class TestTranscoderFallback:
 
             t.video_repo.get_by_path.return_value = {"id": 1}
 
-            with patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata):
+            with patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ):
                 result_path, video_id, silence = t.transcode_video(video_file)
 
             assert result_path == existing_path
@@ -832,7 +908,7 @@ class TestTranscoderFallback:
         video_file: MagicMock,
     ) -> None:
         """PROCESSING + progress>0 → seek_start 계산."""
-        from tubearchive.models.job import JobStatus
+        from tubearchive.domain.models.job import JobStatus
 
         mock_job = MagicMock()
         mock_job.status = JobStatus.PROCESSING
@@ -840,8 +916,13 @@ class TestTranscoderFallback:
         mock_transcoder.job_repo.get_by_id.return_value = mock_job
 
         with (
-            patch("tubearchive.core.transcoder.detect_metadata", return_value=mock_metadata),
-            patch("tubearchive.core.transcoder.create_combined_filter", return_value=("vf", "af")),
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_combined_filter",
+                return_value=("vf", "af"),
+            ),
         ):
             mock_transcoder.executor.run.return_value = None
             mock_transcoder.resume_mgr.calculate_resume_position.return_value = 30.0
@@ -851,3 +932,45 @@ class TestTranscoderFallback:
 
             # resume_mgr.calculate_resume_position이 호출됐는지 확인
             mock_transcoder.resume_mgr.calculate_resume_position.assert_called_once()
+
+    def test_missing_drawtext_retries_without_watermark(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+    ) -> None:
+        """drawtext 미지원 환경이면 워터마크 없이 재시도한다."""
+        from tubearchive.infra.ffmpeg.executor import FFmpegError
+
+        with (
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata",
+                return_value=mock_metadata,
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.create_combined_filter",
+                side_effect=[("vf_with_wm", "af"), ("vf_no_wm", "af")],
+            ),
+            patch.object(
+                mock_transcoder,
+                "_build_transcode_cmd",
+                side_effect=[["ffmpeg", "wm"], ["ffmpeg", "no-wm"]],
+            ) as mock_build_cmd,
+        ):
+            mock_transcoder.executor.run.side_effect = [
+                FFmpegError("failed", stderr="No such filter: 'drawtext'"),
+                None,
+            ]
+
+            result_path, video_id, silence_segments = mock_transcoder.transcode_video(
+                video_file,
+                watermark_text="2026.03.03",
+            )
+
+        assert result_path == mock_transcoder.temp_dir / "transcoded_1.mp4"
+        assert video_id == 1
+        assert silence_segments is None
+        assert mock_transcoder.executor.run.call_count == 2
+        assert mock_build_cmd.call_args_list[0].args[4] == "vf_with_wm"
+        assert mock_build_cmd.call_args_list[1].args[4] == "vf_no_wm"
+        mock_transcoder.job_repo.mark_completed.assert_called_once()

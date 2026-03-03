@@ -15,7 +15,7 @@ dependencies = [
 readme = "README.md"
 
 [project.scripts]
-tubearchive = "tubearchive.cli:main"
+tubearchive = "tubearchive.app.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]

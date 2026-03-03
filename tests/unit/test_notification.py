@@ -20,7 +20,7 @@ from tubearchive.config import (
     TelegramConfig,
     load_config,
 )
-from tubearchive.notification.events import (
+from tubearchive.infra.notification.events import (
     EventType,
     NotificationEvent,
     error_event,
@@ -28,8 +28,8 @@ from tubearchive.notification.events import (
     transcode_complete_event,
     upload_complete_event,
 )
-from tubearchive.notification.notifier import Notifier
-from tubearchive.notification.providers import (
+from tubearchive.infra.notification.notifier import Notifier
+from tubearchive.infra.notification.providers import (
     DiscordProvider,
     MacOSProvider,
     SlackProvider,
@@ -152,7 +152,7 @@ class TestEventFactories:
 
     def test_error_event_truncates_long_message(self) -> None:
         """500자 초과 메시지는 잘라내야 함 (민감 정보 유출 방지)."""
-        from tubearchive.notification.events import ERROR_MESSAGE_MAX_LENGTH
+        from tubearchive.infra.notification.events import ERROR_MESSAGE_MAX_LENGTH
 
         long_msg = "x" * (ERROR_MESSAGE_MAX_LENGTH + 100)
         event = error_event(error_message=long_msg)
@@ -189,26 +189,26 @@ class TestMacOSProvider:
             message="테스트 메시지",
         )
 
-    @patch("tubearchive.notification.providers.subprocess.run")
+    @patch("tubearchive.infra.notification.providers.subprocess.run")
     def test_send_success(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         provider = MacOSProvider(sound=True)
         assert provider.send(self._make_event()) is True
         mock_run.assert_called_once()
 
-    @patch("tubearchive.notification.providers.subprocess.run")
+    @patch("tubearchive.infra.notification.providers.subprocess.run")
     def test_send_failure_nonzero_exit(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=1, stderr="error msg")
         provider = MacOSProvider()
         assert provider.send(self._make_event()) is False
 
-    @patch("tubearchive.notification.providers.subprocess.run")
+    @patch("tubearchive.infra.notification.providers.subprocess.run")
     def test_send_osascript_not_found(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = FileNotFoundError
         provider = MacOSProvider()
         assert provider.send(self._make_event()) is False
 
-    @patch("tubearchive.notification.providers.subprocess.run")
+    @patch("tubearchive.infra.notification.providers.subprocess.run")
     def test_send_timeout(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="osascript", timeout=5)
         provider = MacOSProvider()
@@ -283,7 +283,7 @@ class TestTelegramProvider:
         with pytest.raises(ValueError, match="chat_id"):
             TelegramProvider(bot_token="tok", chat_id="")
 
-    @patch("tubearchive.notification.providers._post_json", return_value=True)
+    @patch("tubearchive.infra.notification.providers._post_json", return_value=True)
     def test_send_success(self, mock_post: MagicMock) -> None:
         provider = TelegramProvider(bot_token="tok123", chat_id="456")
         event = NotificationEvent(event_type=EventType.MERGE_COMPLETE, title="t", message="m")
@@ -316,18 +316,18 @@ class TestDiscordProvider:
         """HTTP URL은 경고를 남기되 초기화는 성공해야 함."""
         import logging
 
-        with caplog.at_level(logging.WARNING, logger="tubearchive.notification.providers"):
+        with caplog.at_level(logging.WARNING, logger="tubearchive.infra.notification.providers"):
             provider = DiscordProvider(webhook_url="http://insecure.com/hook")
         assert provider.name == "discord"
         assert "HTTPS" in caplog.text
 
-    @patch("tubearchive.notification.providers._post_json", return_value=True)
+    @patch("tubearchive.infra.notification.providers._post_json", return_value=True)
     def test_send_success(self, mock_post: MagicMock) -> None:
         provider = DiscordProvider(webhook_url="https://discord.com/hook")
         event = NotificationEvent(event_type=EventType.MERGE_COMPLETE, title="t", message="m")
         assert provider.send(event) is True
 
-    @patch("tubearchive.notification.providers._post_json", return_value=True)
+    @patch("tubearchive.infra.notification.providers._post_json", return_value=True)
     def test_send_uses_embed_format(self, mock_post: MagicMock) -> None:
         """Discord는 Embed 포맷으로 전송해야 함."""
         provider = DiscordProvider(webhook_url="https://discord.com/hook")
@@ -358,13 +358,13 @@ class TestSlackProvider:
         with pytest.raises(ValueError, match="스킴"):
             SlackProvider(webhook_url="file:///etc/passwd")
 
-    @patch("tubearchive.notification.providers._post_json", return_value=True)
+    @patch("tubearchive.infra.notification.providers._post_json", return_value=True)
     def test_send_success(self, mock_post: MagicMock) -> None:
         provider = SlackProvider(webhook_url="https://hooks.slack.com/x")
         event = NotificationEvent(event_type=EventType.MERGE_COMPLETE, title="t", message="m")
         assert provider.send(event) is True
 
-    @patch("tubearchive.notification.providers._post_json", return_value=True)
+    @patch("tubearchive.infra.notification.providers._post_json", return_value=True)
     def test_send_uses_block_kit_format(self, mock_post: MagicMock) -> None:
         """Slack은 Block Kit 포맷으로 전송해야 함."""
         provider = SlackProvider(webhook_url="https://hooks.slack.com/x")
@@ -390,7 +390,7 @@ class TestSlackProvider:
 
 
 class TestPostJson:
-    @patch("tubearchive.notification.providers.urllib.request.urlopen")
+    @patch("tubearchive.infra.notification.providers.urllib.request.urlopen")
     def test_success_200(self, mock_urlopen: MagicMock) -> None:
         mock_resp = MagicMock()
         mock_resp.status = 200
@@ -400,7 +400,7 @@ class TestPostJson:
 
         assert _post_json("https://api.example.com", {"k": "v"}, provider_name="test") is True
 
-    @patch("tubearchive.notification.providers.urllib.request.urlopen")
+    @patch("tubearchive.infra.notification.providers.urllib.request.urlopen")
     def test_success_204(self, mock_urlopen: MagicMock) -> None:
         mock_resp = MagicMock()
         mock_resp.status = 204
@@ -410,7 +410,7 @@ class TestPostJson:
 
         assert _post_json("https://api.example.com", {"k": "v"}, provider_name="test") is True
 
-    @patch("tubearchive.notification.providers.urllib.request.urlopen")
+    @patch("tubearchive.infra.notification.providers.urllib.request.urlopen")
     def test_http_error_4xx(self, mock_urlopen: MagicMock) -> None:
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://api.example.com",
@@ -421,7 +421,7 @@ class TestPostJson:
         )
         assert _post_json("https://api.example.com", {}, provider_name="test") is False
 
-    @patch("tubearchive.notification.providers.urllib.request.urlopen")
+    @patch("tubearchive.infra.notification.providers.urllib.request.urlopen")
     def test_http_error_5xx(self, mock_urlopen: MagicMock) -> None:
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="https://api.example.com",
@@ -432,12 +432,12 @@ class TestPostJson:
         )
         assert _post_json("https://api.example.com", {}, provider_name="test") is False
 
-    @patch("tubearchive.notification.providers.urllib.request.urlopen")
+    @patch("tubearchive.infra.notification.providers.urllib.request.urlopen")
     def test_url_error_network(self, mock_urlopen: MagicMock) -> None:
         mock_urlopen.side_effect = urllib.error.URLError("Network unreachable")
         assert _post_json("https://api.example.com", {}, provider_name="test") is False
 
-    @patch("tubearchive.notification.providers.urllib.request.urlopen")
+    @patch("tubearchive.infra.notification.providers.urllib.request.urlopen")
     def test_generic_exception(self, mock_urlopen: MagicMock) -> None:
         mock_urlopen.side_effect = RuntimeError("unexpected")
         assert _post_json("https://api.example.com", {}, provider_name="test") is False
@@ -480,7 +480,7 @@ class TestNotifier:
         assert notifier.has_providers is True
         assert notifier.provider_count == 1
 
-    @patch("tubearchive.notification.providers.subprocess.run")
+    @patch("tubearchive.infra.notification.providers.subprocess.run")
     def test_dispatch_to_provider(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         config = _make_config(macos=MacOSNotifyConfig(enabled=True))
@@ -501,7 +501,7 @@ class TestNotifier:
             notifier.notify(event)
             mock_send.assert_not_called()
 
-    @patch("tubearchive.notification.providers.subprocess.run")
+    @patch("tubearchive.infra.notification.providers.subprocess.run")
     def test_provider_failure_continues(self, mock_run: MagicMock) -> None:
         """Provider가 False를 반환해도 예외 없이 계속 진행."""
         mock_run.return_value = MagicMock(returncode=1, stderr="fail")
@@ -511,7 +511,7 @@ class TestNotifier:
         # 예외 없이 완료
         notifier.notify(event)
 
-    @patch("tubearchive.notification.providers.subprocess.run")
+    @patch("tubearchive.infra.notification.providers.subprocess.run")
     def test_test_notification(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         config = _make_config(macos=MacOSNotifyConfig(enabled=True))
@@ -735,21 +735,21 @@ chat_id = "valid_id"
 
 class TestNotifyCLI:
     def test_notify_flag_default_false(self) -> None:
-        from tubearchive.cli import create_parser
+        from tubearchive.app.cli.main import create_parser
 
         parser = create_parser()
         args = parser.parse_args(["/tmp"])
         assert args.notify is False
 
     def test_notify_flag_set(self) -> None:
-        from tubearchive.cli import create_parser
+        from tubearchive.app.cli.main import create_parser
 
         parser = create_parser()
         args = parser.parse_args(["--notify", "/tmp"])
         assert args.notify is True
 
     def test_notify_test_flag(self) -> None:
-        from tubearchive.cli import create_parser
+        from tubearchive.app.cli.main import create_parser
 
         parser = create_parser()
         args = parser.parse_args(["--notify-test"])

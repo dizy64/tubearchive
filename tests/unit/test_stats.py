@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.commands.stats import (
+from tubearchive.app.queries.stats import (
     BAR_CHAR,
     ArchiveStats,
     DeviceStat,
@@ -20,13 +20,13 @@ from tubearchive.commands.stats import (
     render_bar_chart,
     render_stats,
 )
-from tubearchive.database.repository import (
+from tubearchive.infra.db.repository import (
     ArchiveHistoryRepository,
     MergeJobRepository,
     TranscodingJobRepository,
     VideoRepository,
 )
-from tubearchive.database.schema import init_database
+from tubearchive.infra.db.schema import init_database
 
 
 @pytest.fixture

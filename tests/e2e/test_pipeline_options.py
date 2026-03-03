@@ -14,8 +14,8 @@ from unittest.mock import patch
 
 import pytest
 
-from tubearchive.cli import _cmd_dry_run, main, run_pipeline
-from tubearchive.core import scanner
+from tubearchive.app.cli.main import _cmd_dry_run, main, run_pipeline
+from tubearchive.domain.media import scanner
 
 from .conftest import (
     create_test_video,
@@ -170,7 +170,7 @@ class TestWatchMode:
         watch_dir.mkdir()
 
         with (
-            patch("tubearchive.cli._run_watch_mode") as mock_run_watch_mode,
+            patch("tubearchive.app.cli.main._run_watch_mode") as mock_run_watch_mode,
             patch("sys.argv", ["tubearchive", "--watch", str(watch_dir)]),
         ):
             main()

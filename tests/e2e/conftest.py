@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from tubearchive.cli import ValidatedArgs
-from tubearchive.database.schema import init_database
+from tubearchive.app.cli.main import ValidatedArgs
+from tubearchive.infra.db.schema import init_database
 
 # ---------- 영상/오디오 생성 헬퍼 ----------
 

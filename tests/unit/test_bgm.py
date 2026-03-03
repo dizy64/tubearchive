@@ -3,7 +3,7 @@
 import pytest
 
 from tubearchive.config import _parse_bgm
-from tubearchive.ffmpeg.effects import create_bgm_filter
+from tubearchive.infra.ffmpeg.effects import create_bgm_filter
 
 
 class TestBGMConfig:

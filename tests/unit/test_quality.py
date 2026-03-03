@@ -3,13 +3,13 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from tubearchive.core.quality import (
+from tubearchive.domain.media.quality import (
     generate_quality_reports,
     parse_psnr_output,
     parse_ssim_output,
     parse_vmaf_output,
 )
-from tubearchive.models.video import VideoMetadata
+from tubearchive.domain.models.video import VideoMetadata
 
 
 class TestMetricParser:
@@ -104,10 +104,12 @@ class TestGenerateQualityReports:
         output.write_bytes(b"dummy")
 
         with (
-            patch("tubearchive.core.quality.detect_metadata", return_value=self._metadata()),
-            patch("tubearchive.core.quality.is_filter_supported", return_value=True),
             patch(
-                "tubearchive.core.quality._run_metric_analysis",
+                "tubearchive.domain.media.quality.detect_metadata", return_value=self._metadata()
+            ),
+            patch("tubearchive.domain.media.quality.is_filter_supported", return_value=True),
+            patch(
+                "tubearchive.domain.media.quality._run_metric_analysis",
                 side_effect=[0.987, None, None],
             ),
         ):
@@ -128,10 +130,15 @@ class TestGenerateQualityReports:
         output.write_bytes(b"dummy")
 
         with (
-            patch("tubearchive.core.quality.detect_metadata", return_value=self._metadata()),
-            patch("tubearchive.core.quality.is_filter_supported", side_effect=[True, True, False]),
             patch(
-                "tubearchive.core.quality._run_metric_analysis",
+                "tubearchive.domain.media.quality.detect_metadata", return_value=self._metadata()
+            ),
+            patch(
+                "tubearchive.domain.media.quality.is_filter_supported",
+                side_effect=[True, True, False],
+            ),
+            patch(
+                "tubearchive.domain.media.quality._run_metric_analysis",
                 side_effect=[0.99, 34.5],
             ),
         ):

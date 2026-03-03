@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.cli import run_pipeline
-from tubearchive.core.splitter import SplitOptions, VideoSplitter
+from tubearchive.app.cli.main import run_pipeline
+from tubearchive.domain.media.splitter import SplitOptions, VideoSplitter
 
 from .conftest import (
     create_test_video,

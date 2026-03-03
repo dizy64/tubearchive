@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.cli import (
+from tubearchive.app.cli.main import (
     CATALOG_STATUS_SENTINEL,
     ClipInfo,
     TranscodeOptions,
@@ -33,9 +33,9 @@ from tubearchive.config import (
     AppConfig,
     HooksConfig,
 )
-from tubearchive.models.video import VideoFile, VideoMetadata
-from tubearchive.utils import truncate_path
-from tubearchive.utils.validators import ValidationError
+from tubearchive.domain.models.video import VideoFile, VideoMetadata
+from tubearchive.shared import truncate_path
+from tubearchive.shared.validators import ValidationError
 
 
 class TestCreateParser:
@@ -1110,13 +1110,15 @@ class TestValidateArgs:
             return replace(validated_args, hooks=hooks)
 
         with (
-            patch("tubearchive.cli.signal.signal", side_effect=_register_signal),
+            patch("tubearchive.app.cli.main.signal.signal", side_effect=_register_signal),
             patch(
-                "tubearchive.cli._setup_file_observer",
+                "tubearchive.app.cli.main._setup_file_observer",
                 return_value=(_DummyObserver(), object()),
             ),
-            patch("tubearchive.cli.load_config", return_value=AppConfig(hooks=reloaded_hooks)),
-            patch("tubearchive.cli.validate_args", side_effect=_capture_validate_args),
+            patch(
+                "tubearchive.app.cli.main.load_config", return_value=AppConfig(hooks=reloaded_hooks)
+            ),
+            patch("tubearchive.app.cli.main.validate_args", side_effect=_capture_validate_args),
         ):
             watch_thread = threading.Thread(
                 target=_run_watch_mode,
@@ -1802,7 +1804,7 @@ class TestCmdInitConfig:
     @patch("tubearchive.config.get_default_config_path")
     def test_creates_config_file(self, mock_path: MagicMock, tmp_path: Path) -> None:
         """설정 파일 생성."""
-        from tubearchive.cli import cmd_init_config
+        from tubearchive.app.cli.main import cmd_init_config
 
         config_path = tmp_path / ".tubearchive" / "config.toml"
         mock_path.return_value = config_path
@@ -1814,13 +1816,13 @@ class TestCmdInitConfig:
         assert "[general]" in content
         assert "[youtube]" in content
 
-    @patch("tubearchive.cli.safe_input", return_value="n")
+    @patch("tubearchive.app.cli.main.safe_input", return_value="n")
     @patch("tubearchive.config.get_default_config_path")
     def test_skips_overwrite_when_declined(
         self, mock_path: MagicMock, mock_input: MagicMock, tmp_path: Path
     ) -> None:
         """덮어쓰기 거부 시 스킵."""
-        from tubearchive.cli import cmd_init_config
+        from tubearchive.app.cli.main import cmd_init_config
 
         config_path = tmp_path / "config.toml"
         config_path.write_text("existing content")
@@ -1830,13 +1832,13 @@ class TestCmdInitConfig:
 
         assert config_path.read_text() == "existing content"
 
-    @patch("tubearchive.cli.safe_input", return_value="y")
+    @patch("tubearchive.app.cli.main.safe_input", return_value="y")
     @patch("tubearchive.config.get_default_config_path")
     def test_overwrites_when_confirmed(
         self, mock_path: MagicMock, mock_input: MagicMock, tmp_path: Path
     ) -> None:
         """덮어쓰기 확인 시 덮어씀."""
-        from tubearchive.cli import cmd_init_config
+        from tubearchive.app.cli.main import cmd_init_config
 
         config_path = tmp_path / "config.toml"
         config_path.write_text("old content")
@@ -1851,7 +1853,7 @@ class TestCmdInitConfig:
 class TestMain:
     """main 함수 테스트."""
 
-    @patch("tubearchive.cli.run_pipeline")
+    @patch("tubearchive.app.cli.main.run_pipeline")
     def test_main_calls_pipeline(
         self,
         mock_pipeline: MagicMock,
@@ -1871,7 +1873,7 @@ class TestMain:
 
         mock_pipeline.assert_called_once()
 
-    @patch("tubearchive.cli._run_watch_mode")
+    @patch("tubearchive.app.cli.main._run_watch_mode")
     def test_main_calls_watch_mode(
         self,
         mock_watch_mode: MagicMock,
@@ -1886,7 +1888,7 @@ class TestMain:
 
         mock_watch_mode.assert_called_once()
 
-    @patch("tubearchive.cli.run_pipeline")
+    @patch("tubearchive.app.cli.main.run_pipeline")
     def test_main_dry_run_skips_pipeline(
         self,
         mock_pipeline: MagicMock,
@@ -1909,8 +1911,8 @@ class TestMain:
         config = AppConfig(hooks=HooksConfig(on_merge=("echo merged",)))
 
         with (
-            patch("tubearchive.cli.load_config", return_value=config),
-            patch("tubearchive.cli.run_hooks") as mock_run_hooks,
+            patch("tubearchive.app.cli.main.load_config", return_value=config),
+            patch("tubearchive.app.cli.main.run_hooks") as mock_run_hooks,
             patch("sys.argv", ["tubearchive", "--run-hook", "on_merge"]),
         ):
             main()
@@ -1919,7 +1921,7 @@ class TestMain:
         assert mock_run_hooks.call_args.args[1] == "on_merge"
         assert mock_run_hooks.call_args.args[0] == config.hooks
 
-    @patch("tubearchive.cli.run_pipeline", side_effect=RuntimeError("pipeline failed"))
+    @patch("tubearchive.app.cli.main.run_pipeline", side_effect=RuntimeError("pipeline failed"))
     def test_main_invokes_error_hook_on_exception(
         self,
         _mock_pipeline: MagicMock,
@@ -1931,8 +1933,8 @@ class TestMain:
         config = AppConfig(hooks=HooksConfig(on_error=("echo error",)))
 
         with (
-            patch("tubearchive.cli.load_config", return_value=config),
-            patch("tubearchive.cli.run_hooks") as mock_run_hooks,
+            patch("tubearchive.app.cli.main.load_config", return_value=config),
+            patch("tubearchive.app.cli.main.run_hooks") as mock_run_hooks,
             patch("sys.argv", ["tubearchive", str(video_file)]),
             pytest.raises(SystemExit),
         ):
@@ -1946,9 +1948,9 @@ class TestMain:
 class TestUploadAfterPipeline:
     """_upload_after_pipeline 테스트."""
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
-    @patch("tubearchive.cli.init_database")
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_passes_privacy(
         self,
         mock_db: MagicMock,
@@ -1957,7 +1959,7 @@ class TestUploadAfterPipeline:
         tmp_path: Path,
     ) -> None:
         """privacy 파라미터 전달 확인."""
-        from tubearchive.cli import _upload_after_pipeline
+        from tubearchive.app.cli.main import _upload_after_pipeline
 
         mock_conn = MagicMock()
         mock_db.return_value = mock_conn
@@ -1975,16 +1977,16 @@ class TestUploadAfterPipeline:
             upload_chunk=32,
         )
 
-        with patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo):
+        with patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo):
             _upload_after_pipeline(output_path, args)
 
         mock_upload.assert_called_once()
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["privacy"] == "private"
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
-    @patch("tubearchive.cli.init_database")
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_uses_explicit_thumbnail(
         self,
         mock_db: MagicMock,
@@ -1993,7 +1995,7 @@ class TestUploadAfterPipeline:
         tmp_path: Path,
     ) -> None:
         """명시 썸네일이 있으면 업로드에 그대로 전달."""
-        from tubearchive.cli import _upload_after_pipeline
+        from tubearchive.app.cli.main import _upload_after_pipeline
 
         mock_conn = MagicMock()
         mock_db.return_value = mock_conn
@@ -2012,7 +2014,7 @@ class TestUploadAfterPipeline:
             upload_chunk=32,
         )
 
-        with patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo):
+        with patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo):
             _upload_after_pipeline(
                 output_path,
                 args,
@@ -2023,9 +2025,9 @@ class TestUploadAfterPipeline:
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["thumbnail"] == thumbnail
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
-    @patch("tubearchive.cli.init_database")
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_passes_subtitle_args(
         self,
         mock_db: MagicMock,
@@ -2034,7 +2036,7 @@ class TestUploadAfterPipeline:
         tmp_path: Path,
     ) -> None:
         """자막 경로와 언어가 업로드 인자로 전달된다."""
-        from tubearchive.cli import _upload_after_pipeline
+        from tubearchive.app.cli.main import _upload_after_pipeline
 
         mock_conn = MagicMock()
         mock_db.return_value = mock_conn
@@ -2053,7 +2055,7 @@ class TestUploadAfterPipeline:
             upload_chunk=32,
         )
 
-        with patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo):
+        with patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo):
             _upload_after_pipeline(
                 output_path,
                 args,
@@ -2066,9 +2068,9 @@ class TestUploadAfterPipeline:
         assert call_kwargs["subtitle_path"] == subtitle_path
         assert call_kwargs["subtitle_language"] == "ko"
 
-    @patch("tubearchive.cli._upload_split_files")
-    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
-    @patch("tubearchive.cli.init_database")
+    @patch("tubearchive.app.cli.main._upload_split_files")
+    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_passes_subtitle_args_to_split_upload(
         self,
         mock_db: MagicMock,
@@ -2077,7 +2079,7 @@ class TestUploadAfterPipeline:
         tmp_path: Path,
     ) -> None:
         """분할 업로드 시 자막 경로/언어가 split 업로더에 전달된다."""
-        from tubearchive.cli import _upload_after_pipeline
+        from tubearchive.app.cli.main import _upload_after_pipeline
 
         mock_conn = MagicMock()
         mock_db.return_value = mock_conn
@@ -2098,7 +2100,7 @@ class TestUploadAfterPipeline:
 
         with (
             patch(
-                "tubearchive.cli.MergeJobRepository",
+                "tubearchive.app.cli.main.MergeJobRepository",
                 return_value=MagicMock(
                     get_latest=MagicMock(
                         return_value=MagicMock(
@@ -2111,7 +2113,7 @@ class TestUploadAfterPipeline:
                 ),
             ),
             patch(
-                "tubearchive.cli.SplitJobRepository",
+                "tubearchive.app.cli.main.SplitJobRepository",
                 return_value=MagicMock(
                     get_by_merge_job_id=MagicMock(
                         return_value=[MagicMock(id=5, output_files=[split_file])]
@@ -2131,9 +2133,9 @@ class TestUploadAfterPipeline:
         assert call_kwargs["subtitle_path"] == subtitle_path
         assert call_kwargs["subtitle_language"] == "ko"
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
-    @patch("tubearchive.cli.init_database")
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_uses_single_generated_thumbnail(
         self,
         mock_db: MagicMock,
@@ -2142,7 +2144,7 @@ class TestUploadAfterPipeline:
         tmp_path: Path,
     ) -> None:
         """생성 썸네일 1개는 자동 선택."""
-        from tubearchive.cli import _upload_after_pipeline
+        from tubearchive.app.cli.main import _upload_after_pipeline
 
         mock_conn = MagicMock()
         mock_db.return_value = mock_conn
@@ -2161,7 +2163,7 @@ class TestUploadAfterPipeline:
             upload_chunk=32,
         )
 
-        with patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo):
+        with patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo):
             _upload_after_pipeline(
                 output_path,
                 args,
@@ -2171,10 +2173,10 @@ class TestUploadAfterPipeline:
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["thumbnail"] == generated
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli._resolve_upload_thumbnail")
-    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
-    @patch("tubearchive.cli.init_database")
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main._resolve_upload_thumbnail")
+    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_logs_selected_thumbnail(
         self,
         mock_db: MagicMock,
@@ -2185,7 +2187,7 @@ class TestUploadAfterPipeline:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """썸네일 선택 결과를 INFO 로그로 남긴다."""
-        from tubearchive.cli import _upload_after_pipeline
+        from tubearchive.app.cli.main import _upload_after_pipeline
 
         mock_conn = MagicMock()
         mock_db.return_value = mock_conn
@@ -2206,7 +2208,7 @@ class TestUploadAfterPipeline:
         mock_resolve_thumbnail.return_value = thumbnail
 
         with (
-            patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo),
+            patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo),
             caplog.at_level("INFO"),
         ):
             _upload_after_pipeline(
@@ -2224,7 +2226,7 @@ class TestResolveUploadThumbnail:
 
     def test_resolve_upload_thumbnail_uses_explicit(self, tmp_path: Path) -> None:
         """명시 썸네일이 우선."""
-        from tubearchive.cli import _resolve_upload_thumbnail
+        from tubearchive.app.cli.main import _resolve_upload_thumbnail
 
         explicit = tmp_path / "a.jpg"
         generated = [tmp_path / "b.jpg"]
@@ -2233,21 +2235,21 @@ class TestResolveUploadThumbnail:
 
     def test_resolve_upload_thumbnail_single_generated(self, tmp_path: Path) -> None:
         """자동 생성 썸네일 1개는 해당 경로 사용."""
-        from tubearchive.cli import _resolve_upload_thumbnail
+        from tubearchive.app.cli.main import _resolve_upload_thumbnail
 
         generated = [tmp_path / "auto.jpg"]
         generated[0].touch()
 
         assert _resolve_upload_thumbnail(None, generated) is generated[0]
 
-    @patch("tubearchive.cli._interactive_select", return_value=1)
+    @patch("tubearchive.app.cli.main._interactive_select", return_value=1)
     def test_resolve_upload_thumbnail_selects_from_multiple(
         self,
         _mock_select: MagicMock,
         tmp_path: Path,
     ) -> None:
         """썸네일이 여러 개면 인터랙티브 선택 결과 사용."""
-        from tubearchive.cli import _resolve_upload_thumbnail
+        from tubearchive.app.cli.main import _resolve_upload_thumbnail
 
         generated = [tmp_path / "auto1.jpg", tmp_path / "auto2.jpg"]
         for path in generated:
@@ -2255,14 +2257,14 @@ class TestResolveUploadThumbnail:
 
         assert _resolve_upload_thumbnail(None, generated) is generated[1]
 
-    @patch("tubearchive.cli._interactive_select", return_value=None)
+    @patch("tubearchive.app.cli.main._interactive_select", return_value=None)
     def test_resolve_upload_thumbnail_skips_when_user_cancels(
         self,
         _mock_select: MagicMock,
         tmp_path: Path,
     ) -> None:
         """사용자가 0번으로 건너뛰면 None을 반환한다."""
-        from tubearchive.cli import _resolve_upload_thumbnail
+        from tubearchive.app.cli.main import _resolve_upload_thumbnail
 
         generated = [tmp_path / "auto1.jpg", tmp_path / "auto2.jpg"]
         for path in generated:
@@ -2274,8 +2276,8 @@ class TestResolveUploadThumbnail:
 class TestUploadSplitFiles:
     """_upload_split_files 분할 업로드 테스트."""
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.probe_duration", return_value=3600.0)
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.probe_duration", return_value=3600.0)
     def test_uploads_each_split_file(
         self,
         _mock_probe: MagicMock,
@@ -2283,7 +2285,7 @@ class TestUploadSplitFiles:
         tmp_path: Path,
     ) -> None:
         """분할 파일 각각에 대해 upload_to_youtube가 호출된다."""
-        from tubearchive.cli import _upload_split_files
+        from tubearchive.app.cli.main import _upload_split_files
 
         f1 = tmp_path / "video_001.mp4"
         f2 = tmp_path / "video_002.mp4"
@@ -2309,8 +2311,8 @@ class TestUploadSplitFiles:
 
         assert mock_upload.call_count == 2
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.probe_duration", return_value=3600.0)
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.probe_duration", return_value=3600.0)
     def test_title_includes_part_numbers(
         self,
         _mock_probe: MagicMock,
@@ -2318,7 +2320,7 @@ class TestUploadSplitFiles:
         tmp_path: Path,
     ) -> None:
         """제목에 (Part N/M) 형식이 포함된다."""
-        from tubearchive.cli import _upload_split_files
+        from tubearchive.app.cli.main import _upload_split_files
 
         f1 = tmp_path / "video_001.mp4"
         f2 = tmp_path / "video_002.mp4"
@@ -2344,9 +2346,9 @@ class TestUploadSplitFiles:
         assert "(Part 1/2)" in first_call_title
         assert "(Part 2/2)" in second_call_title
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
-    @patch("tubearchive.cli.init_database")
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.main.init_database")
     def test_falls_back_when_no_split_files(
         self,
         mock_db: MagicMock,
@@ -2355,7 +2357,7 @@ class TestUploadSplitFiles:
         tmp_path: Path,
     ) -> None:
         """분할 파일이 없으면 단일 파일 업로드로 폴백한다."""
-        from tubearchive.cli import _upload_after_pipeline
+        from tubearchive.app.cli.main import _upload_after_pipeline
 
         mock_conn = MagicMock()
         mock_db.return_value = mock_conn
@@ -2381,8 +2383,8 @@ class TestUploadSplitFiles:
         )
 
         with (
-            patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo),
-            patch("tubearchive.cli.SplitJobRepository", return_value=mock_split_repo),
+            patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo),
+            patch("tubearchive.app.cli.main.SplitJobRepository", return_value=mock_split_repo),
         ):
             _upload_after_pipeline(output_path, args)
 
@@ -2391,10 +2393,10 @@ class TestUploadSplitFiles:
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["file_path"] == output_path
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.probe_duration", return_value=3600.0)
-    @patch("tubearchive.cli.resolve_playlist_ids", return_value=[])
-    @patch("tubearchive.cli.init_database")
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.probe_duration", return_value=3600.0)
+    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.main.init_database")
     def test_uploads_split_files_when_present(
         self,
         mock_db: MagicMock,
@@ -2404,7 +2406,7 @@ class TestUploadSplitFiles:
         tmp_path: Path,
     ) -> None:
         """분할 파일이 DB에 있는 경우 분할 파일을 업로드한다."""
-        from tubearchive.cli import _upload_after_pipeline
+        from tubearchive.app.cli.main import _upload_after_pipeline
 
         mock_conn = MagicMock()
         mock_db.return_value = mock_conn
@@ -2442,8 +2444,8 @@ class TestUploadSplitFiles:
         )
 
         with (
-            patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo),
-            patch("tubearchive.cli.SplitJobRepository", return_value=mock_split_repo),
+            patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo),
+            patch("tubearchive.app.cli.main.SplitJobRepository", return_value=mock_split_repo),
         ):
             _upload_after_pipeline(output_path, args)
 
@@ -2454,8 +2456,8 @@ class TestUploadSplitFiles:
 class TestUploadOnly:
     """--upload-only 처리 테스트."""
 
-    @patch("tubearchive.cli.run_hooks")
-    @patch("tubearchive.cli.upload_to_youtube", return_value="yt123")
+    @patch("tubearchive.app.cli.main.run_hooks")
+    @patch("tubearchive.app.cli.main.upload_to_youtube", return_value="yt123")
     def test_upload_only_calls_upload_hook(
         self,
         mock_upload: MagicMock,
@@ -2463,7 +2465,7 @@ class TestUploadOnly:
         tmp_path: Path,
     ) -> None:
         """--upload-only 완료 후 on_upload 훅이 실행된다."""
-        from tubearchive.cli import cmd_upload_only
+        from tubearchive.app.cli.main import cmd_upload_only
 
         file_path = tmp_path / "output.mp4"
         file_path.write_bytes(b"dummy")
@@ -2480,11 +2482,11 @@ class TestUploadOnly:
 
         with (
             patch(
-                "tubearchive.cli.MergeJobRepository",
+                "tubearchive.app.cli.main.MergeJobRepository",
                 return_value=MagicMock(get_by_output_path=MagicMock(return_value=None)),
             ),
-            patch("tubearchive.cli.resolve_playlist_ids", return_value=[]),
-            patch("tubearchive.cli._resolve_set_thumbnail_path", return_value=None),
+            patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[]),
+            patch("tubearchive.app.cli.main._resolve_set_thumbnail_path", return_value=None),
         ):
             result = cmd_upload_only(args, hooks=HooksConfig(on_upload=("echo upload",)))
 
@@ -2496,8 +2498,8 @@ class TestUploadOnly:
         assert context.output_path == file_path
         assert context.youtube_id == "yt123"
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.probe_duration", return_value=3600.0)
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.probe_duration", return_value=3600.0)
     def test_split_upload_reuses_thumbnail_for_all_parts(
         self,
         _mock_probe: MagicMock,
@@ -2505,7 +2507,7 @@ class TestUploadOnly:
         tmp_path: Path,
     ) -> None:
         """분할 업로드는 모든 파트에 동일한 썸네일을 전달한다."""
-        from tubearchive.cli import _upload_split_files
+        from tubearchive.app.cli.main import _upload_split_files
 
         f1 = tmp_path / "video_001.mp4"
         f2 = tmp_path / "video_002.mp4"
@@ -2532,8 +2534,8 @@ class TestUploadOnly:
         assert mock_upload.call_count == 2
         assert all(call.kwargs["thumbnail"] == thumbnail for call in mock_upload.call_args_list)
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.probe_duration", return_value=60.0)
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.probe_duration", return_value=60.0)
     def test_malformed_clips_json_does_not_crash(
         self,
         _mock_probe: MagicMock,
@@ -2541,7 +2543,7 @@ class TestUploadOnly:
         tmp_path: Path,
     ) -> None:
         """잘못된 clips_info_json이어도 업로드가 진행된다."""
-        from tubearchive.cli import _upload_split_files
+        from tubearchive.app.cli.main import _upload_split_files
 
         f1 = tmp_path / "video_001.mp4"
         f1.touch()
@@ -2558,8 +2560,8 @@ class TestUploadOnly:
 
         assert mock_upload.call_count == 1
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.probe_duration", return_value=60.0)
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.probe_duration", return_value=60.0)
     def test_none_clips_json_does_not_crash(
         self,
         _mock_probe: MagicMock,
@@ -2567,7 +2569,7 @@ class TestUploadOnly:
         tmp_path: Path,
     ) -> None:
         """clips_info_json이 None이어도 업로드가 진행된다."""
-        from tubearchive.cli import _upload_split_files
+        from tubearchive.app.cli.main import _upload_split_files
 
         f1 = tmp_path / "video_001.mp4"
         f1.touch()
@@ -2584,8 +2586,8 @@ class TestUploadOnly:
 
         assert mock_upload.call_count == 1
 
-    @patch("tubearchive.cli.upload_to_youtube")
-    @patch("tubearchive.cli.probe_duration", return_value=3600.0)
+    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.main.probe_duration", return_value=3600.0)
     def test_partial_upload_failure_continues(
         self,
         _mock_probe: MagicMock,
@@ -2593,7 +2595,7 @@ class TestUploadOnly:
         tmp_path: Path,
     ) -> None:
         """한 파트 업로드 실패 시 나머지 파트는 계속 업로드한다."""
-        from tubearchive.cli import _upload_split_files
+        from tubearchive.app.cli.main import _upload_split_files
 
         f1 = tmp_path / "video_001.mp4"
         f2 = tmp_path / "video_002.mp4"
@@ -2669,7 +2671,7 @@ class TestTranscodeOptions:
 
     def test_custom_values(self) -> None:
         """커스텀 값이 정상 할당되는지 확인."""
-        from tubearchive.models.video import FadeConfig
+        from tubearchive.domain.models.video import FadeConfig
 
         fade_map = {Path("/a.mp4"): FadeConfig(fade_in=0.3, fade_out=0.7)}
         opts = TranscodeOptions(
@@ -2743,7 +2745,7 @@ class TestTranscodeOptions:
 class TestDatabaseSession:
     """database_session context manager 테스트."""
 
-    @patch("tubearchive.cli.init_database")
+    @patch("tubearchive.app.cli.main.init_database")
     def test_yields_connection(self, mock_init: MagicMock) -> None:
         """context manager가 DB 연결 객체를 yield한다."""
         mock_conn = MagicMock()
@@ -2752,7 +2754,7 @@ class TestDatabaseSession:
         with database_session() as conn:
             assert conn is mock_conn
 
-    @patch("tubearchive.cli.init_database")
+    @patch("tubearchive.app.cli.main.init_database")
     def test_closes_connection_on_exit(self, mock_init: MagicMock) -> None:
         """블록 종료 시 DB 연결이 닫힌다."""
         mock_conn = MagicMock()
@@ -2763,7 +2765,7 @@ class TestDatabaseSession:
 
         mock_conn.close.assert_called_once()
 
-    @patch("tubearchive.cli.init_database")
+    @patch("tubearchive.app.cli.main.init_database")
     def test_closes_connection_on_exception(self, mock_init: MagicMock) -> None:
         """예외 발생 시에도 DB 연결이 닫힌다."""
         mock_conn = MagicMock()
@@ -2904,14 +2906,14 @@ class TestWatermarkText:
 class TestSaveMergeJobToDb:
     """save_merge_job_to_db 반환값 테스트."""
 
-    @patch("tubearchive.cli.database_session")
+    @patch("tubearchive.app.cli.main.database_session")
     def test_returns_summary_and_merge_job_id(
         self,
         mock_db_session: MagicMock,
         tmp_path: Path,
     ) -> None:
         """summary와 merge_job_id를 tuple로 반환한다."""
-        from tubearchive.cli import save_merge_job_to_db
+        from tubearchive.app.cli.main import save_merge_job_to_db
 
         output_file = tmp_path / "output.mp4"
         output_file.write_bytes(b"\x00" * 100)
@@ -2927,13 +2929,13 @@ class TestSaveMergeJobToDb:
         ]
 
         with (
-            patch("tubearchive.cli.MergeJobRepository", return_value=mock_repo),
+            patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo),
             patch(
-                "tubearchive.utils.summary_generator.generate_clip_summary",
+                "tubearchive.shared.summary_generator.generate_clip_summary",
                 return_value="## Summary",
             ),
             patch(
-                "tubearchive.utils.summary_generator.generate_youtube_description",
+                "tubearchive.shared.summary_generator.generate_youtube_description",
                 return_value="desc",
             ),
         ):
@@ -2945,14 +2947,14 @@ class TestSaveMergeJobToDb:
         assert summary == "## Summary"
         assert merge_job_id == 42
 
-    @patch("tubearchive.cli.database_session")
+    @patch("tubearchive.app.cli.main.database_session")
     def test_returns_none_tuple_on_failure(
         self,
         mock_db_session: MagicMock,
         tmp_path: Path,
     ) -> None:
         """DB 저장 실패 시 (None, None)을 반환한다."""
-        from tubearchive.cli import save_merge_job_to_db
+        from tubearchive.app.cli.main import save_merge_job_to_db
 
         mock_db_session.return_value.__enter__ = MagicMock(side_effect=Exception("DB error"))
         mock_db_session.return_value.__exit__ = MagicMock(return_value=False)

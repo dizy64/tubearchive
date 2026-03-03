@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.cli import run_pipeline
+from tubearchive.app.cli.main import run_pipeline
 
 from .conftest import (
     create_test_video,
@@ -75,7 +75,7 @@ class TestStabilization:
             stabilize_strength="heavy",
         )
 
-        with caplog.at_level(logging.INFO, logger="tubearchive.core.transcoder"):
+        with caplog.at_level(logging.INFO, logger="tubearchive.domain.media.transcoder"):
             result_path = run_pipeline(args)
 
         assert result_path.exists()

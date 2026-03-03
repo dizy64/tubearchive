@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tubearchive.ffmpeg.thumbnail import (
+from tubearchive.infra.ffmpeg.thumbnail import (
     YOUTUBE_THUMBNAIL_MAX_QUALITY,
     YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES,
     YOUTUBE_THUMBNAIL_MIN_HEIGHT,
@@ -215,8 +215,8 @@ class TestBuildThumbnailCommand:
 class TestExtractThumbnails:
     """썸네일 추출 통합 테스트 (mock)."""
 
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
-    @patch("tubearchive.ffmpeg.thumbnail.detect_metadata")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.detect_metadata")
     def test_default_three_thumbnails(
         self,
         mock_detect: MagicMock,
@@ -241,7 +241,7 @@ class TestExtractThumbnails:
         assert len(result) == 3
         assert mock_run.call_count == 3
 
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
     def test_custom_timestamps(
         self,
         mock_run: MagicMock,
@@ -261,7 +261,7 @@ class TestExtractThumbnails:
         assert len(result) == 2
         assert mock_run.call_count == 2
 
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
     def test_ffmpeg_failure_skips(
         self,
         mock_run: MagicMock,
@@ -282,7 +282,7 @@ class TestExtractThumbnails:
 
         assert len(result) == 1
 
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
     def test_ffmpeg_timeout_skips(
         self,
         mock_run: MagicMock,
@@ -302,7 +302,7 @@ class TestExtractThumbnails:
 
         assert len(result) == 1
 
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
     def test_ffmpeg_failure_logs_stderr(
         self,
         mock_run: MagicMock,
@@ -361,7 +361,7 @@ class TestPrepareThumbnailForYoutube:
         assert "-vf" in cmd
         assert scale_expr in cmd
 
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
     def test_probe_image_size(self, mock_run: MagicMock, tmp_path: Path) -> None:
         """ffprobe 결과에서 width/height 추출."""
         image = tmp_path / "image.jpg"
@@ -379,7 +379,7 @@ class TestPrepareThumbnailForYoutube:
         assert mock_run.call_count == 1
         assert mock_run.call_args[1]["timeout"] == 20
 
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
     def test_probe_image_size_timeout(self, mock_run: MagicMock, tmp_path: Path) -> None:
         """ffprobe timeout 시 RuntimeError."""
         image = tmp_path / "image.jpg"
@@ -390,8 +390,8 @@ class TestPrepareThumbnailForYoutube:
         with pytest.raises(RuntimeError, match="ffprobe timed out"):
             _probe_image_size(image)
 
-    @patch("tubearchive.ffmpeg.thumbnail._probe_image_size")
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail._probe_image_size")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
     def test_prepare_thumbnail_returns_original_when_compatible(
         self,
         mock_run: MagicMock,
@@ -408,8 +408,8 @@ class TestPrepareThumbnailForYoutube:
         assert result == image
         mock_run.assert_not_called()
 
-    @patch("tubearchive.ffmpeg.thumbnail._probe_image_size")
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail._probe_image_size")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
     def test_prepare_thumbnail_reencodes_when_too_small(
         self,
         mock_run: MagicMock,
@@ -441,8 +441,8 @@ class TestPrepareThumbnailForYoutube:
             in command
         )
 
-    @patch("tubearchive.ffmpeg.thumbnail._probe_image_size")
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail._probe_image_size")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
     def test_prepare_thumbnail_retries_quality_when_too_large(
         self,
         mock_run: MagicMock,
@@ -475,8 +475,8 @@ class TestPrepareThumbnailForYoutube:
         assert call_count == 2
         assert output.stat().st_size <= YOUTUBE_THUMBNAIL_MAX_SIZE_BYTES
 
-    @patch("tubearchive.ffmpeg.thumbnail._probe_image_size", return_value=(640, 360))
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail._probe_image_size", return_value=(640, 360))
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
     def test_prepare_thumbnail_raises_on_ffmpeg_error(
         self,
         mock_run: MagicMock,
@@ -500,8 +500,8 @@ class TestPrepareThumbnailForYoutube:
         with pytest.raises(ValueError, match="Unsupported thumbnail format"):
             prepare_thumbnail_for_youtube(image)
 
-    @patch("tubearchive.ffmpeg.thumbnail._probe_image_size")
-    @patch("tubearchive.ffmpeg.thumbnail.subprocess.run")
+    @patch("tubearchive.infra.ffmpeg.thumbnail._probe_image_size")
+    @patch("tubearchive.infra.ffmpeg.thumbnail.subprocess.run")
     def test_prepare_thumbnail_raises_when_retries_exhausted(
         self,
         mock_run: MagicMock,

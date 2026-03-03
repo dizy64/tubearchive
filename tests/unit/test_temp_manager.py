@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from tubearchive.utils.temp_manager import TempManager
+from tubearchive.shared.temp_manager import TempManager
 
 
 class TestTempManager:

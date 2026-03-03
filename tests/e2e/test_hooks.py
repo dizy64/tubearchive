@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.cli import ValidatedArgs, run_pipeline
+from tubearchive.app.cli.main import ValidatedArgs, run_pipeline
 from tubearchive.config import HooksConfig
 
 from .conftest import create_test_video

@@ -4,10 +4,10 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from tubearchive.cli import ClipInfo
-from tubearchive.core.grouper import FileSequenceGroup
-from tubearchive.models.video import VideoFile
-from tubearchive.utils.summary_generator import (
+from tubearchive.app.cli.main import ClipInfo
+from tubearchive.domain.media.grouper import FileSequenceGroup
+from tubearchive.domain.models.video import VideoFile
+from tubearchive.shared.summary_generator import (
     OutputInfo,
     extract_topic_from_path,
     format_timestamp,

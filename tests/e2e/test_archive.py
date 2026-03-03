@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.core.archiver import ArchivePolicy, Archiver
-from tubearchive.database.repository import ArchiveHistoryRepository, VideoRepository
-from tubearchive.database.schema import init_database
-from tubearchive.models.video import VideoFile, VideoMetadata
+from tubearchive.domain.media.archiver import ArchivePolicy, Archiver
+from tubearchive.domain.models.video import VideoFile, VideoMetadata
+from tubearchive.infra.db.repository import ArchiveHistoryRepository, VideoRepository
+from tubearchive.infra.db.schema import init_database
 
 from .conftest import create_test_video
 

@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tubearchive.commands.catalog import (
+from tubearchive.app.queries.catalog import (
     CATALOG_STATUS_SENTINEL,
     CATALOG_UNKNOWN_DEVICE,
     CATALOG_UNKNOWN_STATUS,
@@ -30,7 +30,7 @@ from tubearchive.commands.catalog import (
     parse_creation_date,
     render_table,
 )
-from tubearchive.database.schema import init_database
+from tubearchive.infra.db.schema import init_database
 
 
 @pytest.fixture
@@ -728,7 +728,7 @@ class TestCmdCatalog:
         db_conn: sqlite3.Connection,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        with patch("tubearchive.commands.catalog.init_database", return_value=db_conn):
+        with patch("tubearchive.app.queries.catalog.init_database", return_value=db_conn):
             args = self._make_args(catalog=True)
             cmd_catalog(args)
 
@@ -743,7 +743,7 @@ class TestCmdCatalog:
         _insert_video(db_conn, path="/test/v1.mp4", device="GoPro")
         _insert_video(db_conn, path="/test/v2.mp4", device="Nikon")
 
-        with patch("tubearchive.commands.catalog.init_database", return_value=db_conn):
+        with patch("tubearchive.app.queries.catalog.init_database", return_value=db_conn):
             args = self._make_args(catalog=True)
             cmd_catalog(args)
 
@@ -759,7 +759,7 @@ class TestCmdCatalog:
         _insert_video(db_conn, path="/jan.mp4", creation_time="2026-01-15T10:00:00")
         _insert_video(db_conn, path="/feb.mp4", creation_time="2026-02-20T10:00:00")
 
-        with patch("tubearchive.commands.catalog.init_database", return_value=db_conn):
+        with patch("tubearchive.app.queries.catalog.init_database", return_value=db_conn):
             args = self._make_args(search="2026-01")
             cmd_catalog(args)
 
@@ -775,7 +775,7 @@ class TestCmdCatalog:
         _insert_video(db_conn, path="/gopro.mp4", device="GoPro")
         _insert_video(db_conn, path="/nikon.mp4", device="Nikon")
 
-        with patch("tubearchive.commands.catalog.init_database", return_value=db_conn):
+        with patch("tubearchive.app.queries.catalog.init_database", return_value=db_conn):
             args = self._make_args(search="", device="GoPro")
             cmd_catalog(args)
 
@@ -790,7 +790,7 @@ class TestCmdCatalog:
     ) -> None:
         _insert_video(db_conn, path="/test.mp4", device="iPhone")
 
-        with patch("tubearchive.commands.catalog.init_database", return_value=db_conn):
+        with patch("tubearchive.app.queries.catalog.init_database", return_value=db_conn):
             args = self._make_args(catalog=True, output_json=True)
             cmd_catalog(args)
 
@@ -806,7 +806,7 @@ class TestCmdCatalog:
     ) -> None:
         _insert_video(db_conn, path="/test.mp4", device="DJI")
 
-        with patch("tubearchive.commands.catalog.init_database", return_value=db_conn):
+        with patch("tubearchive.app.queries.catalog.init_database", return_value=db_conn):
             args = self._make_args(catalog=True, output_csv=True)
             cmd_catalog(args)
 
@@ -817,7 +817,7 @@ class TestCmdCatalog:
         assert len(rows) == 2
 
     def test_invalid_status_raises_error(self, db_conn: sqlite3.Connection) -> None:
-        with patch("tubearchive.commands.catalog.init_database", return_value=db_conn):
+        with patch("tubearchive.app.queries.catalog.init_database", return_value=db_conn):
             args = self._make_args(search="", status="invalid_status")
             with pytest.raises(ValueError, match="잘못된 상태 필터"):
                 cmd_catalog(args)
@@ -832,7 +832,7 @@ class TestCmdCatalog:
         _insert_transcoding_job(db_conn, vid1, status="completed")
         _insert_transcoding_job(db_conn, vid2, status="pending")
 
-        with patch("tubearchive.commands.catalog.init_database", return_value=db_conn):
+        with patch("tubearchive.app.queries.catalog.init_database", return_value=db_conn):
             args = self._make_args(search="", status="completed", output_json=True)
             cmd_catalog(args)
 
@@ -849,7 +849,7 @@ class TestCmdCatalog:
         _insert_video(db_conn, path="/a.mp4")
         _insert_video(db_conn, path="/b.mp4")
 
-        with patch("tubearchive.commands.catalog.init_database", return_value=db_conn):
+        with patch("tubearchive.app.queries.catalog.init_database", return_value=db_conn):
             args = self._make_args(search="")
             cmd_catalog(args)
 

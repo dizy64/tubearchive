@@ -14,18 +14,18 @@ from unittest.mock import patch
 
 import pytest
 
-from tubearchive.commands.project import (
+from tubearchive.app.queries.project import (
     _format_date_range,
     _format_project_status,
     print_project_detail,
     print_project_list,
 )
-from tubearchive.database.repository import (
+from tubearchive.domain.models.job import Project
+from tubearchive.infra.db.repository import (
     MergeJobRepository,
     ProjectRepository,
 )
-from tubearchive.database.schema import init_database
-from tubearchive.models.job import Project
+from tubearchive.infra.db.schema import init_database
 
 
 class TestProjectSchema:
@@ -958,7 +958,7 @@ class TestPrintProjectList:
     def test_table_with_projects(self, db_conn_with_project: sqlite3.Connection) -> None:
         """프로젝트 있는 테이블 출력 → '프로젝트 목록' 헤더."""
         stream = io.StringIO()
-        with patch("tubearchive.commands.project.render_table"):
+        with patch("tubearchive.app.queries.project.render_table"):
             print_project_list(db_conn_with_project, output_format="table", stream=stream)
         output = stream.getvalue()
         assert "프로젝트 목록" in output
@@ -1005,7 +1005,7 @@ class TestPrintProjectDetail:
         conn = init_database(tmp_path / "test.db")
         stream = io.StringIO()
         # stderr를 캡처하기 위해 sys.stderr를 패치
-        with patch("tubearchive.commands.project.sys") as mock_sys:
+        with patch("tubearchive.app.queries.project.sys") as mock_sys:
             mock_sys.stderr = io.StringIO()
             mock_sys.stdout = stream
             print_project_detail(conn, 9999, output_format="table", stream=stream)
@@ -1017,7 +1017,7 @@ class TestPrintProjectDetail:
         """테이블 출력 시 프로젝트명 포함."""
         conn, project_id = db_with_detail
         stream = io.StringIO()
-        with patch("tubearchive.commands.project.render_table"):
+        with patch("tubearchive.app.queries.project.render_table"):
             print_project_detail(conn, project_id, output_format="table", stream=stream)
         output = stream.getvalue()
         assert "상세 테스트" in output

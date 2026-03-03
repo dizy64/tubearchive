@@ -12,7 +12,7 @@ class TestYouTubeAuth:
 
     def test_get_config_dir_creates_directory(self, tmp_path: Path) -> None:
         """설정 디렉토리가 없으면 생성."""
-        from tubearchive.youtube.auth import get_config_dir
+        from tubearchive.infra.youtube.auth import get_config_dir
 
         with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
             config_dir = get_config_dir()
@@ -21,7 +21,7 @@ class TestYouTubeAuth:
 
     def test_get_token_path_default(self, tmp_path: Path) -> None:
         """기본 토큰 경로."""
-        from tubearchive.youtube.auth import get_token_path
+        from tubearchive.infra.youtube.auth import get_token_path
 
         with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
             token_path = get_token_path()
@@ -30,7 +30,7 @@ class TestYouTubeAuth:
 
     def test_get_token_path_from_env(self, tmp_path: Path) -> None:
         """환경 변수로 토큰 경로 지정."""
-        from tubearchive.youtube.auth import get_token_path
+        from tubearchive.infra.youtube.auth import get_token_path
 
         custom_path = tmp_path / "custom_token.json"
         with patch.dict("os.environ", {"TUBEARCHIVE_YOUTUBE_TOKEN": str(custom_path)}, clear=False):
@@ -39,7 +39,7 @@ class TestYouTubeAuth:
 
     def test_get_client_secrets_path_default(self, tmp_path: Path) -> None:
         """기본 클라이언트 시크릿 경로."""
-        from tubearchive.youtube.auth import get_client_secrets_path
+        from tubearchive.infra.youtube.auth import get_client_secrets_path
 
         with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
             secrets_path = get_client_secrets_path()
@@ -48,7 +48,7 @@ class TestYouTubeAuth:
 
     def test_get_client_secrets_path_from_env(self, tmp_path: Path) -> None:
         """환경 변수로 클라이언트 시크릿 경로 지정."""
-        from tubearchive.youtube.auth import get_client_secrets_path
+        from tubearchive.infra.youtube.auth import get_client_secrets_path
 
         custom_path = tmp_path / "my_secrets.json"
         with patch.dict(
@@ -61,7 +61,7 @@ class TestYouTubeAuth:
 
     def test_load_credentials_returns_none_when_no_token(self, tmp_path: Path) -> None:
         """토큰 파일이 없으면 None 반환."""
-        from tubearchive.youtube.auth import load_credentials
+        from tubearchive.infra.youtube.auth import load_credentials
 
         token_path = tmp_path / "nonexistent_token.json"
         credentials = load_credentials(token_path)
@@ -69,7 +69,7 @@ class TestYouTubeAuth:
 
     def test_load_credentials_loads_valid_token(self, tmp_path: Path) -> None:
         """유효한 토큰 파일 로드."""
-        from tubearchive.youtube.auth import load_credentials
+        from tubearchive.infra.youtube.auth import load_credentials
 
         token_path = tmp_path / "token.json"
         token_data = {
@@ -82,7 +82,7 @@ class TestYouTubeAuth:
         }
         token_path.write_text(json.dumps(token_data))
 
-        with patch("tubearchive.youtube.auth.Credentials") as mock_creds:
+        with patch("tubearchive.infra.youtube.auth.Credentials") as mock_creds:
             mock_creds.from_authorized_user_info.return_value = MagicMock(valid=True)
             credentials = load_credentials(token_path)
             assert credentials is not None
@@ -90,7 +90,7 @@ class TestYouTubeAuth:
 
     def test_save_credentials(self, tmp_path: Path) -> None:
         """자격 증명 저장."""
-        from tubearchive.youtube.auth import save_credentials
+        from tubearchive.infra.youtube.auth import save_credentials
 
         token_path = tmp_path / "token.json"
         mock_credentials = MagicMock()
@@ -103,7 +103,7 @@ class TestYouTubeAuth:
 
     def test_get_authenticated_service_raises_without_secrets(self, tmp_path: Path) -> None:
         """클라이언트 시크릿 없으면 에러."""
-        from tubearchive.youtube.auth import (
+        from tubearchive.infra.youtube.auth import (
             YouTubeAuthError,
             get_authenticated_service,
         )
@@ -119,20 +119,20 @@ class TestSanitizeDescription:
 
     def test_short_description_unchanged(self) -> None:
         """5000자 이하의 정상 description은 그대로 반환."""
-        from tubearchive.youtube.uploader import sanitize_description
+        from tubearchive.infra.youtube.uploader import sanitize_description
 
         desc = "00:00 clip1\n01:30 clip2"
         assert sanitize_description(desc) == desc
 
     def test_empty_description(self) -> None:
         """빈 description."""
-        from tubearchive.youtube.uploader import sanitize_description
+        from tubearchive.infra.youtube.uploader import sanitize_description
 
         assert sanitize_description("") == ""
 
     def test_removes_angle_brackets(self) -> None:
         """<> 문자 제거."""
-        from tubearchive.youtube.uploader import sanitize_description
+        from tubearchive.infra.youtube.uploader import sanitize_description
 
         desc = "test <script>alert(1)</script> end"
         result = sanitize_description(desc)
@@ -142,7 +142,7 @@ class TestSanitizeDescription:
 
     def test_truncates_long_description(self) -> None:
         """5000자 초과 시 잘림."""
-        from tubearchive.youtube.uploader import (
+        from tubearchive.infra.youtube.uploader import (
             YOUTUBE_MAX_DESCRIPTION_LENGTH,
             sanitize_description,
         )
@@ -158,7 +158,7 @@ class TestSanitizeDescription:
 
     def test_truncates_at_line_boundary(self) -> None:
         """잘림이 줄 경계에서 발생."""
-        from tubearchive.youtube.uploader import sanitize_description
+        from tubearchive.infra.youtube.uploader import sanitize_description
 
         # 정확히 줄 경계에서 잘리는지 확인
         lines = [f"00:{i:02d} clip_{i}" for i in range(500)]
@@ -174,7 +174,7 @@ class TestSanitizeDescription:
 
     def test_exact_5000_chars_unchanged(self) -> None:
         """정확히 5000자이면 잘리지 않음."""
-        from tubearchive.youtube.uploader import (
+        from tubearchive.infra.youtube.uploader import (
             YOUTUBE_MAX_DESCRIPTION_LENGTH,
             sanitize_description,
         )
@@ -188,7 +188,7 @@ class TestUploadResult:
 
     def test_upload_result_creation(self) -> None:
         """UploadResult 생성."""
-        from tubearchive.youtube.uploader import UploadResult
+        from tubearchive.infra.youtube.uploader import UploadResult
 
         result = UploadResult(
             video_id="abc123",
@@ -201,7 +201,7 @@ class TestUploadResult:
 
     def test_upload_result_default_url(self) -> None:
         """video_id로 기본 URL 생성."""
-        from tubearchive.youtube.uploader import UploadResult
+        from tubearchive.infra.youtube.uploader import UploadResult
 
         result = UploadResult.from_video_id("xyz789", "My Title")
         assert result.video_id == "xyz789"
@@ -214,7 +214,7 @@ class TestYouTubeUploader:
 
     def test_uploader_init(self) -> None:
         """Uploader 초기화."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.infra.youtube.uploader import YouTubeUploader
 
         mock_service = MagicMock()
         uploader = YouTubeUploader(mock_service)
@@ -222,7 +222,7 @@ class TestYouTubeUploader:
 
     def test_upload_validates_file_exists(self, tmp_path: Path) -> None:
         """존재하지 않는 파일 업로드 시 에러."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.infra.youtube.uploader import YouTubeUploader
 
         mock_service = MagicMock()
         uploader = YouTubeUploader(mock_service)
@@ -233,7 +233,7 @@ class TestYouTubeUploader:
 
     def test_upload_calls_youtube_api(self, tmp_path: Path) -> None:
         """YouTube API 호출 확인."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.infra.youtube.uploader import YouTubeUploader
 
         # 임시 파일 생성
         video_file = tmp_path / "test.mp4"
@@ -252,7 +252,7 @@ class TestYouTubeUploader:
 
         uploader = YouTubeUploader(mock_service)
 
-        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
+        with patch("tubearchive.infra.youtube.uploader.MediaFileUpload") as mock_media_upload:
             mock_media_upload.return_value = MagicMock()
             result = uploader.upload(
                 video_file,
@@ -267,7 +267,7 @@ class TestYouTubeUploader:
 
     def test_upload_progress_callback(self, tmp_path: Path) -> None:
         """진행률 콜백 호출 확인."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.infra.youtube.uploader import YouTubeUploader
 
         video_file = tmp_path / "test.mp4"
         video_file.write_bytes(b"fake video content" * 1000)
@@ -291,7 +291,7 @@ class TestYouTubeUploader:
 
         uploader = YouTubeUploader(mock_service)
 
-        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
+        with patch("tubearchive.infra.youtube.uploader.MediaFileUpload") as mock_media_upload:
             mock_media_upload.return_value = MagicMock()
             uploader.upload(
                 video_file,
@@ -304,7 +304,7 @@ class TestYouTubeUploader:
 
     def test_upload_with_default_privacy(self, tmp_path: Path) -> None:
         """기본 공개 설정은 unlisted."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.infra.youtube.uploader import YouTubeUploader
 
         video_file = tmp_path / "test.mp4"
         video_file.write_bytes(b"fake video content")
@@ -316,7 +316,7 @@ class TestYouTubeUploader:
 
         uploader = YouTubeUploader(mock_service)
 
-        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
+        with patch("tubearchive.infra.youtube.uploader.MediaFileUpload") as mock_media_upload:
             mock_media_upload.return_value = MagicMock()
             uploader.upload(video_file, title="Test")
 
@@ -327,7 +327,7 @@ class TestYouTubeUploader:
 
     def test_set_thumbnail_uploads_image(self, tmp_path: Path) -> None:
         """썸네일 업로드 API 호출."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.infra.youtube.uploader import YouTubeUploader
 
         original_thumbnail = tmp_path / "thumb.jpg"
         original_thumbnail.write_bytes(b"original")
@@ -342,10 +342,10 @@ class TestYouTubeUploader:
 
         with (
             patch(
-                "tubearchive.youtube.uploader.prepare_thumbnail_for_youtube",
+                "tubearchive.infra.youtube.uploader.prepare_thumbnail_for_youtube",
                 return_value=prepared_thumbnail,
             ),
-            patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload,
+            patch("tubearchive.infra.youtube.uploader.MediaFileUpload") as mock_media_upload,
         ):
             mock_media_upload.return_value = MagicMock()
             uploader.set_thumbnail("video123", original_thumbnail)
@@ -357,7 +357,7 @@ class TestYouTubeUploader:
 
     def test_set_thumbnail_cleans_up_generated_file(self, tmp_path: Path) -> None:
         """생성된 썸네일은 업로드 후 정리된다."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.infra.youtube.uploader import YouTubeUploader
 
         original_thumbnail = tmp_path / "thumb.jpg"
         original_thumbnail.write_bytes(b"original")
@@ -372,10 +372,10 @@ class TestYouTubeUploader:
 
         with (
             patch(
-                "tubearchive.youtube.uploader.prepare_thumbnail_for_youtube",
+                "tubearchive.infra.youtube.uploader.prepare_thumbnail_for_youtube",
                 return_value=prepared_thumbnail,
             ),
-            patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload,
+            patch("tubearchive.infra.youtube.uploader.MediaFileUpload") as mock_media_upload,
         ):
             mock_media_upload.return_value = MagicMock()
             uploader.set_thumbnail("video123", original_thumbnail)
@@ -384,7 +384,7 @@ class TestYouTubeUploader:
 
     def test_set_thumbnail_requires_video_id(self, tmp_path: Path) -> None:
         """video_id 누락 시 에러."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.infra.youtube.uploader import YouTubeUploader
 
         mock_service = MagicMock()
         uploader = YouTubeUploader(mock_service)
@@ -396,7 +396,7 @@ class TestYouTubeUploader:
         """썸네일 API 에러 처리."""
         from googleapiclient.errors import HttpError
 
-        from tubearchive.youtube.uploader import YouTubeUploader, YouTubeUploadError
+        from tubearchive.infra.youtube.uploader import YouTubeUploader, YouTubeUploadError
 
         original_thumbnail = tmp_path / "thumb.jpg"
         original_thumbnail.write_bytes(b"original")
@@ -415,10 +415,10 @@ class TestYouTubeUploader:
 
         with (
             patch(
-                "tubearchive.youtube.uploader.prepare_thumbnail_for_youtube",
+                "tubearchive.infra.youtube.uploader.prepare_thumbnail_for_youtube",
                 return_value=prepared_thumbnail,
             ),
-            patch("tubearchive.youtube.uploader.MediaFileUpload"),
+            patch("tubearchive.infra.youtube.uploader.MediaFileUpload"),
             pytest.raises(YouTubeUploadError) as exc_info,
         ):
             uploader.set_thumbnail("video123", original_thumbnail)
@@ -432,7 +432,7 @@ class TestYouTubeCaptions:
 
     def test_set_captions_uploads_srt_file(self, tmp_path: Path) -> None:
         """SRT 파일을 업로드한다."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.infra.youtube.uploader import YouTubeUploader
 
         caption_file = tmp_path / "caption.srt"
         caption_file.write_text("1\n00:00:00,000 --> 00:00:01,000\n안녕\n")
@@ -443,7 +443,7 @@ class TestYouTubeCaptions:
 
         uploader = YouTubeUploader(mock_service)
 
-        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
+        with patch("tubearchive.infra.youtube.uploader.MediaFileUpload") as mock_media_upload:
             mock_media_upload.return_value = MagicMock()
             uploader.set_captions(
                 video_id="video123",
@@ -459,7 +459,7 @@ class TestYouTubeCaptions:
 
     def test_set_captions_uploads_vtt_file_with_default_name(self, tmp_path: Path) -> None:
         """VTT 파일은 파일명 기본값을 캡션명으로 사용한다."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.infra.youtube.uploader import YouTubeUploader
 
         caption_file = tmp_path / "subtitle.vtt"
         caption_file.write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n")
@@ -470,7 +470,7 @@ class TestYouTubeCaptions:
 
         uploader = YouTubeUploader(mock_service)
 
-        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
+        with patch("tubearchive.infra.youtube.uploader.MediaFileUpload") as mock_media_upload:
             mock_media_upload.return_value = MagicMock()
             uploader.set_captions(
                 video_id="video123",
@@ -482,7 +482,7 @@ class TestYouTubeCaptions:
 
     def test_set_captions_rejects_unsupported_format(self, tmp_path: Path) -> None:
         """확장자가 지원되지 않으면 실패한다."""
-        from tubearchive.youtube.uploader import (
+        from tubearchive.infra.youtube.uploader import (
             YouTubeUploader,
             YouTubeUploadError,
         )
@@ -496,7 +496,7 @@ class TestYouTubeCaptions:
 
     def test_set_captions_requires_existing_file(self) -> None:
         """자막 파일이 없으면 실패한다."""
-        from tubearchive.youtube.uploader import (
+        from tubearchive.infra.youtube.uploader import (
             YouTubeUploader,
             YouTubeUploadError,
         )
@@ -507,7 +507,7 @@ class TestYouTubeCaptions:
 
     def test_set_captions_requires_video_id(self, tmp_path: Path) -> None:
         """video_id가 없으면 실패한다."""
-        from tubearchive.youtube.uploader import (
+        from tubearchive.infra.youtube.uploader import (
             YouTubeUploader,
             YouTubeUploadError,
         )
@@ -523,7 +523,7 @@ class TestYouTubeCaptions:
         """API 에러를 YouTubeUploadError로 감싼다."""
         from googleapiclient.errors import HttpError
 
-        from tubearchive.youtube.uploader import YouTubeUploader, YouTubeUploadError
+        from tubearchive.infra.youtube.uploader import YouTubeUploader, YouTubeUploadError
 
         caption_file = tmp_path / "caption.srt"
         caption_file.write_text("1\n00:00:00,000 --> 00:00:01,000\n안녕\n")
@@ -539,7 +539,7 @@ class TestYouTubeCaptions:
         uploader = YouTubeUploader(mock_service)
 
         with (
-            patch("tubearchive.youtube.uploader.MediaFileUpload"),
+            patch("tubearchive.infra.youtube.uploader.MediaFileUpload"),
             pytest.raises(YouTubeUploadError) as exc_info,
         ):
             uploader.set_captions("video123", caption_file)
@@ -554,7 +554,7 @@ class TestYouTubeUploadError:
         """API 에러 처리."""
         from googleapiclient.errors import HttpError
 
-        from tubearchive.youtube.uploader import YouTubeUploader, YouTubeUploadError
+        from tubearchive.infra.youtube.uploader import YouTubeUploader, YouTubeUploadError
 
         video_file = tmp_path / "test.mp4"
         video_file.write_bytes(b"fake video content")
@@ -571,7 +571,7 @@ class TestYouTubeUploadError:
 
         uploader = YouTubeUploader(mock_service)
 
-        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
+        with patch("tubearchive.infra.youtube.uploader.MediaFileUpload") as mock_media_upload:
             mock_media_upload.return_value = MagicMock()
             with pytest.raises(YouTubeUploadError) as exc_info:
                 uploader.upload(video_file, title="Test")
@@ -584,7 +584,7 @@ class TestCLIUploadIntegration:
 
     def test_upload_only_option_exists(self) -> None:
         """--upload-only 옵션이 존재."""
-        from tubearchive.cli import create_parser
+        from tubearchive.app.cli.main import create_parser
 
         parser = create_parser()
         args = parser.parse_args(["--upload-only", "test.mp4"])
@@ -592,7 +592,7 @@ class TestCLIUploadIntegration:
 
     def test_upload_flag_in_main_parser(self) -> None:
         """--upload 플래그가 메인 파서에 존재."""
-        from tubearchive.cli import create_parser
+        from tubearchive.app.cli.main import create_parser
 
         parser = create_parser()
         args = parser.parse_args(["--upload"])
@@ -600,7 +600,7 @@ class TestCLIUploadIntegration:
 
     def test_upload_privacy_option(self) -> None:
         """--upload-privacy 옵션이 존재."""
-        from tubearchive.cli import create_parser
+        from tubearchive.app.cli.main import create_parser
 
         parser = create_parser()
         args = parser.parse_args(["--upload-privacy", "private"])
@@ -608,7 +608,7 @@ class TestCLIUploadIntegration:
 
     def test_upload_title_option(self) -> None:
         """--upload-title 옵션이 존재."""
-        from tubearchive.cli import create_parser
+        from tubearchive.app.cli.main import create_parser
 
         parser = create_parser()
         args = parser.parse_args(["--upload-title", "My Video"])
@@ -618,14 +618,14 @@ class TestCLIUploadIntegration:
         """ValidatedArgs에 upload 필드 포함."""
         import dataclasses
 
-        from tubearchive.cli import ValidatedArgs
+        from tubearchive.app.cli.main import ValidatedArgs
 
         fields = {f.name for f in dataclasses.fields(ValidatedArgs)}
         assert "upload" in fields
 
     def test_setup_youtube_option_exists(self) -> None:
         """--setup-youtube 옵션이 존재."""
-        from tubearchive.cli import create_parser
+        from tubearchive.app.cli.main import create_parser
 
         parser = create_parser()
         args = parser.parse_args(["--setup-youtube"])
@@ -633,7 +633,7 @@ class TestCLIUploadIntegration:
 
     def test_youtube_auth_option_exists(self) -> None:
         """--youtube-auth 옵션이 존재."""
-        from tubearchive.cli import create_parser
+        from tubearchive.app.cli.main import create_parser
 
         parser = create_parser()
         args = parser.parse_args(["--youtube-auth"])
@@ -645,7 +645,7 @@ class TestCheckAuthStatus:
 
     def test_check_auth_status_no_client_secrets(self, tmp_path: Path) -> None:
         """client_secrets.json 없을 때 상태 반환."""
-        from tubearchive.youtube.auth import check_auth_status
+        from tubearchive.infra.youtube.auth import check_auth_status
 
         with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
             status = check_auth_status()
@@ -655,7 +655,7 @@ class TestCheckAuthStatus:
 
     def test_check_auth_status_has_secrets_no_token(self, tmp_path: Path) -> None:
         """client_secrets.json은 있고 토큰은 없을 때."""
-        from tubearchive.youtube.auth import check_auth_status
+        from tubearchive.infra.youtube.auth import check_auth_status
 
         # client_secrets.json 생성
         config_dir = tmp_path / ".tubearchive"
@@ -671,7 +671,7 @@ class TestCheckAuthStatus:
 
     def test_check_auth_status_has_valid_token(self, tmp_path: Path) -> None:
         """유효한 토큰이 있을 때."""
-        from tubearchive.youtube.auth import check_auth_status
+        from tubearchive.infra.youtube.auth import check_auth_status
 
         # client_secrets.json 생성
         config_dir = tmp_path / ".tubearchive"
@@ -693,7 +693,7 @@ class TestCheckAuthStatus:
 
         with (
             patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False),
-            patch("tubearchive.youtube.auth.Credentials") as mock_creds,
+            patch("tubearchive.infra.youtube.auth.Credentials") as mock_creds,
         ):
             mock_cred_instance = MagicMock()
             mock_cred_instance.valid = True
@@ -707,7 +707,7 @@ class TestCheckAuthStatus:
 
     def test_check_auth_status_expired_token(self, tmp_path: Path) -> None:
         """토큰이 만료되었을 때."""
-        from tubearchive.youtube.auth import check_auth_status
+        from tubearchive.infra.youtube.auth import check_auth_status
 
         # client_secrets.json 생성
         config_dir = tmp_path / ".tubearchive"
@@ -729,7 +729,7 @@ class TestCheckAuthStatus:
 
         with (
             patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False),
-            patch("tubearchive.youtube.auth.Credentials") as mock_creds,
+            patch("tubearchive.infra.youtube.auth.Credentials") as mock_creds,
         ):
             mock_cred_instance = MagicMock()
             mock_cred_instance.valid = False
@@ -748,7 +748,7 @@ class TestAuthStatusMessage:
 
     def test_get_setup_guide_no_secrets(self) -> None:
         """client_secrets.json 없을 때 설정 가이드."""
-        from tubearchive.youtube.auth import AuthStatus
+        from tubearchive.infra.youtube.auth import AuthStatus
 
         status = AuthStatus(
             has_client_secrets=False,
@@ -765,7 +765,7 @@ class TestAuthStatusMessage:
 
     def test_get_setup_guide_needs_auth(self) -> None:
         """브라우저 인증이 필요할 때 메시지."""
-        from tubearchive.youtube.auth import AuthStatus
+        from tubearchive.infra.youtube.auth import AuthStatus
 
         status = AuthStatus(
             has_client_secrets=True,
@@ -780,7 +780,7 @@ class TestAuthStatusMessage:
 
     def test_get_setup_guide_ready(self) -> None:
         """인증 완료 상태 메시지."""
-        from tubearchive.youtube.auth import AuthStatus
+        from tubearchive.infra.youtube.auth import AuthStatus
 
         status = AuthStatus(
             has_client_secrets=True,
@@ -799,7 +799,7 @@ class TestListPlaylists:
 
     def test_single_page(self) -> None:
         """단일 페이지 응답."""
-        from tubearchive.youtube.playlist import list_playlists
+        from tubearchive.infra.youtube.playlist import list_playlists
 
         service = MagicMock()
         service.playlists().list().execute.return_value = {
@@ -826,7 +826,7 @@ class TestListPlaylists:
 
     def test_pagination(self) -> None:
         """페이지네이션 응답."""
-        from tubearchive.youtube.playlist import list_playlists
+        from tubearchive.infra.youtube.playlist import list_playlists
 
         service = MagicMock()
         page1 = {
@@ -850,7 +850,7 @@ class TestListPlaylists:
 
     def test_empty_response(self) -> None:
         """빈 응답."""
-        from tubearchive.youtube.playlist import list_playlists
+        from tubearchive.infra.youtube.playlist import list_playlists
 
         service = MagicMock()
         service.playlists().list().execute.return_value = {"items": []}
@@ -860,7 +860,7 @@ class TestListPlaylists:
 
     def test_missing_items_key(self) -> None:
         """items 키 없는 응답은 빈 리스트."""
-        from tubearchive.youtube.playlist import list_playlists
+        from tubearchive.infra.youtube.playlist import list_playlists
 
         service = MagicMock()
         service.playlists().list().execute.return_value = {}
@@ -874,7 +874,7 @@ class TestCreatePlaylist:
 
     def test_success(self) -> None:
         """성공적으로 플레이리스트 생성."""
-        from tubearchive.youtube.playlist import create_playlist
+        from tubearchive.infra.youtube.playlist import create_playlist
 
         service = MagicMock()
         service.playlists().insert().execute.return_value = {"id": "PLnew"}
@@ -884,7 +884,7 @@ class TestCreatePlaylist:
 
     def test_missing_id_raises(self) -> None:
         """응답에 id 없으면 PlaylistError."""
-        from tubearchive.youtube.playlist import PlaylistError, create_playlist
+        from tubearchive.infra.youtube.playlist import PlaylistError, create_playlist
 
         service = MagicMock()
         service.playlists().insert().execute.return_value = {}
@@ -894,7 +894,7 @@ class TestCreatePlaylist:
 
     def test_api_exception_wraps(self) -> None:
         """API 예외를 PlaylistError로 래핑."""
-        from tubearchive.youtube.playlist import PlaylistError, create_playlist
+        from tubearchive.infra.youtube.playlist import PlaylistError, create_playlist
 
         service = MagicMock()
         service.playlists().insert().execute.side_effect = RuntimeError("API error")
@@ -904,7 +904,7 @@ class TestCreatePlaylist:
 
     def test_passes_privacy(self) -> None:
         """privacy 파라미터가 body에 올바르게 전달."""
-        from tubearchive.youtube.playlist import create_playlist
+        from tubearchive.infra.youtube.playlist import create_playlist
 
         service = MagicMock()
         service.playlists().insert().execute.return_value = {"id": "PLnew"}
@@ -921,7 +921,7 @@ class TestAddToPlaylist:
 
     def test_success(self) -> None:
         """성공적으로 영상 추가."""
-        from tubearchive.youtube.playlist import add_to_playlist
+        from tubearchive.infra.youtube.playlist import add_to_playlist
 
         service = MagicMock()
         service.playlistItems().insert().execute.return_value = {"id": "ITEM1"}
@@ -931,7 +931,7 @@ class TestAddToPlaylist:
 
     def test_missing_id_raises(self) -> None:
         """응답에 id 없으면 PlaylistError."""
-        from tubearchive.youtube.playlist import PlaylistError, add_to_playlist
+        from tubearchive.infra.youtube.playlist import PlaylistError, add_to_playlist
 
         service = MagicMock()
         service.playlistItems().insert().execute.return_value = {}
@@ -941,7 +941,7 @@ class TestAddToPlaylist:
 
     def test_api_exception_wraps(self) -> None:
         """API 예외를 PlaylistError로 래핑."""
-        from tubearchive.youtube.playlist import PlaylistError, add_to_playlist
+        from tubearchive.infra.youtube.playlist import PlaylistError, add_to_playlist
 
         service = MagicMock()
         service.playlistItems().insert().execute.side_effect = RuntimeError("API error")
@@ -951,7 +951,7 @@ class TestAddToPlaylist:
 
     def test_correct_resource_body(self) -> None:
         """playlistId, videoId가 body에 올바르게 전달."""
-        from tubearchive.youtube.playlist import add_to_playlist
+        from tubearchive.infra.youtube.playlist import add_to_playlist
 
         service = MagicMock()
         service.playlistItems().insert().execute.return_value = {"id": "ITEM1"}
@@ -969,7 +969,7 @@ class TestScheduleUpload:
 
     def test_parse_schedule_datetime_valid_iso8601(self) -> None:
         """유효한 ISO 8601 형식 파싱."""
-        from tubearchive.cli import parse_schedule_datetime
+        from tubearchive.app.cli.main import parse_schedule_datetime
 
         # 미래 시간 (2050년)
         result = parse_schedule_datetime("2050-12-31T23:59:59+09:00")
@@ -977,10 +977,10 @@ class TestScheduleUpload:
 
     def test_parse_schedule_datetime_without_timezone(self) -> None:
         """타임존 없는 형식 (로컬 타임존 자동 추가)."""
-        from tubearchive.cli import parse_schedule_datetime
+        from tubearchive.app.cli.main import parse_schedule_datetime
 
         # 미래 시간 (2050년)
-        with patch("tubearchive.cli.logger") as mock_logger:
+        with patch("tubearchive.app.cli.main.logger") as mock_logger:
             result = parse_schedule_datetime("2050-12-31T23:59:59")
             # 로컬 타임존이 추가되어야 함
             assert result.startswith("2050-12-31T23:59:59")
@@ -990,7 +990,7 @@ class TestScheduleUpload:
 
     def test_parse_schedule_datetime_space_format(self) -> None:
         """공백 구분 형식 자동 변환."""
-        from tubearchive.cli import parse_schedule_datetime
+        from tubearchive.app.cli.main import parse_schedule_datetime
 
         # 공백 형식도 지원 ("2050-12-31 23:59:59" → "2050-12-31T23:59:59")
         result = parse_schedule_datetime("2050-12-31 23:59:59+09:00")
@@ -998,7 +998,7 @@ class TestScheduleUpload:
 
     def test_parse_schedule_datetime_past_time_raises(self) -> None:
         """과거 시간은 상세한 에러 메시지와 함께 ValueError 발생."""
-        from tubearchive.cli import parse_schedule_datetime
+        from tubearchive.app.cli.main import parse_schedule_datetime
 
         with pytest.raises(ValueError) as exc_info:
             parse_schedule_datetime("2020-01-01T00:00:00+09:00")
@@ -1011,14 +1011,14 @@ class TestScheduleUpload:
 
     def test_parse_schedule_datetime_invalid_format_raises(self) -> None:
         """잘못된 형식은 ValueError 발생."""
-        from tubearchive.cli import parse_schedule_datetime
+        from tubearchive.app.cli.main import parse_schedule_datetime
 
         with pytest.raises(ValueError, match="Invalid datetime format"):
             parse_schedule_datetime("not-a-date")
 
     def test_schedule_option_in_parser(self) -> None:
         """--schedule 옵션이 파서에 존재."""
-        from tubearchive.cli import create_parser
+        from tubearchive.app.cli.main import create_parser
 
         parser = create_parser()
         args = parser.parse_args(["--schedule", "2050-12-31T18:00:00+09:00"])
@@ -1026,7 +1026,7 @@ class TestScheduleUpload:
 
     def test_upload_result_with_schedule(self) -> None:
         """UploadResult에 scheduled_publish_at 포함."""
-        from tubearchive.youtube.uploader import UploadResult
+        from tubearchive.infra.youtube.uploader import UploadResult
 
         result = UploadResult.from_video_id(
             "xyz789", "My Title", scheduled_publish_at="2050-12-31T18:00:00+09:00"
@@ -1035,7 +1035,7 @@ class TestScheduleUpload:
 
     def test_upload_with_schedule_sets_private(self, tmp_path: Path) -> None:
         """publish_at 설정 시 privacy가 private로 자동 변경."""
-        from tubearchive.youtube.uploader import YouTubeUploader
+        from tubearchive.infra.youtube.uploader import YouTubeUploader
 
         video_file = tmp_path / "test.mp4"
         video_file.write_bytes(b"fake video content")
@@ -1047,7 +1047,7 @@ class TestScheduleUpload:
 
         uploader = YouTubeUploader(mock_service)
 
-        with patch("tubearchive.youtube.uploader.MediaFileUpload") as mock_media_upload:
+        with patch("tubearchive.infra.youtube.uploader.MediaFileUpload") as mock_media_upload:
             mock_media_upload.return_value = MagicMock()
             uploader.upload(
                 video_file,
@@ -1071,7 +1071,7 @@ class TestScheduleUpload:
         """ValidatedArgs에 schedule 필드 포함."""
         import dataclasses
 
-        from tubearchive.cli import ValidatedArgs
+        from tubearchive.app.cli.main import ValidatedArgs
 
         fields = {f.name for f in dataclasses.fields(ValidatedArgs)}
         assert "schedule" in fields
@@ -1081,7 +1081,7 @@ class TestSelectPlaylistInteractive:
     """select_playlist_interactive 인터랙션 테스트."""
 
     def _make_playlists(self, count: int = 3) -> list:
-        from tubearchive.youtube.playlist import Playlist
+        from tubearchive.infra.youtube.playlist import Playlist
 
         return [
             Playlist(id=f"PL{i}", title=f"리스트{i}", item_count=i) for i in range(1, count + 1)
@@ -1089,7 +1089,7 @@ class TestSelectPlaylistInteractive:
 
     def test_empty_list_returns_empty(self, capsys: pytest.CaptureFixture[str]) -> None:
         """빈 목록 → 빈 리스트 반환."""
-        from tubearchive.youtube.playlist import select_playlist_interactive
+        from tubearchive.infra.youtube.playlist import select_playlist_interactive
 
         result = select_playlist_interactive([])
 
@@ -1099,7 +1099,7 @@ class TestSelectPlaylistInteractive:
 
     def test_single_selection(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """단일 선택 (번호 1 입력)."""
-        from tubearchive.youtube.playlist import select_playlist_interactive
+        from tubearchive.infra.youtube.playlist import select_playlist_interactive
 
         playlists = self._make_playlists()
         monkeypatch.setattr("builtins.input", lambda _: "1")
@@ -1111,7 +1111,7 @@ class TestSelectPlaylistInteractive:
 
     def test_cancel_with_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """0 입력으로 취소."""
-        from tubearchive.youtube.playlist import select_playlist_interactive
+        from tubearchive.infra.youtube.playlist import select_playlist_interactive
 
         playlists = self._make_playlists()
         monkeypatch.setattr("builtins.input", lambda _: "0")
@@ -1121,7 +1121,7 @@ class TestSelectPlaylistInteractive:
 
     def test_multi_selection(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """여러 개 선택 (1,3 입력)."""
-        from tubearchive.youtube.playlist import select_playlist_interactive
+        from tubearchive.infra.youtube.playlist import select_playlist_interactive
 
         playlists = self._make_playlists()
         monkeypatch.setattr("builtins.input", lambda _: "1,3")
@@ -1134,7 +1134,7 @@ class TestSelectPlaylistInteractive:
 
     def test_invalid_then_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """잘못된 입력 후 올바른 입력."""
-        from tubearchive.youtube.playlist import select_playlist_interactive
+        from tubearchive.infra.youtube.playlist import select_playlist_interactive
 
         playlists = self._make_playlists()
         inputs = iter(["abc", "1"])
@@ -1147,7 +1147,7 @@ class TestSelectPlaylistInteractive:
 
     def test_keyboard_interrupt(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """EOFError → 빈 리스트 반환."""
-        from tubearchive.youtube.playlist import select_playlist_interactive
+        from tubearchive.infra.youtube.playlist import select_playlist_interactive
 
         playlists = self._make_playlists()
 

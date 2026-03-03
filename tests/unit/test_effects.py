@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tubearchive.ffmpeg.effects import (
+from tubearchive.infra.ffmpeg.effects import (
     TIMELAPSE_MAX_SPEED,
     TIMELAPSE_MIN_SPEED,
     LoudnormAnalysis,

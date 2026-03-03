@@ -1,6 +1,6 @@
 """인코딩 프로파일 테스트."""
 
-from tubearchive.ffmpeg.profiles import (
+from tubearchive.infra.ffmpeg.profiles import (
     PROFILE_FALLBACK_LIBX265,
     PROFILE_HDR_HLG,
     PROFILE_HDR_PQ,
