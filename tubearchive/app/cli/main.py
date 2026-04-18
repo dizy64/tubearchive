@@ -718,6 +718,13 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--no-fade",
+        action="store_true",
+        default=False,
+        help="영상 간 페이드 효과 비활성화 (--fade-duration 0과 동일)",
+    )
+
+    parser.add_argument(
         "--exclude",
         type=str,
         action="append",
@@ -1316,11 +1323,15 @@ def validate_args(
     else:
         group_sequences = get_default_group_sequences()
 
-    # fade_duration 설정 (CLI 인자 > 환경 변수 > 기본값)
-    fade_duration_arg = getattr(args, "fade_duration", None)
-    fade_duration = (
-        fade_duration_arg if fade_duration_arg is not None else get_default_fade_duration()
-    )
+    # fade_duration 설정 (--no-fade > CLI 인자 > 환경 변수 > 기본값)
+    no_fade = bool(getattr(args, "no_fade", False))
+    if no_fade:
+        fade_duration = 0.0
+    else:
+        fade_duration_arg = getattr(args, "fade_duration", None)
+        fade_duration = (
+            fade_duration_arg if fade_duration_arg is not None else get_default_fade_duration()
+        )
     if fade_duration < 0:
         raise ValueError(f"Fade duration must be >= 0, got: {fade_duration}")
 
@@ -4139,7 +4150,10 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     print(f"Denoise level: {validated_args.denoise_level}")
     print(f"Normalize audio: {validated_args.normalize_audio}")
     print(f"Group sequences: {validated_args.group_sequences}")
-    print(f"Fade duration: {validated_args.fade_duration}")
+    fade_display = (
+        "disabled" if validated_args.fade_duration == 0.0 else f"{validated_args.fade_duration}s"
+    )
+    print(f"Fade duration: {fade_display}")
     if validated_args.stabilize:
         strength = validated_args.stabilize_strength
         crop = validated_args.stabilize_crop
