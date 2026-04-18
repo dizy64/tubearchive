@@ -11,6 +11,7 @@ dependencies = [
     "google-auth-oauthlib>=1.0.0",
     "google-auth-httplib2>=0.2.0",
     "watchdog>=4.0.0",
+    "textual>=1.0.0",
 ]
 readme = "README.md"
 
@@ -30,6 +31,7 @@ dev = [
     "ruff>=0.1.0",
     "pip-audit>=2.7.0",
     "radon>=6.0.0",
+    "textual-dev>=1.0.0",
 ]
 
 [tool.ruff]

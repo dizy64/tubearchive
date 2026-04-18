@@ -4535,6 +4535,20 @@ def main() -> None:
     적절한 핸들러 함수로 라우팅한다. 서브커맨드가 지정되지 않은
     기본 동작은 :func:`run_pipeline` (트랜스코딩 + 병합).
     """
+    import sys
+
+    # argparse보다 먼저 처리: nargs="*" targets와 충돌 방지
+    if len(sys.argv) > 1 and sys.argv[1] == "tui":
+        from tubearchive.app.tui import launch_tui
+
+        path_arg = sys.argv[2] if len(sys.argv) > 2 else None
+        has_config_flag = len(sys.argv) > 3 and sys.argv[3] == "--config"
+        tui_config_path = Path(sys.argv[4]) if has_config_flag else get_default_config_path()
+        tui_config = load_config(tui_config_path)
+        apply_config_to_env(tui_config)
+        launch_tui(initial_path=path_arg, config=tui_config)
+        return
+
     parser = create_parser()
     args = parser.parse_args()
 
