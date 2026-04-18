@@ -155,6 +155,20 @@ class TestCreateParser:
 
         assert args.fade_duration == 0.75
 
+    def test_parses_no_fade_flag(self) -> None:
+        """--no-fade 플래그."""
+        parser = create_parser()
+        args = parser.parse_args(["--no-fade"])
+
+        assert args.no_fade is True
+
+    def test_no_fade_default_false(self) -> None:
+        """--no-fade 기본값은 False."""
+        parser = create_parser()
+        args = parser.parse_args([])
+
+        assert args.no_fade is False
+
     def test_parses_thumbnail_flag(self) -> None:
         """--thumbnail 플래그."""
         parser = create_parser()
@@ -630,6 +644,48 @@ class TestValidateArgs:
 
         assert result.group_sequences is True
         assert result.fade_duration == 0.5
+
+    def test_no_fade_sets_duration_to_zero(self, tmp_path: Path) -> None:
+        """--no-fade 지정 시 fade_duration이 0.0으로 설정."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            no_fade=True,
+            fade_duration=None,
+        )
+
+        result = validate_args(args)
+
+        assert result.fade_duration == 0.0
+
+    def test_no_fade_overrides_fade_duration(self, tmp_path: Path) -> None:
+        """--no-fade는 --fade-duration보다 우선."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        args = argparse.Namespace(
+            targets=[str(video_file)],
+            output=None,
+            no_resume=False,
+            keep_temp=False,
+            dry_run=False,
+            output_dir=None,
+            parallel=None,
+            no_fade=True,
+            fade_duration=1.0,
+        )
+
+        result = validate_args(args)
+
+        assert result.fade_duration == 0.0
 
     def test_validates_existing_directory(self, tmp_path: Path) -> None:
         """존재하는 디렉토리 검증."""
