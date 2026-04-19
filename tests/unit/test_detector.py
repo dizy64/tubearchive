@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tubearchive.domain.media.detector import detect_metadata
+from tubearchive.domain.media.detector import _extract_device_model, detect_metadata
 
 
 class TestDetector:
@@ -380,3 +380,169 @@ class TestDetector:
         assert metadata.location == "37.566500, 126.978000"
         assert metadata.location_latitude == 37.5665
         assert metadata.location_longitude == 126.9780
+
+
+class TestExtractDeviceModel:
+    """_extract_device_model 다중 소스 기기 감지 테스트."""
+
+    def _probe(
+        self,
+        format_tags: dict | None = None,
+        video_handler: str | None = None,
+    ) -> dict:
+        stream_tags = {}
+        if video_handler is not None:
+            stream_tags["handler_name"] = video_handler
+        return {
+            "streams": [{"codec_type": "video", "tags": stream_tags}],
+            "format": {"tags": format_tags or {}},
+        }
+
+    def test_apple_quicktime_model(self) -> None:
+        probe = self._probe({"com.apple.quicktime.model": "iPhone 17 Pro"})
+        assert _extract_device_model(probe, Path("IMG_0001.MOV")) == "iPhone 17 Pro"
+
+    def test_apple_model_strips_whitespace(self) -> None:
+        probe = self._probe({"com.apple.quicktime.model": "  iPhone 14 Pro  "})
+        assert _extract_device_model(probe, Path("IMG_0001.MOV")) == "iPhone 14 Pro"
+
+    def test_dji_encoder_tag(self) -> None:
+        probe = self._probe({"encoder": "DJI OsmoPocket3"})
+        assert _extract_device_model(probe, Path("DJI_20250118.MP4")) == "DJI OsmoPocket3"
+
+    def test_dji_case_insensitive(self) -> None:
+        probe = self._probe({"encoder": "dji Mini 4 Pro"})
+        assert _extract_device_model(probe, Path("DJI_0001.MP4")) == "dji Mini 4 Pro"
+
+    def test_gopro_firmware_hero9(self) -> None:
+        probe = self._probe({"firmware": "HD9.01.01.72.00"})
+        assert _extract_device_model(probe, Path("GH010001.MP4")) == "GoPro HERO 9"
+
+    def test_gopro_firmware_hero8(self) -> None:
+        probe = self._probe({"firmware": "HD8.01.02.50.00"})
+        assert _extract_device_model(probe, Path("GH010001.MP4")) == "GoPro HERO 8"
+
+    def test_gopro_handler_fallback(self) -> None:
+        probe = self._probe(video_handler="GoPro AVC  ")
+        assert _extract_device_model(probe, Path("GH010001.MP4")) == "GoPro"
+
+    def test_gopro_handler_case_insensitive(self) -> None:
+        probe = self._probe(video_handler="gopro H.265")
+        assert _extract_device_model(probe, Path("GX010001.MP4")) == "GoPro"
+
+    def test_nikon_filename_mov(self) -> None:
+        probe = self._probe()
+        assert _extract_device_model(probe, Path("DSC_4885.MOV")) == "Nikon"
+
+    def test_nikon_filename_mp4(self) -> None:
+        probe = self._probe()
+        assert _extract_device_model(probe, Path("DSC_1234.MP4")) == "Nikon"
+
+    def test_nikon_filename_case_insensitive(self) -> None:
+        probe = self._probe()
+        assert _extract_device_model(probe, Path("dsc_0001.mov")) == "Nikon"
+
+    def test_unknown_returns_none(self) -> None:
+        probe = self._probe()
+        assert _extract_device_model(probe, Path("unknown.mp4")) is None
+
+    def test_apple_priority_over_dji(self) -> None:
+        probe = self._probe(
+            {
+                "com.apple.quicktime.model": "iPhone 17 Pro",
+                "encoder": "DJI OsmoPocket3",
+            }
+        )
+        assert _extract_device_model(probe, Path("IMG_0001.MOV")) == "iPhone 17 Pro"
+
+    def test_dji_priority_over_gopro_firmware(self) -> None:
+        probe = self._probe({"encoder": "DJI OsmoPocket3", "firmware": "HD9.01.01.72.00"})
+        assert _extract_device_model(probe, Path("test.MP4")) == "DJI OsmoPocket3"
+
+    def test_gopro_firmware_priority_over_handler(self) -> None:
+        probe = self._probe(
+            format_tags={"firmware": "HD9.01.01.72.00"},
+            video_handler="GoPro AVC  ",
+        )
+        assert _extract_device_model(probe, Path("GH010001.MP4")) == "GoPro HERO 9"
+
+    def test_detect_metadata_gopro(self, tmp_path: Path) -> None:
+        video_file = tmp_path / "GH010001.MP4"
+        video_file.write_text("")
+        probe_data = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 3840,
+                    "height": 2160,
+                    "pix_fmt": "yuv420p",
+                    "r_frame_rate": "60/1",
+                    "avg_frame_rate": "60/1",
+                    "duration": "30.0",
+                    "tags": {"handler_name": "GoPro AVC  "},
+                }
+            ],
+            "format": {
+                "duration": "30.0",
+                "tags": {"firmware": "HD9.01.01.72.00"},
+            },
+        }
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock:
+            mock.return_value = probe_data
+            metadata = detect_metadata(video_file)
+        assert metadata.device_model == "GoPro HERO 9"
+
+    def test_detect_metadata_dji(self, tmp_path: Path) -> None:
+        video_file = tmp_path / "DJI_20250118.MP4"
+        video_file.write_text("")
+        probe_data = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1920,
+                    "height": 1080,
+                    "pix_fmt": "yuv420p",
+                    "r_frame_rate": "30/1",
+                    "avg_frame_rate": "30/1",
+                    "duration": "20.0",
+                    "tags": {},
+                }
+            ],
+            "format": {
+                "duration": "20.0",
+                "tags": {"encoder": "DJI OsmoPocket3"},
+            },
+        }
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock:
+            mock.return_value = probe_data
+            metadata = detect_metadata(video_file)
+        assert metadata.device_model == "DJI OsmoPocket3"
+
+    def test_detect_metadata_nikon_no_model_tag(self, tmp_path: Path) -> None:
+        video_file = tmp_path / "DSC_4885.MOV"
+        video_file.write_text("")
+        probe_data = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 3840,
+                    "height": 2160,
+                    "pix_fmt": "yuv420p",
+                    "r_frame_rate": "60/1",
+                    "avg_frame_rate": "60/1",
+                    "duration": "45.0",
+                    "tags": {},
+                }
+            ],
+            "format": {
+                "duration": "45.0",
+                "tags": {"compatible_brands": "qt  niko"},
+            },
+        }
+        with patch("tubearchive.domain.media.detector._run_ffprobe") as mock:
+            mock.return_value = probe_data
+            metadata = detect_metadata(video_file)
+        assert metadata.device_model == "Nikon"

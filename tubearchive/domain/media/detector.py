@@ -434,7 +434,7 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
     is_portrait = is_rotated_vertical or (width < height)
 
     # 기기 모델 감지
-    device_model = probe_data.get("format", {}).get("tags", {}).get("com.apple.quicktime.model")
+    device_model = _extract_device_model(probe_data, video_path)
 
     # 위치 감지: ISO6709 / Lat/Lon 개별 필드
     location = _extract_location(probe_data)
@@ -479,6 +479,55 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
         location=location,
         has_audio=has_audio,
     )
+
+
+_GOPRO_FIRMWARE_RE = re.compile(r"^HD(\d+)\.", re.IGNORECASE)
+
+
+def _extract_device_model(probe_data: dict[str, Any], video_path: Path) -> str | None:
+    """다양한 카메라 제조사 태그에서 기기 모델을 추출한다.
+
+    우선순위:
+    1. ``com.apple.quicktime.model`` — iPhone / iPad
+    2. ``format.tags.encoder`` 가 "DJI"로 시작 — DJI 카메라
+    3. ``format.tags.firmware`` "HD{n}.*" 패턴 — GoPro HERO {n}
+    4. 비디오 스트림 ``handler_name`` 에 "gopro" 포함 — GoPro (모델 불명)
+    5. 파일명 "DSC_*.MOV/.MP4" — Nikon
+    """
+    format_tags = probe_data.get("format", {}).get("tags", {})
+
+    # 1) Apple QuickTime (iPhone, iPad)
+    apple_model = format_tags.get("com.apple.quicktime.model")
+    if isinstance(apple_model, str) and apple_model.strip():
+        return apple_model.strip()
+
+    # 2) DJI: format.tags.encoder starts with "DJI"
+    encoder = format_tags.get("encoder", "")
+    if isinstance(encoder, str) and encoder.upper().startswith("DJI"):
+        return encoder.strip()
+
+    # 3) GoPro: format.tags.firmware "HD{n}.x.x" → "GoPro HERO {n}"
+    firmware = format_tags.get("firmware", "")
+    if isinstance(firmware, str):
+        m = _GOPRO_FIRMWARE_RE.match(firmware)
+        if m:
+            return f"GoPro HERO {m.group(1)}"
+
+    # 4) GoPro: video stream handler_name contains "gopro"
+    for stream in probe_data.get("streams", []):
+        if stream.get("codec_type") != "video":
+            continue
+        handler = stream.get("tags", {}).get("handler_name", "")
+        if isinstance(handler, str) and "gopro" in handler.lower():
+            return "GoPro"
+
+    # 5) Nikon: filename pattern DSC_*.MOV / DSC_*.MP4
+    stem = video_path.stem.upper()
+    suffix = video_path.suffix.upper()
+    if stem.startswith("DSC_") and suffix in (".MOV", ".MP4"):
+        return "Nikon"
+
+    return None
 
 
 def _run_ffprobe(video_path: Path) -> dict[str, Any]:
