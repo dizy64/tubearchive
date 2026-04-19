@@ -11,7 +11,7 @@ import pytest
 
 from tubearchive.app.cli.main import ValidatedArgs
 from tubearchive.app.tui.bridge import _to_path_or_none, build_validated_args
-from tubearchive.app.tui.models import TuiOptionState, default_state
+from tubearchive.app.tui.models import TuiOptionState
 
 # ---------------------------------------------------------------------------
 # _to_path_or_none 헬퍼 테스트
@@ -43,7 +43,7 @@ def test_to_path_or_none_tilde() -> None:
 def test_build_with_defaults() -> None:
     """기본 TuiOptionState가 ValidatedArgs 기본값과 일치하는지 확인한다."""
     targets = [Path("/tmp/test.mp4")]
-    state = default_state()
+    state = TuiOptionState()
     result = build_validated_args(targets, state)
 
     assert isinstance(result, ValidatedArgs)
@@ -204,7 +204,7 @@ def test_build_empty_project() -> None:
 
 def test_build_empty_targets_raises() -> None:
     """targets가 비어있으면 ValueError를 발생시킨다."""
-    state = default_state()
+    state = TuiOptionState()
     with pytest.raises(ValueError, match="파일"):
         build_validated_args([], state)
 

@@ -11,6 +11,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Input, Label, Select, Static
 
+from tubearchive.app.queries.catalog import format_duration
 from tubearchive.infra.db import database_session
 
 _STATUS_OPTIONS: list[tuple[str, str]] = [
@@ -23,16 +24,6 @@ _STATUS_OPTIONS: list[tuple[str, str]] = [
 ]
 
 
-def _fmt_dur(seconds: float | None) -> str:
-    if seconds is None:
-        return "-"
-    m = int(seconds // 60)
-    s = int(seconds % 60)
-    if m >= 60:
-        return f"{m // 60}h{m % 60}m"
-    return f"{m}m{s:02d}s"
-
-
 class HistoryPane(Static):
     """영상 카탈로그 패널."""
 
@@ -40,7 +31,6 @@ class HistoryPane(Static):
         super().__init__()
         self._device_filter: str = ""
         self._status_filter: str = ""
-        self._search: str = ""
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -99,7 +89,9 @@ class HistoryPane(Static):
                 table.add_row(
                     item.creation_date,
                     item.device,
-                    _fmt_dur(item.duration_seconds),
+                    format_duration(item.duration_seconds)
+                    if item.duration_seconds is not None
+                    else "—",
                     item.status,
                     folder,
                 )

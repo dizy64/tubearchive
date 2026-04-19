@@ -36,44 +36,10 @@ class TubeArchiveApp(App[None]):
         text-style: bold;
         margin-bottom: 0;
     }
-    .stat-label {
-        color: $text-muted;
-        width: 24;
-    }
-    .stat-value {
-        color: $text;
-        text-style: bold;
-    }
     .placeholder {
         color: $text-muted;
         text-style: italic;
         margin: 2 4;
-    }
-    /* 프리셋 모달 */
-    #preset-dialog {
-        width: 60;
-        height: auto;
-        border: thick $accent;
-        background: $surface;
-        padding: 1 2;
-        align: center middle;
-    }
-    #preset-dialog Label {
-        margin-bottom: 1;
-    }
-    #preset-dialog Input {
-        margin-bottom: 1;
-    }
-    #preset-dialog ListView {
-        height: 8;
-        margin-bottom: 1;
-    }
-    #dialog-buttons {
-        height: 3;
-        align: right middle;
-    }
-    #dialog-buttons Button {
-        margin-left: 1;
     }
     """
 

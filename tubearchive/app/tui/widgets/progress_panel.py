@@ -13,11 +13,7 @@ from textual.widgets import Label, ProgressBar, RichLog, Static
 
 
 class ProgressPanel(Static):
-    """ffmpeg 진행률 바 + 실시간 로그 패널.
-
-    Attributes:
-        _running: 현재 파이프라인 실행 중 여부.
-    """
+    """ffmpeg 진행률 바 + 실시간 로그 패널."""
 
     DEFAULT_CSS = """
     ProgressPanel {
@@ -52,7 +48,6 @@ class ProgressPanel(Static):
 
     def __init__(self, id: str | None = None) -> None:  # noqa: A002
         super().__init__(id=id)
-        self._panel_active: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -60,7 +55,7 @@ class ProgressPanel(Static):
                 yield Label("준비 중...", id="progress-status")
                 yield Label("0%", id="progress-percent")
             yield ProgressBar(total=None, id="progress-bar", show_eta=False)
-            yield RichLog(id="progress-log", highlight=True, markup=True)
+            yield RichLog(id="progress-log", highlight=True, markup=True, max_lines=500)
 
     # ------------------------------------------------------------------
     # 공개 API (call_from_thread 경유 호출)
@@ -80,7 +75,6 @@ class ProgressPanel(Static):
 
     def start(self, label: str = "처리 중...") -> None:
         """실행 시작 상태로 초기화."""
-        self._panel_active = True
         self.set_status(label)
         bar = self.query_one("#progress-bar", ProgressBar)
         bar.update(total=None)  # indeterminate
@@ -89,7 +83,6 @@ class ProgressPanel(Static):
 
     def finish(self, output_path: str) -> None:
         """완료 상태로 갱신."""
-        self._panel_active = False
         bar = self.query_one("#progress-bar", ProgressBar)
         bar.update(total=100, progress=100.0)
         self.query_one("#progress-percent", Label).update("100%")
@@ -97,7 +90,6 @@ class ProgressPanel(Static):
 
     def error(self, message: str) -> None:
         """오류 상태로 갱신."""
-        self._panel_active = False
         bar = self.query_one("#progress-bar", ProgressBar)
         bar.update(total=100, progress=0.0)
         self.query_one("#progress-percent", Label).update("")

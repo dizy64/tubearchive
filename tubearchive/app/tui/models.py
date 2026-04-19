@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from tubearchive.config import AppConfig
@@ -117,6 +117,9 @@ class TuiOptionState:
 # ---------------------------------------------------------------------------
 
 
+WidgetKind = Literal["switch", "input", "select", "input_float", "input_int"]
+
+
 @dataclass(frozen=True)
 class OptionDef:
     """단일 옵션 정의."""
@@ -127,8 +130,8 @@ class OptionDef:
     label: str
     """화면에 표시할 라벨."""
 
-    widget: str
-    """위젯 종류: 'switch' | 'input' | 'select' | 'input_float' | 'input_int'."""
+    widget: WidgetKind
+    """위젯 종류."""
 
     choices: tuple[tuple[str, str], ...] = ()
     """Select 위젯용 (label, value) 목록."""
@@ -341,14 +344,6 @@ CATEGORY_DEFS: tuple[CategoryDef, ...] = (
     ),
 )
 
-# 노출할 필드 수 (watch/hooks 등 TUI에서 제외)
-EXPOSED_FIELD_COUNT = sum(len(c.options) for c in CATEGORY_DEFS)
-
-
-def default_state() -> TuiOptionState:
-    """기본값으로 초기화된 TuiOptionState를 반환한다."""
-    return TuiOptionState()
-
 
 def state_from_config(config: AppConfig) -> TuiOptionState:
     """환경변수와 AppConfig를 반영한 TuiOptionState를 반환한다.
@@ -411,20 +406,14 @@ def state_from_config(config: AppConfig) -> TuiOptionState:
     level = get_default_denoise_level()
     if level:
         state.denoise_level = level
-    elif config.general.denoise_level is not None:
-        state.denoise_level = config.general.denoise_level
 
     strength = get_default_stabilize_strength()
     if strength:
         state.stabilize_strength = strength
-    elif config.general.stabilize_strength is not None:
-        state.stabilize_strength = config.general.stabilize_strength
 
     crop = get_default_stabilize_crop()
     if crop:
         state.stabilize_crop = crop
-    elif config.general.stabilize_crop is not None:
-        state.stabilize_crop = config.general.stabilize_crop
 
     # --- Silence ---
     env_threshold = os.environ.get(ENV_SILENCE_THRESHOLD)
@@ -447,14 +436,10 @@ def state_from_config(config: AppConfig) -> TuiOptionState:
     sub_model = get_default_subtitle_model()
     if sub_model:
         state.subtitle_model = sub_model
-    elif config.general.subtitle_model is not None:
-        state.subtitle_model = config.general.subtitle_model
 
     sub_fmt = get_default_subtitle_format()
     if sub_fmt:
         state.subtitle_format = sub_fmt
-    elif config.general.subtitle_format is not None:
-        state.subtitle_format = config.general.subtitle_format
 
     if config.general.subtitle_burn is not None:
         state.subtitle_burn = config.general.subtitle_burn

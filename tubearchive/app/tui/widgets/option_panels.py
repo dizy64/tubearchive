@@ -21,7 +21,6 @@ from tubearchive.app.tui.models import (
     CATEGORY_DEFS,
     OptionDef,
     TuiOptionState,
-    default_state,
 )
 
 _OPT_PREFIX = "opt-"
@@ -137,7 +136,7 @@ class OptionsPane(Widget):
 
     def __init__(self, initial_state: TuiOptionState | None = None) -> None:
         super().__init__()
-        self._initial = initial_state or default_state()
+        self._initial = initial_state or TuiOptionState()
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -146,10 +145,8 @@ class OptionsPane(Widget):
                 yield Button("저장", id="preset-save", variant="default")
                 yield Button("불러오기", id="preset-load", variant="default")
             with ScrollableContainer(id="options-scroll"):
-                for i, category in enumerate(CATEGORY_DEFS):
-                    # General(첫 번째)만 기본 펼침, 나머지 접힘
-                    collapsed = i != 0
-                    with Collapsible(title=category.title, collapsed=collapsed):
+                for category in CATEGORY_DEFS:
+                    with Collapsible(title=category.title, collapsed=category.collapsed):
                         for opt in category.options:
                             yield _OptionRow(opt, self._initial)
 
@@ -160,7 +157,7 @@ class OptionsPane(Widget):
 
     def collect_state(self) -> TuiOptionState:
         """현재 위젯 값을 읽어 TuiOptionState를 반환한다."""
-        state = default_state()
+        state = TuiOptionState()
         for category in CATEGORY_DEFS:
             for opt in category.options:
                 wid = _field_id(opt.field)

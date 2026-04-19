@@ -9,16 +9,9 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import DataTable, Label, Static
 
+from tubearchive.app.queries.catalog import format_duration
 from tubearchive.infra.db import database_session
 from tubearchive.shared.progress import format_size
-
-
-def _fmt_dur(seconds: float) -> str:
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    if h:
-        return f"{h}h {m}m"
-    return f"{m}m"
 
 
 class ProjectsPane(Static):
@@ -64,7 +57,9 @@ class ProjectsPane(Static):
                     project.name,
                     date_range,
                     str(stats.total_count),
-                    _fmt_dur(stats.total_duration_seconds) if stats.total_duration_seconds else "-",
+                    format_duration(stats.total_duration_seconds)
+                    if stats.total_duration_seconds
+                    else "-",
                     format_size(stats.total_size_bytes) if stats.total_size_bytes else "-",
                     f"{stats.uploaded_count}/{stats.total_count}",
                 )

@@ -189,13 +189,6 @@ class PipelinePane(Widget):
         self.query_one("#pipeline-progress").display = True
         self.query_one("#run-button", Button).disabled = True
 
-    def _show_options_view(self) -> None:
-        """진행률 뷰 → 옵션 뷰로 복귀."""
-        self.query_one("#pipeline-progress").display = False
-        self.query_one("#pipeline-body").display = True
-        self._pipeline_active = False
-        self._refresh_run_button()
-
     def _launch_pipeline(self) -> None:
         """ValidatedArgs 빌드 → worker 실행."""
         from tubearchive.app.tui.bridge import build_validated_args
@@ -258,22 +251,22 @@ class PipelinePane(Widget):
     # 완료/오류 콜백 (call_from_thread 경유, メインスレッド)
     # ------------------------------------------------------------------
 
-    def _on_pipeline_done(self, output_path: Path) -> None:
-        panel = self.query_one(ProgressPanel)
-        output_str = str(output_path) if output_path != Path() else "(완료)"
-        panel.finish(output_str)
-        self.query_one("#pipeline-status", Label).update(f"완료: {output_str}")
-        # 옵션 뷰로 복귀하지 않고 진행률 패널 유지 (사용자가 결과 확인 가능)
+    def _reset_after_pipeline(self) -> None:
+        """파이프라인 완료/오류 후 공통 상태 초기화."""
         self._pipeline_active = False
         btn = self.query_one("#run-button", Button)
         btn.label = "다시 실행"
         btn.disabled = False
 
+    def _on_pipeline_done(self, output_path: Path) -> None:
+        panel = self.query_one(ProgressPanel)
+        output_str = str(output_path) if output_path != Path() else "(완료)"
+        panel.finish(output_str)
+        self.query_one("#pipeline-status", Label).update(f"완료: {output_str}")
+        self._reset_after_pipeline()
+
     def _on_pipeline_error(self, message: str) -> None:
         panel = self.query_one(ProgressPanel)
         panel.error(message)
         self.query_one("#pipeline-status", Label).update(f"[red]오류: {message}[/]")
-        self._pipeline_active = False
-        btn = self.query_one("#run-button", Button)
-        btn.label = "다시 실행"
-        btn.disabled = False
+        self._reset_after_pipeline()

@@ -9,20 +9,9 @@ from textual.app import ComposeResult
 from textual.containers import ScrollableContainer, Vertical
 from textual.widgets import Label, Static
 
+from tubearchive.app.queries.catalog import format_duration
 from tubearchive.infra.db import database_session
 from tubearchive.shared.progress import format_size
-
-
-def _fmt_dur(seconds: float) -> str:
-    """초를 'Xh Ym Zs' 형식으로 변환한다."""
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    if h:
-        return f"{h}h {m}m"
-    if m:
-        return f"{m}m {s}s"
-    return f"{s}s"
 
 
 class StatsPane(Static):
@@ -62,7 +51,7 @@ class StatsPane(Static):
         # 전체 요약
         lines.append("[bold $accent]── 전체 요약 ──[/]")
         lines.append(f"  등록 영상     {data.total_videos:,}개")
-        lines.append(f"  총 재생 시간  {_fmt_dur(data.total_duration)}")
+        lines.append(f"  총 재생 시간  {format_duration(data.total_duration)}")
         lines.append("")
 
         # 트랜스코딩
@@ -84,7 +73,7 @@ class StatsPane(Static):
         lines.append(f"  업로드   {mg.uploaded:,}")
         lines.append(f"  출력 크기  {format_size(mg.total_size_bytes)}")
         if mg.total_duration:
-            lines.append(f"  총 길이    {_fmt_dur(mg.total_duration)}")
+            lines.append(f"  총 길이    {format_duration(mg.total_duration)}")
         lines.append("")
 
         # 아카이브

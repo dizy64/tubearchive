@@ -8,7 +8,6 @@ import pytest
 
 from tubearchive.app.tui.models import (
     TuiOptionState,
-    default_state,
     list_presets,
     load_preset,
     save_preset,
@@ -40,7 +39,7 @@ def test_state_roundtrip() -> None:
 
 def test_state_from_dict_ignores_unknown_keys() -> None:
     """알 수 없는 키는 무시한다."""
-    d = state_to_dict(default_state())
+    d = state_to_dict(TuiOptionState())
     d["nonexistent_field"] = "should be ignored"
     state = state_from_dict(d)
     assert isinstance(state, TuiOptionState)
@@ -71,7 +70,7 @@ def test_save_and_load_preset(tmp_path: Path) -> None:
 def test_save_preset_creates_directory(tmp_path: Path) -> None:
     """프리셋 디렉토리가 없으면 자동 생성한다."""
     nested = tmp_path / "a" / "b" / "presets"
-    state = default_state()
+    state = TuiOptionState()
     path = save_preset("new", state, presets_dir=nested)
     assert nested.exists()
     assert path.exists()
@@ -91,9 +90,9 @@ def test_list_presets_multiple(tmp_path: Path) -> None:
     """저장된 프리셋 목록을 최신 순으로 반환한다."""
     import time
 
-    save_preset("첫 번째", default_state(), presets_dir=tmp_path)
+    save_preset("첫 번째", TuiOptionState(), presets_dir=tmp_path)
     time.sleep(0.01)
-    save_preset("두 번째", default_state(), presets_dir=tmp_path)
+    save_preset("두 번째", TuiOptionState(), presets_dir=tmp_path)
 
     items = list_presets(presets_dir=tmp_path)
     assert len(items) == 2
@@ -106,7 +105,7 @@ def test_list_presets_skips_corrupt_json(tmp_path: Path) -> None:
     """손상된 JSON 파일은 건너뛴다."""
     bad = tmp_path / "bad.json"
     bad.write_text("{invalid json", encoding="utf-8")
-    save_preset("good", default_state(), presets_dir=tmp_path)
+    save_preset("good", TuiOptionState(), presets_dir=tmp_path)
 
     items = list_presets(presets_dir=tmp_path)
     assert len(items) == 1
@@ -158,7 +157,7 @@ def test_state_from_config_defaults(_clean_env: None) -> None:
     apply_config_to_env(config)
     state = state_from_config(config)
 
-    expected = default_state()
+    expected = TuiOptionState()
     # normalize_audio 기본값은 get_default_normalize_audio()가 True를 반환
     assert state.normalize_audio is True
     assert state.stabilize == expected.stabilize
@@ -221,7 +220,7 @@ def test_state_from_config_none_fields_keep_defaults(_clean_env: None) -> None:
 
     assert state.stabilize is True
     # stabilize 외 나머지는 기본값
-    assert state.parallel == default_state().parallel
+    assert state.parallel == TuiOptionState().parallel
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +272,7 @@ def test_env_overrides_config_bgm_volume(monkeypatch: pytest.MonkeyPatch, _clean
 
 def test_watermark_text_default_empty() -> None:
     """기본 watermark_text는 빈 문자열이다."""
-    state = default_state()
+    state = TuiOptionState()
     assert state.watermark_text == ""
 
 
