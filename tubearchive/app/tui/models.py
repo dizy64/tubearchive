@@ -182,8 +182,8 @@ CATEGORY_DEFS: tuple[CategoryDef, ...] = (
     CategoryDef(
         title="Silence",
         options=(
-            OptionDef("trim_silence", "시작/끝 무음 제거", "switch"),
-            OptionDef("detect_silence", "무음 구간 감지만", "switch"),
+            OptionDef("trim_silence", "무음 구간 자동 제거", "switch"),
+            OptionDef("detect_silence", "무음 구간 표시만 (제거 안 함)", "switch"),
             OptionDef("silence_threshold", "무음 기준 (dB)", "input", hint="-30dB"),
             OptionDef("silence_min_duration", "최소 무음 길이 (초)", "input_float", hint="2.0"),
         ),
