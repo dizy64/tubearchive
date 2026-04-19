@@ -28,6 +28,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import uuid
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -219,9 +220,14 @@ def format_youtube_title(title: str) -> str:
 
 
 def get_temp_dir() -> Path:
-    """시스템 임시 디렉토리 내 tubearchive 폴더 반환."""
-    temp_base = Path(tempfile.gettempdir()) / "tubearchive"
-    temp_base.mkdir(exist_ok=True)
+    """실행별 고유 임시 디렉토리 생성 및 반환.
+
+    공유 디렉토리(/tmp/tubearchive/)를 사용하면 동시 실행 중
+    한 쪽이 cleanup할 때 나머지의 임시 파일도 삭제되는 문제가 발생한다.
+    UUID 서브디렉토리로 격리하여 각 실행이 독립적인 트랜잭션을 갖도록 한다.
+    """
+    temp_base = Path(tempfile.gettempdir()) / "tubearchive" / uuid.uuid4().hex[:8]
+    temp_base.mkdir(parents=True, exist_ok=True)
     return temp_base
 
 
