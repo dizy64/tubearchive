@@ -138,6 +138,11 @@ class PipelinePane(Static):
 
     def _on_target_count_changed(self, count: int) -> None:
         """FileBrowserPane.target_count 변경 시 실행 버튼 갱신."""
+        # DEBUG: watch 호출 확인용 — 추후 제거
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            self.query_one("#pipeline-status", Label).update(f"[DEBUG] watch fired: count={count}")
         self._refresh_run_button()
 
     # ------------------------------------------------------------------
@@ -169,17 +174,27 @@ class PipelinePane(Static):
     # ------------------------------------------------------------------
 
     def _refresh_run_button(self) -> None:
-        if self._running:
-            return
-        browser = self.query_one(FileBrowserPane)
-        has_target = bool(browser.get_selected_targets())
-        btn = self.query_one("#run-button", Button)
-        btn.disabled = not has_target
-        status = self.query_one("#pipeline-status", Label)
-        if has_target:
-            status.update(f"준비됨: {browser.get_selected_targets()[0]}")
-        else:
-            status.update("파일을 선택한 후 실행 버튼을 누르세요.")
+        try:
+            if self._running:
+                return
+            browser = self.query_one(FileBrowserPane)
+            targets = browser.get_selected_targets()
+            has_target = bool(targets)
+            btn = self.query_one("#run-button", Button)
+            btn.disabled = not has_target
+            status = self.query_one("#pipeline-status", Label)
+            if has_target:
+                status.update(f"준비됨 ({len(targets)}개): {targets[0]}")
+            else:
+                status.update("파일을 선택한 후 실행 버튼을 누르세요.")
+        except Exception as exc:
+            # DEBUG: 오류 확인용 — 추후 제거
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                self.query_one("#pipeline-status", Label).update(
+                    f"[red][ERR] {type(exc).__name__}: {exc}[/]"
+                )
 
     def _show_progress_view(self) -> None:
         """옵션 뷰 → 진행률 뷰로 전환."""
