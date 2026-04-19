@@ -8,12 +8,39 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.message import Message
 from textual.widgets import Button, DirectoryTree, Input, Label, Static
+
+logger = logging.getLogger(__name__)
+
+_LAST_DIR_FILE = Path("~/.tubearchive/.tui_last_dir").expanduser()
+
+
+def _load_last_dir() -> Path | None:
+    """마지막으로 사용한 디렉토리를 읽는다."""
+    try:
+        text = _LAST_DIR_FILE.read_text(encoding="utf-8").strip()
+        if text:
+            p = Path(text)
+            if p.is_dir():
+                return p
+    except Exception:  # noqa: S110
+        pass
+    return None
+
+
+def _save_last_dir(directory: Path) -> None:
+    """디렉토리 경로를 저장한다."""
+    try:
+        _LAST_DIR_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LAST_DIR_FILE.write_text(str(directory), encoding="utf-8")
+    except Exception:  # noqa: S110
+        pass
 
 
 class FileBrowserPane(Static):
@@ -82,7 +109,11 @@ class FileBrowserPane(Static):
             self._selected.append(initial_path)
 
     def compose(self) -> ComposeResult:
-        root = Path("/")
+        # initial_path > 마지막 사용 디렉토리 > / 순으로 트리 루트 결정
+        if self.initial_path and self.initial_path.exists():
+            root = self.initial_path if self.initial_path.is_dir() else self.initial_path.parent
+        else:
+            root = _load_last_dir() or Path("/")
         with Vertical():
             yield Label("[bold]대상 경로 선택[/]", classes="section-title")
             yield DirectoryTree(str(root), id="browser-tree")
@@ -144,6 +175,8 @@ class FileBrowserPane(Static):
             self._selected.append(path)
             self._rebuild_list()
             self._emit_change()
+            # 다음 실행 시 이 부근에서 트리가 시작되도록 저장
+            _save_last_dir(path.parent if path.is_file() else path)
 
     def _rebuild_list(self) -> None:
         """선택 목록 컨테이너를 현재 _selected로 다시 그린다."""
