@@ -33,15 +33,6 @@ class TubeArchiveApp(App[None]):
         text-style: bold;
         margin-bottom: 0;
     }
-    Collapsible {
-        margin: 0;
-        padding: 0;
-        border: none;
-    }
-    CollapsibleTitle {
-        padding: 0 1;
-        background: $surface;
-    }
     .stat-label {
         color: $text-muted;
         width: 24;

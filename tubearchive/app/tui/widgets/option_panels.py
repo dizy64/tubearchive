@@ -1,7 +1,8 @@
 """옵션 패널 위젯.
 
-카테고리별 ``Collapsible`` 섹션을 구성하고, 현재 위젯 값을 읽어
-``TuiOptionState`` 를 반환하는 ``collect_state()`` 를 제공한다.
+카테고리 타이틀 + 옵션 행이 연속으로 이어지는 평면 구조.
+Collapsible 대신 섹션 구분선 레이블을 사용해 빈 공간 없이 밀집 표시한다.
+현재 위젯 값은 ``collect_state()`` 로 수집하여 ``TuiOptionState`` 를 반환한다.
 """
 
 from __future__ import annotations
@@ -10,11 +11,10 @@ import contextlib
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.widgets import Collapsible, Input, Label, Select, Static, Switch
+from textual.widgets import Input, Label, Select, Static, Switch
 
 from tubearchive.app.tui.models import (
     CATEGORY_DEFS,
-    CategoryDef,
     OptionDef,
     TuiOptionState,
     default_state,
@@ -33,7 +33,7 @@ class _OptionRow(Horizontal):
     DEFAULT_CSS = """
     _OptionRow {
         height: auto;
-        margin-bottom: 0;
+        margin: 0;
         align: left middle;
     }
     _OptionRow Label {
@@ -84,23 +84,10 @@ class _OptionRow(Horizontal):
             )
 
 
-class _CategorySection(Collapsible):
-    """카테고리 하나를 감싸는 Collapsible."""
-
-    def __init__(self, category: CategoryDef, initial: TuiOptionState) -> None:
-        super().__init__(title=category.title, collapsed=category.collapsed)
-        self._category = category
-        self._initial = initial
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            for opt in self._category.options:
-                yield _OptionRow(opt, self._initial)
-
-
 class OptionsPane(Static):
     """전체 옵션 패널.
 
+    카테고리 타이틀(레이블)과 옵션 행이 빈 공간 없이 연속으로 표시된다.
     ``collect_state()`` 로 현재 위젯 값을 수집하여 ``TuiOptionState`` 를 반환한다.
     """
 
@@ -110,6 +97,14 @@ class OptionsPane(Static):
     }
     #options-scroll {
         height: 1fr;
+    }
+    .opt-section-title {
+        color: $accent;
+        text-style: bold;
+        background: $surface;
+        padding: 0 1;
+        margin-top: 1;
+        width: 1fr;
     }
     """
 
@@ -122,7 +117,12 @@ class OptionsPane(Static):
             yield Label("[bold]옵션[/]", classes="section-title")
             with ScrollableContainer(id="options-scroll"):
                 for category in CATEGORY_DEFS:
-                    yield _CategorySection(category, self._initial)
+                    yield Label(
+                        f"── {category.title} ──",
+                        classes="opt-section-title",
+                    )
+                    for opt in category.options:
+                        yield _OptionRow(opt, self._initial)
 
     def collect_state(self) -> TuiOptionState:
         """현재 위젯 값을 읽어 TuiOptionState를 반환한다."""
