@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Input, Label, Select, Static
@@ -58,7 +60,7 @@ class HistoryPane(Static):
 
     def on_mount(self) -> None:
         table = self.query_one("#history-table", DataTable)
-        table.add_columns("날짜", "기기", "길이", "상태", "경로")
+        table.add_columns("날짜", "기기", "길이", "상태", "폴더")
         self.load_data()
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -92,16 +94,14 @@ class HistoryPane(Static):
                 return
 
             for item in items:
-                # 경로를 짧게 표시
-                path_display = item.path
-                if len(path_display) > 50:
-                    path_display = "..." + path_display[-47:]
+                # 파일이 속한 상위 폴더명만 표시 (긴 경로 깨짐 방지)
+                folder = Path(item.path).parent.name if item.path else "-"
                 table.add_row(
                     item.creation_date,
                     item.device,
                     _fmt_dur(item.duration_seconds),
                     item.status,
-                    path_display,
+                    folder,
                 )
         except Exception as exc:
             table.clear()
