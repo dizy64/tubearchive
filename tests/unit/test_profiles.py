@@ -30,6 +30,8 @@ class TestEncodingProfile:
         assert "aac" in args
         assert "-b:a" in args
         assert "256k" in args
+        assert "-ar" in args
+        assert "48000" in args
 
     def test_to_ffmpeg_args_sdr_color(self) -> None:
         """SDR 프로파일 컬러 정보."""

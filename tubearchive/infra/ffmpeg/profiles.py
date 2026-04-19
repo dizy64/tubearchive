@@ -29,6 +29,7 @@ class EncodingProfile:
     pixel_format: str
     audio_codec: str
     audio_bitrate: str
+    audio_sample_rate: str = "48000"  # 출력 오디오 샘플레이트 고정 (loudnorm 96kHz 업샘플 방지)
     frame_rate: str = "30000/1001"  # 29.97fps (NTSC 표준, concat 호환성)
     color_primaries: str | None = None
     color_transfer: str | None = None
@@ -50,6 +51,8 @@ class EncodingProfile:
             self.audio_codec,
             "-b:a",
             self.audio_bitrate,
+            "-ar",
+            self.audio_sample_rate,
         ]
 
         if self.color_primaries:
