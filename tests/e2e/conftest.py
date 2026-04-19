@@ -57,6 +57,121 @@ def create_test_video(
     return path
 
 
+def create_test_video_with_sample_rate(
+    path: Path,
+    *,
+    duration: float = 3.0,
+    sample_rate: int = 48000,
+    codec: str = "libx264",
+) -> Path:
+    """지정 오디오 샘플레이트로 테스트 영상을 생성한다.
+
+    loudnorm 96kHz 업샘플링 재현 등 샘플레이트 불일치 시나리오 테스트용.
+
+    Args:
+        path: 출력 파일 경로
+        duration: 길이(초)
+        sample_rate: 오디오 샘플레이트(Hz)
+        codec: 비디오 코덱
+    """
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=duration={duration}:size=320x240:rate=30",
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=440:duration={duration}:sample_rate={sample_rate}",
+        "-c:v",
+        codec,
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        str(sample_rate),
+        str(path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {result.stderr}")
+    return path
+
+
+def create_audio_truncated_video(
+    path: Path,
+    *,
+    video_duration: float = 10.0,
+    audio_duration: float = 3.0,
+) -> Path:
+    """비디오보다 오디오가 훨씬 짧은 파일을 생성한다.
+
+    concat demuxer 오디오 누락 증상을 재현하기 위한 파일 생성용.
+    오디오/비디오 스트림 길이 차이 검증(_check_merged_durations) 테스트용.
+
+    Args:
+        path: 출력 파일 경로
+        video_duration: 비디오 길이(초)
+        audio_duration: 오디오 길이(초) — video_duration보다 짧아야 함
+    """
+    # 1단계: 긴 비디오-only 파일
+    video_only = path.with_suffix(".video_only.mp4")
+    audio_only = path.with_suffix(".audio_only.aac")
+    cmd_video = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=duration={video_duration}:size=320x240:rate=30",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(video_only),
+    ]
+    # 2단계: 짧은 오디오-only 파일
+    cmd_audio = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=440:duration={audio_duration}:sample_rate=48000",
+        "-c:a",
+        "aac",
+        str(audio_only),
+    ]
+    # 3단계: 두 스트림 합치기 (길이 불일치 그대로 유지)
+    cmd_merge = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(video_only),
+        "-i",
+        str(audio_only),
+        "-map",
+        "0:v",
+        "-map",
+        "1:a",
+        "-c",
+        "copy",
+        str(path),
+    ]
+    for cmd in (cmd_video, cmd_audio, cmd_merge):
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed: {result.stderr}")
+    video_only.unlink(missing_ok=True)
+    audio_only.unlink(missing_ok=True)
+    return path
+
+
 def create_silent_video(
     path: Path,
     *,
