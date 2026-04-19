@@ -15,7 +15,8 @@ from pathlib import Path
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Label, Static
+from textual.widget import Widget
+from textual.widgets import Button, Label
 
 from tubearchive.app.tui.models import TuiOptionState
 from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
@@ -71,7 +72,7 @@ class _TuiLogHandler(logging.Handler):
 # ---------------------------------------------------------------------------
 
 
-class PipelinePane(Static):
+class PipelinePane(Widget):
     """파이프라인 실행 패널.
 
     - 좌측(40%): 파일 브라우저 (DirectoryTree + 선택 경로)

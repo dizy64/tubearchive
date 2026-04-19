@@ -15,7 +15,8 @@ from pathlib import Path
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.reactive import reactive
-from textual.widgets import Button, DirectoryTree, Input, Label, Static
+from textual.widget import Widget
+from textual.widgets import Button, DirectoryTree, Input, Label
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ def _save_last_dir(directory: Path) -> None:
         pass
 
 
-class FileBrowserPane(Static):
+class FileBrowserPane(Widget):
     """디렉토리 트리 + 선택 목록 + 경로 직접 입력 패널.
 
     - DirectoryTree: 파일/디렉토리 탐색 (클릭 시 경로 입력창에 반영)

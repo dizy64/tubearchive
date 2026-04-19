@@ -14,7 +14,8 @@ import contextlib
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.message import Message
-from textual.widgets import Button, Collapsible, Input, Label, Select, Static, Switch
+from textual.widget import Widget
+from textual.widgets import Button, Collapsible, Input, Label, Select, Switch
 
 from tubearchive.app.tui.models import (
     CATEGORY_DEFS,
@@ -87,7 +88,7 @@ class _OptionRow(Horizontal):
             )
 
 
-class OptionsPane(Static):
+class OptionsPane(Widget):
     """전체 옵션 패널.
 
     카테고리별 Collapsible 섹션으로 구성된다.
