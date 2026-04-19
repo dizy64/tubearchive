@@ -10,11 +10,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.reactive import reactive
 from textual.widgets import Button, DirectoryTree, Input, Label, Static
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,11 @@ class FileBrowserPane(Static):
     - DirectoryTree: 파일/디렉토리 탐색 (클릭 시 경로 입력창에 반영)
     - 경로 입력창 + [추가] 버튼: 직접 입력 또는 트리에서 선택 후 추가
     - 선택 목록: 추가된 경로 표시, [x] 개별 제거, [전체 삭제] 일괄 제거
+
+    ``target_count`` reactive를 watch하면 선택 변경을 감지할 수 있다.
     """
+
+    target_count: reactive[int] = reactive(0)
 
     DEFAULT_CSS = """
     FileBrowserPane {
@@ -115,17 +119,13 @@ class FileBrowserPane(Static):
     }
     """
 
-    def __init__(
-        self,
-        initial_path: Path | None = None,
-        on_change: Callable[[], None] | None = None,
-    ) -> None:
+    def __init__(self, initial_path: Path | None = None) -> None:
         super().__init__()
         self.initial_path = initial_path
-        self._on_change = on_change
         self._selected: list[Path] = []
         if initial_path is not None:
             self._selected.append(initial_path)
+            self.target_count = 1
 
     def compose(self) -> ComposeResult:
         # 트리 루트는 항상 / (상위 탐색 보장)
@@ -234,13 +234,8 @@ class FileBrowserPane(Static):
         container.mount(*rows)
 
     def _notify_pipeline(self) -> None:
-        """PipelinePane의 실행 버튼 상태를 콜백으로 갱신한다.
-
-        call_later()로 현재 이벤트 처리가 끝난 뒤 호출하여
-        Textual이 UI 갱신을 올바르게 반영하도록 한다.
-        """
-        if self._on_change is not None:
-            self.app.call_later(self._on_change)
+        """reactive target_count를 갱신하여 부모가 watch로 감지한다."""
+        self.target_count = len(self._selected)
 
     # ------------------------------------------------------------------
     # 공개 API

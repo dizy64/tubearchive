@@ -121,10 +121,7 @@ class PipelinePane(Static):
     def compose(self) -> ComposeResult:
         with Vertical():
             with Horizontal(id="pipeline-body"):
-                yield FileBrowserPane(
-                    initial_path=self.initial_path,
-                    on_change=self._refresh_run_button,
-                )
+                yield FileBrowserPane(initial_path=self.initial_path)
                 yield OptionsPane(initial_state=self._initial_state)
             yield ProgressPanel(id="pipeline-progress")
             with Horizontal(id="pipeline-footer"):
@@ -135,6 +132,12 @@ class PipelinePane(Static):
                 )
 
     def on_mount(self) -> None:
+        browser = self.query_one(FileBrowserPane)
+        self.watch(browser, "target_count", self._on_target_count_changed)
+        self._refresh_run_button()
+
+    def _on_target_count_changed(self, count: int) -> None:
+        """FileBrowserPane.target_count 변경 시 실행 버튼 갱신."""
         self._refresh_run_button()
 
     # ------------------------------------------------------------------
