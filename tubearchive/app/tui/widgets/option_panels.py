@@ -33,7 +33,7 @@ class _OptionRow(Horizontal):
     DEFAULT_CSS = """
     _OptionRow {
         height: auto;
-        margin-bottom: 1;
+        margin-bottom: 0;
         align: left middle;
     }
     _OptionRow Label {

@@ -26,12 +26,21 @@ class TubeArchiveApp(App[None]):
         height: 1fr;
     }
     TabPane {
-        padding: 1 2;
+        padding: 0 1;
     }
     .section-title {
         color: $accent;
         text-style: bold;
-        margin-bottom: 1;
+        margin-bottom: 0;
+    }
+    Collapsible {
+        margin: 0;
+        padding: 0;
+        border: none;
+    }
+    CollapsibleTitle {
+        padding: 0 1;
+        background: $surface;
     }
     .stat-label {
         color: $text-muted;
