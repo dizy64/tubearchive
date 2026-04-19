@@ -12,7 +12,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from textual import on, work
+from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Label, Static
@@ -134,13 +134,8 @@ class PipelinePane(Static):
         self._refresh_run_button()
 
     # ------------------------------------------------------------------
-    # 파일 브라우저 이벤트
+    # 파일 브라우저: _notify_pipeline() 에서 직접 _refresh_run_button() 호출
     # ------------------------------------------------------------------
-
-    @on(FileBrowserPane.SelectionChanged)
-    def _handle_selection_changed(self) -> None:
-        """FileBrowserPane 선택 목록 변경 시 실행 버튼 갱신."""
-        self._refresh_run_button()
 
     # ------------------------------------------------------------------
     # 프리셋 메시지 이벤트
