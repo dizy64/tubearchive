@@ -987,6 +987,12 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--fix-device-models",
+        action="store_true",
+        help="DB에서 device_model이 비어 있는 영상을 재스캔하여 기기 모델을 채운다",
+    )
+
+    parser.add_argument(
         "--catalog",
         action="store_true",
         help="영상 메타데이터 전체 목록 조회 (기기별 그룹핑)",
@@ -4108,6 +4114,69 @@ def cmd_status_detail(job_id: int) -> None:
         print("=" * 60)
 
 
+def cmd_fix_device_models() -> None:
+    """``--fix-device-models`` 처리: device_model을 재스캔하여 채우거나 수정한다.
+
+    대상:
+    - device_model이 NULL/빈 문자열
+    - 파일명 휴리스틱으로 채운 ``"Nikon"`` (exiftool로 정확한 모델명으로 교체)
+    - 정규화 전 Apple 접두사 값 (``"Apple iPhone..."`` → ``"iPhone..."``)
+
+    파일이 존재하면 ffprobe + exiftool로 재감지하여 모델명을 갱신한다.
+    파일이 없거나 감지 실패 시 건너뛴다.
+    """
+    from tubearchive.domain.media.detector import _extract_device_model, _run_ffprobe
+    from tubearchive.infra.db.repository import VideoRepository
+
+    with database_session() as conn:
+        repo = VideoRepository(conn)
+        rows = repo.get_missing_device_model(include_heuristic=True)
+
+    total = len(rows)
+    if total == 0:
+        print("재감지가 필요한 영상이 없습니다.")
+        return
+
+    print(f"device_model 재스캔 대상 {total}개 처리 시작...")
+
+    updated = 0
+    skipped_missing = 0
+    skipped_no_model = 0
+
+    for row in rows:
+        video_id: int = row["id"]
+        path = Path(row["original_path"])
+
+        if not path.exists():
+            skipped_missing += 1
+            logger.debug("파일 없음, 건너뜀: %s", path)
+            continue
+
+        try:
+            probe_data = _run_ffprobe(path)
+            device_model = _extract_device_model(probe_data, path)
+        except Exception as exc:
+            logger.debug("ffprobe 실패 (%s): %s", path.name, exc)
+            skipped_no_model += 1
+            continue
+
+        if not device_model:
+            skipped_no_model += 1
+            logger.debug("모델 감지 불가: %s", path.name)
+            continue
+
+        with database_session() as conn:
+            VideoRepository(conn).update_device_model(video_id, device_model)
+        updated += 1
+        logger.info("갱신: %s → %s", path.name, device_model)
+
+    print(
+        f"완료: {updated}개 갱신"
+        f", {skipped_missing}개 파일 없음"
+        f", {skipped_no_model}개 모델 감지 불가"
+    )
+
+
 def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     """실행 계획만 출력하고 실제 트랜스코딩은 수행하지 않는다.
 
@@ -4606,6 +4675,11 @@ def main() -> None:
         # --reset-upload 옵션 처리 (업로드 기록 초기화)
         if args.reset_upload is not None:
             cmd_reset_upload(args.reset_upload)
+            return
+
+        # --fix-device-models 옵션 처리 (device_model 소급 수정)
+        if args.fix_device_models:
+            cmd_fix_device_models()
             return
 
         # --project-list 옵션 처리 (프로젝트 목록 조회)

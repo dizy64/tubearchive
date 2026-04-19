@@ -148,6 +148,37 @@ class VideoRepository:
             "devices": [(r["device"], int(r["cnt"])) for r in device_rows],
         }
 
+    def get_missing_device_model(self, include_heuristic: bool = False) -> list[sqlite3.Row]:
+        """device_model이 비어 있거나 재감지가 필요한 영상 목록을 반환한다.
+
+        Args:
+            include_heuristic: True이면 파일명 휴리스틱으로 채운 값(``"Nikon"``)과
+                정규화 전 Apple 접두사 값(``"Apple iPhone..."``)도 포함한다.
+        """
+        if include_heuristic:
+            cursor = self.conn.execute(
+                "SELECT id, original_path FROM videos"
+                " WHERE device_model IS NULL OR device_model = ''"
+                "    OR device_model = 'Nikon'"
+                "    OR device_model LIKE 'Apple iPhone%'"
+                " ORDER BY id"
+            )
+        else:
+            cursor = self.conn.execute(
+                "SELECT id, original_path FROM videos"
+                " WHERE device_model IS NULL OR device_model = ''"
+                " ORDER BY id"
+            )
+        return cursor.fetchall()
+
+    def update_device_model(self, video_id: int, device_model: str) -> None:
+        """영상의 device_model을 갱신한다."""
+        self.conn.execute(
+            "UPDATE videos SET device_model = ? WHERE id = ?",
+            (device_model, video_id),
+        )
+        self.conn.commit()
+
     def delete_by_ids(self, video_ids: list[int]) -> int:
         """여러 영상을 ID 목록으로 일괄 삭제한다.
 
