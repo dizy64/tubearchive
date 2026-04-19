@@ -117,7 +117,7 @@ class PipelinePane(Widget):
         super().__init__()
         self.initial_path = initial_path
         self._initial_state = initial_state
-        self._running: bool = False
+        self._pipeline_active: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -170,22 +170,18 @@ class PipelinePane(Widget):
     # ------------------------------------------------------------------
 
     def _refresh_run_button(self) -> None:
-        try:
-            if self._running:
-                return
-            browser = self.query_one(FileBrowserPane)
-            targets = browser.get_selected_targets()
-            has_target = bool(targets)
-            btn = self.query_one("#run-button", Button)
-            btn.disabled = not has_target
-            status = self.query_one("#pipeline-status", Label)
-            # DEBUG: disabled 상태 확인 — 추후 제거
-            status.update(f"targets={len(targets)}, disabled={btn.disabled}, has={has_target}")
-        except Exception as exc:
-            import contextlib
-
-            with contextlib.suppress(Exception):
-                self.query_one("#pipeline-status", Label).update(f"ERR {type(exc).__name__} {exc}")
+        if self._pipeline_active:
+            return
+        browser = self.query_one(FileBrowserPane)
+        targets = browser.get_selected_targets()
+        has_target = bool(targets)
+        btn = self.query_one("#run-button", Button)
+        btn.disabled = not has_target
+        status = self.query_one("#pipeline-status", Label)
+        if has_target:
+            status.update(f"준비됨 ({len(targets)}개): {targets[0]}")
+        else:
+            status.update("파일을 선택한 후 실행 버튼을 누르세요.")
 
     def _show_progress_view(self) -> None:
         """옵션 뷰 → 진행률 뷰로 전환."""
@@ -197,7 +193,7 @@ class PipelinePane(Widget):
         """진행률 뷰 → 옵션 뷰로 복귀."""
         self.query_one("#pipeline-progress").display = False
         self.query_one("#pipeline-body").display = True
-        self._running = False
+        self._pipeline_active = False
         self._refresh_run_button()
 
     def _launch_pipeline(self) -> None:
@@ -215,7 +211,7 @@ class PipelinePane(Widget):
             self.query_one("#pipeline-status", Label).update(f"[red]{exc}[/]")
             return
 
-        self._running = True
+        self._pipeline_active = True
         self._show_progress_view()
 
         target_label = targets[0].name if targets else "?"
@@ -265,7 +261,7 @@ class PipelinePane(Widget):
         panel.finish(output_str)
         self.query_one("#pipeline-status", Label).update(f"완료: {output_str}")
         # 옵션 뷰로 복귀하지 않고 진행률 패널 유지 (사용자가 결과 확인 가능)
-        self._running = False
+        self._pipeline_active = False
         btn = self.query_one("#run-button", Button)
         btn.label = "다시 실행"
         btn.disabled = False
@@ -274,7 +270,7 @@ class PipelinePane(Widget):
         panel = self.query_one(ProgressPanel)
         panel.error(message)
         self.query_one("#pipeline-status", Label).update(f"[red]오류: {message}[/]")
-        self._running = False
+        self._pipeline_active = False
         btn = self.query_one("#run-button", Button)
         btn.label = "다시 실행"
         btn.disabled = False
