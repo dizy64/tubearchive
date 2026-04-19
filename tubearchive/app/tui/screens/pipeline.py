@@ -88,6 +88,7 @@ class PipelinePane(Static):
     }
     #pipeline-body {
         height: 1fr;
+        overflow: hidden;
     }
     #pipeline-progress {
         height: 1fr;
@@ -120,7 +121,10 @@ class PipelinePane(Static):
     def compose(self) -> ComposeResult:
         with Vertical():
             with Horizontal(id="pipeline-body"):
-                yield FileBrowserPane(initial_path=self.initial_path)
+                yield FileBrowserPane(
+                    initial_path=self.initial_path,
+                    on_change=self._refresh_run_button,
+                )
                 yield OptionsPane(initial_state=self._initial_state)
             yield ProgressPanel(id="pipeline-progress")
             with Horizontal(id="pipeline-footer"):
@@ -132,10 +136,6 @@ class PipelinePane(Static):
 
     def on_mount(self) -> None:
         self._refresh_run_button()
-
-    # ------------------------------------------------------------------
-    # 파일 브라우저: _notify_pipeline() 에서 직접 _refresh_run_button() 호출
-    # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
     # 프리셋 메시지 이벤트

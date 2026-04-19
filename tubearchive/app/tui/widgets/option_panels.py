@@ -107,9 +107,11 @@ class OptionsPane(Static):
     DEFAULT_CSS = """
     OptionsPane {
         width: 1fr;
+        overflow: hidden;
     }
     #options-scroll {
         height: 1fr;
+        overflow-y: auto;
     }
     #preset-bar {
         height: 3;

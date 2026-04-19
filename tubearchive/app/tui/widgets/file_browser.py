@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from textual.app import ComposeResult
@@ -54,8 +55,11 @@ class FileBrowserPane(Static):
     DEFAULT_CSS = """
     FileBrowserPane {
         width: 40%;
+        min-width: 40;
+        max-width: 50%;
         border-right: solid $accent;
         padding: 0 1;
+        overflow: hidden;
     }
     #browser-tree {
         height: 1fr;
@@ -106,9 +110,14 @@ class FileBrowserPane(Static):
     }
     """
 
-    def __init__(self, initial_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        initial_path: Path | None = None,
+        on_change: Callable[[], None] | None = None,
+    ) -> None:
         super().__init__()
         self.initial_path = initial_path
+        self._on_change = on_change
         self._selected: list[Path] = []
         if initial_path is not None:
             self._selected.append(initial_path)
@@ -220,11 +229,9 @@ class FileBrowserPane(Static):
         container.mount(*rows)
 
     def _notify_pipeline(self) -> None:
-        """부모 PipelinePane의 실행 버튼 상태를 직접 갱신한다."""
-        for ancestor in self.ancestors_with_self:
-            if hasattr(ancestor, "_refresh_run_button") and ancestor is not self:
-                ancestor._refresh_run_button()
-                break
+        """PipelinePane의 실행 버튼 상태를 콜백으로 갱신한다."""
+        if self._on_change is not None:
+            self._on_change()
 
     # ------------------------------------------------------------------
     # 공개 API
