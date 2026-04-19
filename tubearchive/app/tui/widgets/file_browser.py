@@ -114,17 +114,21 @@ class FileBrowserPane(Static):
             self._selected.append(initial_path)
 
     def compose(self) -> ComposeResult:
-        # initial_path > 마지막 사용 디렉토리 > / 순으로 트리 루트 결정
-        if self.initial_path and self.initial_path.exists():
-            root = self.initial_path if self.initial_path.is_dir() else self.initial_path.parent
+        # 트리 루트는 항상 / (상위 탐색 보장)
+        # 마지막 사용 디렉토리는 입력 필드 기본값으로만 사용
+        initial_input = ""
+        if self.initial_path:
+            initial_input = str(self.initial_path)
         else:
-            root = _load_last_dir() or Path("/")
+            last_dir = _load_last_dir()
+            if last_dir:
+                initial_input = str(last_dir)
         with Vertical():
             yield Label("[bold]대상 경로 선택[/]", classes="section-title")
-            yield DirectoryTree(str(root), id="browser-tree")
+            yield DirectoryTree(str(Path("/")), id="browser-tree")
             with Horizontal(id="path-input-row"):
                 yield Input(
-                    value=str(self.initial_path) if self.initial_path else "",
+                    value=initial_input,
                     placeholder="/Volumes/... 또는 ~/Videos/",
                     id="path-input",
                 )
@@ -143,11 +147,9 @@ class FileBrowserPane(Static):
 
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         self.query_one("#path-input", Input).value = str(event.path)
-        event.stop()
 
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
         self.query_one("#path-input", Input).value = str(event.path)
-        event.stop()
 
     # ------------------------------------------------------------------
     # 추가 / 제거
