@@ -175,6 +175,77 @@ class TestTranscoderLoudnorm:
         assert loudnorm_arg is not None
         assert loudnorm_arg.input_i == pytest.approx(-24.5)
 
+    def test_denoise_with_normalize_passes_denoise_as_pre_filter(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+        loudnorm_stderr: str,
+    ) -> None:
+        """denoise + normalize_audio 동시 사용 시 loudnorm 1st pass에 denoise 필터가 포함된다.
+
+        loudnorm 1st pass는 2nd pass의 실제 입력(denoise 처리 후)과 동일한 오디오를
+        측정해야 측정값과 입력이 일치한다. 불일치 시 오디오 손실이 발생한다 (issue #66).
+        """
+        mock_metadata.has_audio = True
+        with (
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch("tubearchive.domain.media.transcoder.create_combined_filter") as mock_filter,
+        ):
+            mock_filter.return_value = ("scale=3840:2160", "afade=t=in:st=0:d=0.5")
+            mock_transcoder.executor.run.return_value = None
+            mock_transcoder.executor.run_analysis.return_value = loudnorm_stderr
+            mock_transcoder.executor.build_loudness_analysis_command.return_value = ["ffmpeg"]
+            with contextlib.suppress(Exception):
+                mock_transcoder.transcode_video(
+                    video_file,
+                    normalize_audio=True,
+                    denoise=True,
+                    denoise_level="medium",
+                )
+
+        build_call = mock_transcoder.executor.build_loudness_analysis_command.call_args
+        assert build_call is not None
+        audio_filter = build_call.kwargs.get("audio_filter") or build_call.args[1]
+        # denoise 필터(afftdn)가 loudnorm 분석 필터 앞에 포함되어야 한다
+        assert "afftdn" in audio_filter
+        assert "loudnorm" in audio_filter
+        assert audio_filter.index("afftdn") < audio_filter.index("loudnorm")
+
+    def test_normalize_only_no_denoise_pre_filter(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+        loudnorm_stderr: str,
+    ) -> None:
+        """denoise=False이면 loudnorm 1st pass에 afftdn이 포함되지 않는다."""
+        mock_metadata.has_audio = True
+        with (
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch("tubearchive.domain.media.transcoder.create_combined_filter") as mock_filter,
+        ):
+            mock_filter.return_value = ("scale=3840:2160", "afade=t=in:st=0:d=0.5")
+            mock_transcoder.executor.run.return_value = None
+            mock_transcoder.executor.run_analysis.return_value = loudnorm_stderr
+            mock_transcoder.executor.build_loudness_analysis_command.return_value = ["ffmpeg"]
+            with contextlib.suppress(Exception):
+                mock_transcoder.transcode_video(
+                    video_file,
+                    normalize_audio=True,
+                    denoise=False,
+                )
+
+        build_call = mock_transcoder.executor.build_loudness_analysis_command.call_args
+        assert build_call is not None
+        audio_filter = build_call.kwargs.get("audio_filter") or build_call.args[1]
+        assert "afftdn" not in audio_filter
+        assert "loudnorm" in audio_filter
+
 
 class TestTranscoderVidstab:
     """Transcoder의 vidstab 2-pass 통합 테스트."""
