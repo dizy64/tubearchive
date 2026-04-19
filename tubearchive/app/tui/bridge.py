@@ -87,6 +87,7 @@ def build_validated_args(
         lut_before_hdr=state.lut_before_hdr,
         # Watermark
         watermark=state.watermark,
+        watermark_text=state.watermark_text or None,
         watermark_pos=state.watermark_pos,
         watermark_size=state.watermark_size,
         watermark_color=state.watermark_color,

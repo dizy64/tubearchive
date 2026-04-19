@@ -308,6 +308,7 @@ class ValidatedArgs:
     template_intro: Path | None = None
     template_outro: Path | None = None
     watermark: bool = False
+    watermark_text: str | None = None
     watermark_pos: str = "bottom-right"
     watermark_size: int = 48
     watermark_color: str = "white"
@@ -2204,7 +2205,10 @@ def _transcode_single(
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
         metadata = detect_metadata(video_file.path)
-        watermark_text = _make_watermark_text(video_file, metadata) if opts.watermark else None
+        if opts.watermark:
+            watermark_text = opts.watermark_text or _make_watermark_text(video_file, metadata)
+        else:
+            watermark_text = None
 
         output_path, video_id, silence_segments = transcoder.transcode_video(
             video_file,
@@ -2339,7 +2343,10 @@ def _transcode_sequential(
             fade_out = fade_config.fade_out if fade_config else None
 
             metadata = detect_metadata(video_file.path)
-            watermark_text = _make_watermark_text(video_file, metadata) if opts.watermark else None
+            if opts.watermark:
+                watermark_text = opts.watermark_text or _make_watermark_text(video_file, metadata)
+            else:
+                watermark_text = None
             output_path, video_id, silence_segments = transcoder.transcode_video(
                 video_file,
                 metadata=metadata,
@@ -2638,6 +2645,7 @@ def run_pipeline(
         lut_before_hdr=validated_args.lut_before_hdr,
         device_luts=validated_args.device_luts,
         watermark=validated_args.watermark,
+        watermark_text=validated_args.watermark_text or None,
         watermark_pos=validated_args.watermark_pos,
         watermark_size=validated_args.watermark_size,
         watermark_color=validated_args.watermark_color,

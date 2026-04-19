@@ -17,6 +17,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Label, Static
 
+from tubearchive.app.tui.models import TuiOptionState
 from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
 from tubearchive.app.tui.widgets.option_panels import OptionsPane
 from tubearchive.app.tui.widgets.progress_panel import ProgressPanel
@@ -106,16 +107,21 @@ class PipelinePane(Static):
     }
     """
 
-    def __init__(self, initial_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        initial_path: Path | None = None,
+        initial_state: TuiOptionState | None = None,
+    ) -> None:
         super().__init__()
         self.initial_path = initial_path
+        self._initial_state = initial_state
         self._running: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
             with Horizontal(id="pipeline-body"):
                 yield FileBrowserPane(initial_path=self.initial_path)
-                yield OptionsPane()
+                yield OptionsPane(initial_state=self._initial_state)
             yield ProgressPanel(id="pipeline-progress")
             with Horizontal(id="pipeline-footer"):
                 yield Button("실행", id="run-button", variant="primary", disabled=True)
@@ -128,14 +134,35 @@ class PipelinePane(Static):
         self._refresh_run_button()
 
     # ------------------------------------------------------------------
-    # 디렉토리 트리 이벤트
+    # 파일 브라우저 이벤트
     # ------------------------------------------------------------------
 
-    def on_directory_tree_file_selected(self) -> None:
+    def on_file_browser_pane_selection_changed(self) -> None:
+        """FileBrowserPane 선택 목록 변경 시 실행 버튼 갱신."""
         self._refresh_run_button()
 
+    def on_directory_tree_file_selected(self) -> None:
+        # 트리 클릭은 입력창 갱신만 하고 선택 변경은 추가 버튼 후에 처리됨
+        pass
+
     def on_directory_tree_directory_selected(self) -> None:
-        self._refresh_run_button()
+        pass
+
+    # ------------------------------------------------------------------
+    # 프리셋 메시지 이벤트
+    # ------------------------------------------------------------------
+
+    def on_options_pane_preset_action(self, event: OptionsPane.PresetAction) -> None:
+        """OptionsPane 프리셋 버튼 → 앱 레벨 액션으로 위임한다."""
+        from tubearchive.app.tui.app import TubeArchiveApp
+
+        app = self.app
+        if not isinstance(app, TubeArchiveApp):
+            return
+        if event.action == "preset-save":
+            app.action_save_preset()
+        elif event.action == "preset-load":
+            app.action_load_preset()
 
     # ------------------------------------------------------------------
     # 버튼 이벤트

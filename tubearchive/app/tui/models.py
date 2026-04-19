@@ -6,8 +6,16 @@ TUI 위젯 상태를 담는 가변 데이터클래스와 카테고리 정의.
 
 from __future__ import annotations
 
+import dataclasses
+import json
+import re
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tubearchive.config import AppConfig
 
 # ---------------------------------------------------------------------------
 # 옵션 상태 데이터클래스
@@ -58,6 +66,7 @@ class TuiOptionState:
 
     # Watermark
     watermark: bool = False
+    watermark_text: str = ""
     watermark_pos: str = "bottom-right"
     watermark_size: int = 48
     watermark_color: str = "white"
@@ -222,6 +231,12 @@ CATEGORY_DEFS: tuple[CategoryDef, ...] = (
                     ("중앙", "center"),
                 ),
             ),
+            OptionDef(
+                "watermark_text",
+                "워터마크 텍스트",
+                "input",
+                hint="비우면 자동 생성 (촬영일|위치)",
+            ),
             OptionDef("watermark_size", "크기 (pt)", "input_int", hint="48"),
             OptionDef("watermark_color", "색상", "input", hint="white"),
             OptionDef("watermark_alpha", "투명도 (0.0~1.0)", "input_float", hint="0.85"),
@@ -335,8 +350,120 @@ def default_state() -> TuiOptionState:
     return TuiOptionState()
 
 
+def state_from_config(config: AppConfig) -> TuiOptionState:
+    """AppConfig의 값으로 초기화된 TuiOptionState를 반환한다.
+
+    None 필드는 TuiOptionState 기본값을 유지한다.
+    """
+    g = config.general
+    b = config.bgm
+    cg = config.color_grading
+
+    state = TuiOptionState()
+
+    if g.output_dir is not None:
+        state.output_dir = g.output_dir
+    if g.parallel is not None:
+        state.parallel = g.parallel
+    if g.denoise is not None:
+        state.denoise = g.denoise
+    if g.denoise_level is not None:
+        state.denoise_level = g.denoise_level
+    if g.normalize_audio is not None:
+        state.normalize_audio = g.normalize_audio
+    if g.stabilize is not None:
+        state.stabilize = g.stabilize
+    if g.stabilize_strength is not None:
+        state.stabilize_strength = g.stabilize_strength
+    if g.stabilize_crop is not None:
+        state.stabilize_crop = g.stabilize_crop
+    if g.group_sequences is not None:
+        state.group_sequences = g.group_sequences
+    if g.fade_duration is not None:
+        state.fade_duration = g.fade_duration
+    if g.trim_silence is not None:
+        state.trim_silence = g.trim_silence
+    if g.silence_threshold is not None:
+        state.silence_threshold = g.silence_threshold
+    if g.silence_min_duration is not None:
+        state.silence_min_duration = g.silence_min_duration
+    if g.subtitle_model is not None:
+        state.subtitle_model = g.subtitle_model
+    if g.subtitle_format is not None:
+        state.subtitle_format = g.subtitle_format
+    if g.subtitle_burn is not None:
+        state.subtitle_burn = g.subtitle_burn
+
+    if b.bgm_path is not None:
+        state.bgm_path = b.bgm_path
+    if b.bgm_volume is not None:
+        state.bgm_volume = b.bgm_volume
+    if b.bgm_loop is not None:
+        state.bgm_loop = b.bgm_loop
+
+    if cg.auto_lut is not None:
+        state.auto_lut = cg.auto_lut
+
+    return state
+
+
 def state_to_dict(state: TuiOptionState) -> dict[str, Any]:
     """TuiOptionState를 필드명→값 딕셔너리로 변환한다."""
-    import dataclasses
-
     return {f.name: getattr(state, f.name) for f in dataclasses.fields(state)}
+
+
+def state_from_dict(d: dict[str, Any]) -> TuiOptionState:
+    """딕셔너리에서 TuiOptionState를 복원한다. 알 수 없는 키는 무시한다."""
+    known = {f.name for f in dataclasses.fields(TuiOptionState)}
+    kwargs = {k: v for k, v in d.items() if k in known}
+    return TuiOptionState(**kwargs)
+
+
+# ---------------------------------------------------------------------------
+# 프리셋 저장/불러오기
+# ---------------------------------------------------------------------------
+
+_PRESETS_DIR = Path("~/.tubearchive/presets").expanduser()
+_PRESET_NAME_RE = re.compile(r"[^\w가-힣\- ]+")
+
+
+def _preset_path(name: str) -> Path:
+    safe = _PRESET_NAME_RE.sub("_", name).strip("_").strip()
+    if not safe:
+        safe = "preset"
+    return _PRESETS_DIR / f"{safe}.json"
+
+
+def save_preset(name: str, state: TuiOptionState, presets_dir: Path | None = None) -> Path:
+    """TuiOptionState를 프리셋 JSON 파일로 저장한다."""
+    root = presets_dir or _PRESETS_DIR
+    root.mkdir(parents=True, exist_ok=True)
+    path = _preset_path(name) if presets_dir is None else root / f"{name}.json"
+    payload = {
+        "name": name,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "options": state_to_dict(state),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def load_preset(path: Path) -> TuiOptionState:
+    """프리셋 JSON 파일에서 TuiOptionState를 복원한다."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return state_from_dict(payload["options"])
+
+
+def list_presets(presets_dir: Path | None = None) -> list[tuple[str, Path]]:
+    """(이름, 경로) 목록을 최근 저장 순으로 반환한다."""
+    root = presets_dir or _PRESETS_DIR
+    if not root.exists():
+        return []
+    items: list[tuple[str, Path]] = []
+    for f in sorted(root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            items.append((data.get("name", f.stem), f))
+        except Exception:  # noqa: S112
+            continue
+    return items
