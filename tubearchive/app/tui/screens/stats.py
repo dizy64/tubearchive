@@ -42,13 +42,13 @@ class StatsPane(Static):
 
             with database_session() as conn:
                 data = fetch_stats(conn)
-            self._render(data)
+            self._render_stats(data)
         except Exception as exc:
             container = self.query_one("#stats-content", Vertical)
             container.remove_children()
             container.mount(Label(f"[red]데이터 로드 실패: {exc}[/]"))
 
-    def _render(self, data: object) -> None:  # type: ignore[override]
+    def _render_stats(self, data: object) -> None:
         from tubearchive.app.queries.stats import StatsData
 
         if not isinstance(data, StatsData):

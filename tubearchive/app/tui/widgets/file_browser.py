@@ -46,9 +46,9 @@ class FileBrowserPane(Static):
         self._selected_path: Path | None = initial_path
 
     def compose(self) -> ComposeResult:
-        root = self._selected_path or Path.home()
-        if root.is_file():
-            root = root.parent
+        # 루트를 / 로 시작해 외장하드(/Volumes) 등 어디든 탐색 가능하게 한다.
+        # initial_path가 있으면 해당 파일의 부모 디렉토리를 초기 선택 경로로 유지.
+        root = Path("/")
         with Vertical():
             yield Label("[bold]대상 경로 선택[/]", classes="section-title")
             yield DirectoryTree(str(root), id="browser-tree")
