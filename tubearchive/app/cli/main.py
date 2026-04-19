@@ -18,6 +18,7 @@
 """
 
 import argparse
+import fcntl
 import json
 import logging
 import os
@@ -2450,6 +2451,20 @@ def _resolve_output_path(validated_args: ValidatedArgs) -> Path:
     return output_dir / output_filename
 
 
+def _is_file_in_use(path: Path) -> bool:
+    """파일이 다른 프로세스에 의해 사용 중인지 확인한다 (비차단).
+
+    배타적 락(LOCK_EX | LOCK_NB) 획득을 시도하여 다른 프로세스가
+    파일을 열고 있는지 감지한다. 락 획득 실패 시 사용 중으로 판단.
+    """
+    try:
+        with path.open("r+b") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return False
+    except OSError:
+        return True
+
+
 def _cleanup_temp(
     temp_dir: Path,
     results: list[TranscodeResult],
@@ -2460,8 +2475,11 @@ def _cleanup_temp(
     logger.info("Cleaning up temporary files...")
     for r in results:
         if r.output_path.exists() and r.output_path != final_path:
-            r.output_path.unlink()
-            logger.debug(f"  Removed: {r.output_path}")
+            if _is_file_in_use(r.output_path):
+                logger.warning(f"  Skipping (in use by another process): {r.output_path}")
+            else:
+                r.output_path.unlink()
+                logger.debug(f"  Removed: {r.output_path}")
 
     # DB 상태 업데이트: completed → merged
     _mark_transcoding_jobs_merged(video_ids)

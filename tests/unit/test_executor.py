@@ -10,6 +10,7 @@ from tubearchive.infra.ffmpeg.executor import (
     FFmpegExecutor,
     parse_progress_line,
 )
+from tubearchive.infra.ffmpeg.profiles import PROFILE_SDR
 
 
 class TestParseProgressLine:
@@ -504,3 +505,69 @@ class TestFFmpegErrorStr:
         assert "line 10" in result
         # 처음 10줄은 포함되지 않아야 함
         assert "line 9" not in result
+
+
+class TestSampleRateInTranscodeCommand:
+    """트랜스코딩 명령의 오디오 샘플레이트 고정 회귀 테스트.
+
+    loudnorm 2-pass 처리 시 FFmpeg가 내부적으로 96000 Hz로 업샘플링하는 경우가 있다.
+    -ar 48000을 명시적으로 지정하지 않으면 concat demuxer가 샘플레이트 불일치 파일의
+    오디오를 무시하여 누락되는 버그가 재발할 수 있다.
+    """
+
+    @pytest.fixture
+    def executor(self) -> FFmpegExecutor:
+        return FFmpegExecutor()
+
+    def test_transcode_command_includes_ar_48000(self, executor: FFmpegExecutor) -> None:
+        """-ar 48000이 트랜스코딩 명령에 포함되어야 한다."""
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+        )
+
+        assert "-ar" in cmd
+        ar_idx = cmd.index("-ar")
+        assert cmd[ar_idx + 1] == "48000"
+
+    def test_transcode_command_ar_value_from_profile(self, executor: FFmpegExecutor) -> None:
+        """프로파일의 audio_sample_rate 값이 -ar에 반영되어야 한다."""
+        from tubearchive.infra.ffmpeg.profiles import EncodingProfile
+
+        custom_profile = EncodingProfile(
+            name="Test",
+            video_codec="hevc_videotoolbox",
+            video_bitrate="50M",
+            pixel_format="p010le",
+            audio_codec="aac",
+            audio_bitrate="256k",
+            audio_sample_rate="44100",
+        )
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=custom_profile,
+        )
+
+        assert "-ar" in cmd
+        ar_idx = cmd.index("-ar")
+        assert cmd[ar_idx + 1] == "44100"
+
+    def test_ar_not_applied_when_no_audio(self, executor: FFmpegExecutor) -> None:
+        """-ar는 오디오 없는 입력에서도 명령에 포함된다 (프로파일 적용 순서상).
+
+        has_audio=False일 때 anullsrc를 통해 무음 오디오가 추가되므로
+        -ar은 여전히 명령에 포함되어야 한다.
+        """
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+            has_audio=False,
+        )
+
+        # profile.to_ffmpeg_args()는 항상 -ar을 포함
+        assert "-ar" in cmd
