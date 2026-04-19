@@ -241,6 +241,8 @@ class PipelinePane(Widget):
         log_handler = _TuiLogHandler(_safe_append)
 
         root_logger = logging.getLogger()
+        prev_level = root_logger.level
+        root_logger.setLevel(logging.INFO)
         root_logger.addHandler(log_handler)
         try:
             with contextlib.redirect_stdout(writer), contextlib.redirect_stderr(writer):
@@ -250,6 +252,7 @@ class PipelinePane(Widget):
             self.app.call_from_thread(self._on_pipeline_error, str(exc))
         finally:
             root_logger.removeHandler(log_handler)
+            root_logger.setLevel(prev_level)
 
     # ------------------------------------------------------------------
     # 완료/오류 콜백 (call_from_thread 경유, メインスレッド)

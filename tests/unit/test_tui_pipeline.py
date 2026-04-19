@@ -142,13 +142,13 @@ async def test_pipeline_on_done_updates_state() -> None:
     app = TubeArchiveApp()
     async with app.run_test(headless=True, size=(120, 40)):
         pane = app.query_one(PipelinePane)
-        pane._running = True
+        pane._pipeline_active = True
         pane._show_progress_view()
 
         pane._on_pipeline_done(output_path)
 
         panel = pane.query_one(ProgressPanel)
-        assert panel._running is False
+        assert panel._panel_active is False
         btn = pane.query_one("#run-button", Button)
         assert btn.disabled is False
         assert str(btn.label) == "다시 실행"
@@ -165,13 +165,13 @@ async def test_pipeline_on_error_updates_state() -> None:
     app = TubeArchiveApp()
     async with app.run_test(headless=True, size=(120, 40)):
         pane = app.query_one(PipelinePane)
-        pane._running = True
+        pane._pipeline_active = True
         pane._show_progress_view()
 
         pane._on_pipeline_error("파일을 찾을 수 없습니다")
 
         panel = pane.query_one(ProgressPanel)
-        assert panel._running is False
+        assert panel._panel_active is False
         btn = pane.query_one("#run-button", Button)
         assert btn.disabled is False
         assert str(btn.label) == "다시 실행"

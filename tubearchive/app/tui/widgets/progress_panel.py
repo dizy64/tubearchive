@@ -52,7 +52,7 @@ class ProgressPanel(Static):
 
     def __init__(self, id: str | None = None) -> None:  # noqa: A002
         super().__init__(id=id)
-        self._running: bool = False
+        self._panel_active: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -80,7 +80,7 @@ class ProgressPanel(Static):
 
     def start(self, label: str = "처리 중...") -> None:
         """실행 시작 상태로 초기화."""
-        self._running = True
+        self._panel_active = True
         self.set_status(label)
         bar = self.query_one("#progress-bar", ProgressBar)
         bar.update(total=None)  # indeterminate
@@ -89,7 +89,7 @@ class ProgressPanel(Static):
 
     def finish(self, output_path: str) -> None:
         """완료 상태로 갱신."""
-        self._running = False
+        self._panel_active = False
         bar = self.query_one("#progress-bar", ProgressBar)
         bar.update(total=100, progress=100.0)
         self.query_one("#progress-percent", Label).update("100%")
@@ -97,7 +97,7 @@ class ProgressPanel(Static):
 
     def error(self, message: str) -> None:
         """오류 상태로 갱신."""
-        self._running = False
+        self._panel_active = False
         bar = self.query_one("#progress-bar", ProgressBar)
         bar.update(total=100, progress=0.0)
         self.query_one("#progress-percent", Label).update("")
