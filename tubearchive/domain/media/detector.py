@@ -482,24 +482,138 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
 
 
 _GOPRO_FIRMWARE_RE = re.compile(r"^HD(\d+)\.", re.IGNORECASE)
+_APPLE_MODEL_LENS_RE = re.compile(r"\s+\d+mm$", re.IGNORECASE)
+
+# exiftool Make 필드 정규화 테이블
+_MAKE_OVERRIDES: dict[str, str] = {
+    "NIKON CORPORATION": "Nikon",
+    "NIKON": "Nikon",
+    "CANON INC.": "Canon",
+    "CANON": "Canon",
+    "SONY": "Sony",
+    "FUJIFILM": "Fujifilm",
+    "PANASONIC": "Panasonic",
+    "OM DIGITAL SOLUTIONS": "OM System",
+    "OLYMPUS CORPORATION": "Olympus",
+    "OLYMPUS IMAGING CORP.": "Olympus",
+    "APPLE": "Apple",
+}
+
+# exiftool 미설치 경고는 1회만 출력
+_exiftool_missing_warned = False
+
+
+def _normalize_apple_model(raw: str) -> str:
+    """iPhone/iPad 모델명을 정규화한다.
+
+    - ``"Apple "`` 접두사 제거 (Blackmagic Camera 앱 등)
+    - `` NNmm`` 렌즈 접미사 제거 (Blackmagic Camera 촬영 파일)
+
+    Examples::
+
+        "Apple iPhone 17 Pro Max 100mm" → "iPhone 17 Pro Max"
+        "iPhone 17 Pro"                 → "iPhone 17 Pro"
+    """
+    model = raw.strip()
+    if model.startswith("Apple "):
+        model = model[6:].strip()
+    return _APPLE_MODEL_LENS_RE.sub("", model).strip()
+
+
+def _normalize_make(raw_make: str) -> str:
+    """제조사 문자열을 표시용 이름으로 정규화한다."""
+    upper = raw_make.strip().upper()
+    for key, normalized in _MAKE_OVERRIDES.items():
+        if upper == key:
+            return normalized
+    # 알 수 없는 제조사: 첫 단어를 Title Case로
+    first = raw_make.strip().split()[0] if raw_make.strip() else ""
+    return first.title() if first else raw_make.strip()
+
+
+def _build_device_name(make: str | None, model: str | None) -> str | None:
+    """exiftool Make + Model을 결합하여 표시용 기기명을 반환한다.
+
+    - Make 정규화 후 Model의 중복 접두사 제거
+    - GoPro는 Make 없이 Model만 있을 수 있어 "GoPro " 접두사를 보완
+    """
+    if not model:
+        return None
+    model = model.strip()
+    if not model:
+        return None
+
+    # GoPro: Make 없이 Model이 "HERO"로 시작
+    if not make and model.upper().startswith("HERO"):
+        return f"GoPro {model}"
+
+    if not make:
+        return model
+
+    norm_make = _normalize_make(make)
+
+    # Model에 Make 접두사가 포함된 경우 제거 ("NIKON Z 8" → "Z 8" under make "Nikon")
+    model_upper = model.upper()
+    for prefix in (make.strip().upper(), norm_make.upper()):
+        if prefix and model_upper.startswith(prefix):
+            model = model[len(prefix) :].strip()
+            break
+
+    return f"{norm_make} {model}".strip() if model else norm_make
+
+
+def _run_exiftool(video_path: Path) -> dict[str, Any]:
+    """exiftool로 Make/Model 태그를 추출한다.
+
+    exiftool이 설치되지 않은 경우 경고를 1회 출력하고 빈 dict를 반환한다.
+
+    Args:
+        video_path: 분석할 영상 파일 경로.
+
+    Returns:
+        ``{"Make": ..., "Model": ...}`` 형태의 dict. 태그가 없으면 빈 dict.
+    """
+    global _exiftool_missing_warned
+
+    cmd = ["exiftool", "-j", "-Make", "-Model", str(video_path)]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        data: list[dict[str, Any]] = json.loads(result.stdout)
+        return data[0] if data else {}
+    except FileNotFoundError:
+        if not _exiftool_missing_warned:
+            logger.warning(
+                "exiftool을 찾을 수 없습니다. Nikon/Canon/Sony 등의 카메라 모델 감지가 "
+                "제한됩니다. 설치: brew install exiftool  (https://exiftool.org)"
+            )
+            _exiftool_missing_warned = True
+        return {}
+    except (subprocess.CalledProcessError, json.JSONDecodeError, subprocess.TimeoutExpired):
+        return {}
 
 
 def _extract_device_model(probe_data: dict[str, Any], video_path: Path) -> str | None:
     """다양한 카메라 제조사 태그에서 기기 모델을 추출한다.
 
     우선순위:
-    1. ``com.apple.quicktime.model`` — iPhone / iPad
+    1. ``com.apple.quicktime.model`` — iPhone / iPad (정규화 적용)
     2. ``format.tags.encoder`` 가 "DJI"로 시작 — DJI 카메라
     3. ``format.tags.firmware`` "HD{n}.*" 패턴 — GoPro HERO {n}
     4. 비디오 스트림 ``handler_name`` 에 "gopro" 포함 — GoPro (모델 불명)
-    5. 파일명 "DSC_*.MOV/.MP4" — Nikon
+    5. exiftool Make + Model — Nikon / Canon / Sony / Fujifilm 등
     """
     format_tags = probe_data.get("format", {}).get("tags", {})
 
-    # 1) Apple QuickTime (iPhone, iPad)
+    # 1) Apple QuickTime (iPhone, iPad) — "Apple " 접두사·렌즈 접미사 정규화
     apple_model = format_tags.get("com.apple.quicktime.model")
     if isinstance(apple_model, str) and apple_model.strip():
-        return apple_model.strip()
+        return _normalize_apple_model(apple_model)
 
     # 2) DJI: format.tags.encoder starts with "DJI"
     encoder = format_tags.get("encoder", "")
@@ -521,13 +635,9 @@ def _extract_device_model(probe_data: dict[str, Any], video_path: Path) -> str |
         if isinstance(handler, str) and "gopro" in handler.lower():
             return "GoPro"
 
-    # 5) Nikon: filename pattern DSC_*.MOV / DSC_*.MP4
-    stem = video_path.stem.upper()
-    suffix = video_path.suffix.upper()
-    if stem.startswith("DSC_") and suffix in (".MOV", ".MP4"):
-        return "Nikon"
-
-    return None
+    # 5) exiftool: Nikon / Canon / Sony 등 MakerNote 기반 카메라
+    exif = _run_exiftool(video_path)
+    return _build_device_name(exif.get("Make"), exif.get("Model"))
 
 
 def _run_ffprobe(video_path: Path) -> dict[str, Any]:

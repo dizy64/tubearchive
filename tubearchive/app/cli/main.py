@@ -4115,24 +4115,29 @@ def cmd_status_detail(job_id: int) -> None:
 
 
 def cmd_fix_device_models() -> None:
-    """``--fix-device-models`` 처리: device_model이 NULL인 영상을 재스캔하여 채운다.
+    """``--fix-device-models`` 처리: device_model을 재스캔하여 채우거나 수정한다.
 
-    DB에서 device_model이 비어 있는 영상을 조회하고, 파일이 존재하면
-    ffprobe로 재감지하여 모델명을 갱신한다. 파일이 없거나 감지 실패 시 건너뛴다.
+    대상:
+    - device_model이 NULL/빈 문자열
+    - 파일명 휴리스틱으로 채운 ``"Nikon"`` (exiftool로 정확한 모델명으로 교체)
+    - 정규화 전 Apple 접두사 값 (``"Apple iPhone..."`` → ``"iPhone..."``)
+
+    파일이 존재하면 ffprobe + exiftool로 재감지하여 모델명을 갱신한다.
+    파일이 없거나 감지 실패 시 건너뛴다.
     """
     from tubearchive.domain.media.detector import _extract_device_model, _run_ffprobe
     from tubearchive.infra.db.repository import VideoRepository
 
     with database_session() as conn:
         repo = VideoRepository(conn)
-        rows = repo.get_missing_device_model()
+        rows = repo.get_missing_device_model(include_heuristic=True)
 
     total = len(rows)
     if total == 0:
-        print("device_model이 비어 있는 영상이 없습니다.")
+        print("재감지가 필요한 영상이 없습니다.")
         return
 
-    print(f"device_model 누락 영상 {total}개 재스캔 시작...")
+    print(f"device_model 재스캔 대상 {total}개 처리 시작...")
 
     updated = 0
     skipped_missing = 0

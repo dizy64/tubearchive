@@ -10,6 +10,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **언어**: Python 3.14+ (strict mypy)
 - **패키지 관리**: uv (poetry 사용 금지)
 
+### 시스템 의존성 (사전 설치 필요)
+
+| 도구 | 용도 | 설치 |
+|------|------|------|
+| `ffmpeg` / `ffprobe` | 트랜스코딩·메타데이터 추출 | `brew install ffmpeg` |
+| `exiftool` | 카메라 기기 모델 감지 (Nikon/Canon/Sony 등 MakerNote) | `brew install exiftool` |
+
+> exiftool이 없으면 iPhone/GoPro/DJI는 정상 감지되지만, Nikon·Canon·Sony 등 DSLR/미러리스 카메라의 기기 모델이 추출되지 않습니다 (경고 1회 출력).
+
 ## 명령어
 
 ```bash
