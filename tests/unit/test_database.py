@@ -165,6 +165,102 @@ class TestVideoRepository:
         with pytest.raises(sqlite3.IntegrityError):
             repo.insert(sample_video, sample_metadata)
 
+    def test_get_missing_device_model_returns_null_rows(
+        self,
+        repo: VideoRepository,
+        tmp_path: Path,
+        sample_metadata: VideoMetadata,
+    ) -> None:
+        """device_model이 NULL인 영상만 반환한다."""
+        # NULL device_model 영상 삽입
+        null_meta = VideoMetadata(
+            width=1920,
+            height=1080,
+            duration_seconds=30.0,
+            fps=30.0,
+            codec="h264",
+            pixel_format="yuv420p",
+            is_portrait=False,
+            is_vfr=False,
+            device_model=None,
+            color_space=None,
+            color_transfer=None,
+            color_primaries=None,
+        )
+        p1 = tmp_path / "gopro.mp4"
+        p1.write_text("")
+        repo.insert(VideoFile(path=p1, creation_time=datetime(2024, 1, 1), size_bytes=1), null_meta)
+
+        # device_model 있는 영상 삽입
+        p2 = tmp_path / "iphone.mp4"
+        p2.write_text("")
+        repo.insert(
+            VideoFile(path=p2, creation_time=datetime(2024, 1, 2), size_bytes=1), sample_metadata
+        )
+
+        rows = repo.get_missing_device_model()
+        assert len(rows) == 1
+        assert rows[0]["original_path"] == str(p1)
+
+    def test_update_device_model(
+        self,
+        repo: VideoRepository,
+        tmp_path: Path,
+    ) -> None:
+        """device_model을 정상적으로 갱신한다."""
+        null_meta = VideoMetadata(
+            width=1920,
+            height=1080,
+            duration_seconds=30.0,
+            fps=30.0,
+            codec="h264",
+            pixel_format="yuv420p",
+            is_portrait=False,
+            is_vfr=False,
+            device_model=None,
+            color_space=None,
+            color_transfer=None,
+            color_primaries=None,
+        )
+        p = tmp_path / "GH010001.mp4"
+        p.write_text("")
+        video_id = repo.insert(
+            VideoFile(path=p, creation_time=datetime(2024, 1, 1), size_bytes=1), null_meta
+        )
+
+        repo.update_device_model(video_id, "GoPro HERO 9")
+
+        row = repo.get_by_id(video_id)
+        assert row is not None
+        assert row["device_model"] == "GoPro HERO 9"
+
+    def test_get_missing_device_model_empty_string(
+        self,
+        repo: VideoRepository,
+        tmp_path: Path,
+    ) -> None:
+        """device_model이 빈 문자열인 영상도 반환한다."""
+        empty_meta = VideoMetadata(
+            width=1920,
+            height=1080,
+            duration_seconds=30.0,
+            fps=30.0,
+            codec="h264",
+            pixel_format="yuv420p",
+            is_portrait=False,
+            is_vfr=False,
+            device_model="",
+            color_space=None,
+            color_transfer=None,
+            color_primaries=None,
+        )
+        p = tmp_path / "nikon.mov"
+        p.write_text("")
+        repo.insert(VideoFile(path=p, creation_time=datetime(2024, 1, 1), size_bytes=1), empty_meta)
+
+        rows = repo.get_missing_device_model()
+        assert len(rows) == 1
+
 
 class TestTranscodingJobRepository:
     """TranscodingJobRepository 테스트."""
