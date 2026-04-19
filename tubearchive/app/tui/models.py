@@ -335,7 +335,7 @@ CATEGORY_DEFS: tuple[CategoryDef, ...] = (
         title="Upload / Project",
         options=(
             OptionDef("upload", "YouTube 업로드", "switch"),
-            OptionDef("project", "프로젝트 이름", "input", hint="예: 제주도 여행"),
+            OptionDef("project", "프로젝트 이름", "input", hint="생략 시 선택 폴더명 사용"),
             OptionDef("notify", "완료 알림", "switch"),
         ),
     ),

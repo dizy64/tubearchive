@@ -69,6 +69,7 @@ class FileBrowserPane(Static):
         height: 3;
         margin-top: 1;
         align: left middle;
+        overflow: hidden;
     }
     #path-input {
         width: 1fr;
@@ -94,14 +95,18 @@ class FileBrowserPane(Static):
         height: auto;
         max-height: 8;
         border: solid $surface;
+        overflow-x: hidden;
+        overflow-y: auto;
     }
     .selected-row {
         height: 1;
         align: left middle;
+        overflow: hidden;
     }
     .selected-row Label {
         width: 1fr;
         color: $accent;
+        overflow: hidden;
     }
     .selected-row .rm-btn {
         width: 5;
@@ -229,9 +234,13 @@ class FileBrowserPane(Static):
         container.mount(*rows)
 
     def _notify_pipeline(self) -> None:
-        """PipelinePane의 실행 버튼 상태를 콜백으로 갱신한다."""
+        """PipelinePane의 실행 버튼 상태를 콜백으로 갱신한다.
+
+        call_later()로 현재 이벤트 처리가 끝난 뒤 호출하여
+        Textual이 UI 갱신을 올바르게 반영하도록 한다.
+        """
         if self._on_change is not None:
-            self._on_change()
+            self.app.call_later(self._on_change)
 
     # ------------------------------------------------------------------
     # 공개 API
