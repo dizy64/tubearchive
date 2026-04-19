@@ -351,58 +351,127 @@ def default_state() -> TuiOptionState:
 
 
 def state_from_config(config: AppConfig) -> TuiOptionState:
-    """AppConfig의 값으로 초기화된 TuiOptionState를 반환한다.
+    """환경변수와 AppConfig를 반영한 TuiOptionState를 반환한다.
 
-    None 필드는 TuiOptionState 기본값을 유지한다.
+    우선순위: **환경변수 > config.toml > TuiOptionState 기본값**
+
+    ``apply_config_to_env(config)`` 가 호출된 뒤 실행되므로,
+    ``get_default_*()`` 헬퍼가 이미 ENV > config 순으로 병합된 값을 반환한다.
+    env가 미설정이고 config도 None이면 TuiOptionState 기본값을 유지한다.
     """
-    g = config.general
-    b = config.bgm
-    cg = config.color_grading
+    import contextlib
+    import os
+
+    from tubearchive.config import (
+        ENV_BGM_PATH,
+        ENV_BGM_VOLUME,
+        ENV_OUTPUT_DIR,
+        ENV_PARALLEL,
+        ENV_SILENCE_MIN_DURATION,
+        ENV_SILENCE_THRESHOLD,
+        get_default_auto_lut,
+        get_default_bgm_loop,
+        get_default_denoise,
+        get_default_denoise_level,
+        get_default_fade_duration,
+        get_default_group_sequences,
+        get_default_normalize_audio,
+        get_default_stabilize,
+        get_default_stabilize_crop,
+        get_default_stabilize_strength,
+        get_default_subtitle_format,
+        get_default_subtitle_model,
+    )
 
     state = TuiOptionState()
 
-    if g.output_dir is not None:
-        state.output_dir = g.output_dir
-    if g.parallel is not None:
-        state.parallel = g.parallel
-    if g.denoise is not None:
-        state.denoise = g.denoise
-    if g.denoise_level is not None:
-        state.denoise_level = g.denoise_level
-    if g.normalize_audio is not None:
-        state.normalize_audio = g.normalize_audio
-    if g.stabilize is not None:
-        state.stabilize = g.stabilize
-    if g.stabilize_strength is not None:
-        state.stabilize_strength = g.stabilize_strength
-    if g.stabilize_crop is not None:
-        state.stabilize_crop = g.stabilize_crop
-    if g.group_sequences is not None:
-        state.group_sequences = g.group_sequences
-    if g.fade_duration is not None:
-        state.fade_duration = g.fade_duration
-    if g.trim_silence is not None:
-        state.trim_silence = g.trim_silence
-    if g.silence_threshold is not None:
-        state.silence_threshold = g.silence_threshold
-    if g.silence_min_duration is not None:
-        state.silence_min_duration = g.silence_min_duration
-    if g.subtitle_model is not None:
-        state.subtitle_model = g.subtitle_model
-    if g.subtitle_format is not None:
-        state.subtitle_format = g.subtitle_format
-    if g.subtitle_burn is not None:
-        state.subtitle_burn = g.subtitle_burn
+    # --- General ---
+    env_output = os.environ.get(ENV_OUTPUT_DIR)
+    if env_output:
+        state.output_dir = env_output
+    elif config.general.output_dir is not None:
+        state.output_dir = config.general.output_dir
 
-    if b.bgm_path is not None:
-        state.bgm_path = b.bgm_path
-    if b.bgm_volume is not None:
-        state.bgm_volume = b.bgm_volume
-    if b.bgm_loop is not None:
-        state.bgm_loop = b.bgm_loop
+    env_parallel = os.environ.get(ENV_PARALLEL)
+    if env_parallel:
+        with contextlib.suppress(ValueError):
+            state.parallel = int(env_parallel)
+    elif config.general.parallel is not None:
+        state.parallel = config.general.parallel
 
-    if cg.auto_lut is not None:
-        state.auto_lut = cg.auto_lut
+    # bool/enum 필드: get_default_*() 가 ENV > config 이미 병합
+    state.denoise = get_default_denoise()
+    state.normalize_audio = get_default_normalize_audio()
+    state.stabilize = get_default_stabilize()
+    state.group_sequences = get_default_group_sequences()
+    state.fade_duration = get_default_fade_duration()
+    state.auto_lut = get_default_auto_lut()
+    state.bgm_loop = get_default_bgm_loop()
+
+    level = get_default_denoise_level()
+    if level:
+        state.denoise_level = level
+    elif config.general.denoise_level is not None:
+        state.denoise_level = config.general.denoise_level
+
+    strength = get_default_stabilize_strength()
+    if strength:
+        state.stabilize_strength = strength
+    elif config.general.stabilize_strength is not None:
+        state.stabilize_strength = config.general.stabilize_strength
+
+    crop = get_default_stabilize_crop()
+    if crop:
+        state.stabilize_crop = crop
+    elif config.general.stabilize_crop is not None:
+        state.stabilize_crop = config.general.stabilize_crop
+
+    # --- Silence ---
+    env_threshold = os.environ.get(ENV_SILENCE_THRESHOLD)
+    if env_threshold:
+        state.silence_threshold = env_threshold.strip()
+    elif config.general.silence_threshold is not None:
+        state.silence_threshold = config.general.silence_threshold
+
+    env_min_dur = os.environ.get(ENV_SILENCE_MIN_DURATION)
+    if env_min_dur:
+        with contextlib.suppress(ValueError):
+            state.silence_min_duration = float(env_min_dur)
+    elif config.general.silence_min_duration is not None:
+        state.silence_min_duration = config.general.silence_min_duration
+
+    if config.general.trim_silence is not None:
+        state.trim_silence = config.general.trim_silence
+
+    # --- Subtitle ---
+    sub_model = get_default_subtitle_model()
+    if sub_model:
+        state.subtitle_model = sub_model
+    elif config.general.subtitle_model is not None:
+        state.subtitle_model = config.general.subtitle_model
+
+    sub_fmt = get_default_subtitle_format()
+    if sub_fmt:
+        state.subtitle_format = sub_fmt
+    elif config.general.subtitle_format is not None:
+        state.subtitle_format = config.general.subtitle_format
+
+    if config.general.subtitle_burn is not None:
+        state.subtitle_burn = config.general.subtitle_burn
+
+    # --- BGM ---
+    env_bgm = os.environ.get(ENV_BGM_PATH)
+    if env_bgm:
+        state.bgm_path = env_bgm.strip()
+    elif config.bgm.bgm_path is not None:
+        state.bgm_path = config.bgm.bgm_path
+
+    env_vol = os.environ.get(ENV_BGM_VOLUME)
+    if env_vol:
+        with contextlib.suppress(ValueError):
+            state.bgm_volume = float(env_vol)
+    elif config.bgm.bgm_volume is not None:
+        state.bgm_volume = config.bgm.bgm_volume
 
     return state
 

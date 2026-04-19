@@ -114,26 +114,60 @@ def test_list_presets_skips_corrupt_json(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# state_from_config — config 파일 기반 기본값
+# state_from_config — ENV > config.toml > 기본값 우선순위
 # ---------------------------------------------------------------------------
 
+# 테스트마다 apply_config_to_env()를 호출하므로 env 격리가 필요하다.
+# monkeypatch가 테스트 종료 시 자동 rollback해 준다.
 
-def test_state_from_config_defaults() -> None:
-    """기본 AppConfig(빈 설정)는 TuiOptionState 기본값과 같다."""
-    from tubearchive.config import AppConfig
+_CONFIG_ENV_KEYS = [
+    "TUBEARCHIVE_OUTPUT_DIR",
+    "TUBEARCHIVE_PARALLEL",
+    "TUBEARCHIVE_DENOISE",
+    "TUBEARCHIVE_DENOISE_LEVEL",
+    "TUBEARCHIVE_NORMALIZE_AUDIO",
+    "TUBEARCHIVE_GROUP_SEQUENCES",
+    "TUBEARCHIVE_FADE_DURATION",
+    "TUBEARCHIVE_STABILIZE",
+    "TUBEARCHIVE_STABILIZE_STRENGTH",
+    "TUBEARCHIVE_STABILIZE_CROP",
+    "TUBEARCHIVE_TRIM_SILENCE",
+    "TUBEARCHIVE_SILENCE_THRESHOLD",
+    "TUBEARCHIVE_SILENCE_MIN_DURATION",
+    "TUBEARCHIVE_BGM_PATH",
+    "TUBEARCHIVE_BGM_VOLUME",
+    "TUBEARCHIVE_BGM_LOOP",
+    "TUBEARCHIVE_AUTO_LUT",
+    "TUBEARCHIVE_SUBTITLE_MODEL",
+    "TUBEARCHIVE_SUBTITLE_FORMAT",
+]
+
+
+@pytest.fixture()
+def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """config 관련 환경변수를 전부 제거해 테스트 간 격리한다."""
+    for key in _CONFIG_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_state_from_config_defaults(_clean_env: None) -> None:
+    """빈 AppConfig + 빈 ENV → TuiOptionState 기본값."""
+    from tubearchive.config import AppConfig, apply_config_to_env
 
     config = AppConfig()
+    apply_config_to_env(config)
     state = state_from_config(config)
 
     expected = default_state()
-    assert state.normalize_audio == expected.normalize_audio
+    # normalize_audio 기본값은 get_default_normalize_audio()가 True를 반환
+    assert state.normalize_audio is True
     assert state.stabilize == expected.stabilize
     assert state.bgm_volume == expected.bgm_volume
 
 
-def test_state_from_config_applies_general() -> None:
-    """GeneralConfig 값이 TuiOptionState에 반영된다."""
-    from tubearchive.config import AppConfig, GeneralConfig
+def test_state_from_config_applies_general(_clean_env: None) -> None:
+    """config.toml 값이 TuiOptionState에 반영된다."""
+    from tubearchive.config import AppConfig, GeneralConfig, apply_config_to_env
 
     config = AppConfig(
         general=GeneralConfig(
@@ -144,6 +178,7 @@ def test_state_from_config_applies_general() -> None:
             fade_duration=1.0,
         )
     )
+    apply_config_to_env(config)
     state = state_from_config(config)
 
     assert state.normalize_audio is True
@@ -153,11 +188,12 @@ def test_state_from_config_applies_general() -> None:
     assert state.fade_duration == pytest.approx(1.0)
 
 
-def test_state_from_config_applies_bgm() -> None:
+def test_state_from_config_applies_bgm(_clean_env: None) -> None:
     """BGMConfig 값이 TuiOptionState에 반영된다."""
-    from tubearchive.config import AppConfig, BGMConfig
+    from tubearchive.config import AppConfig, BGMConfig, apply_config_to_env
 
     config = AppConfig(bgm=BGMConfig(bgm_path="~/Music/bgm.mp3", bgm_volume=0.4, bgm_loop=True))
+    apply_config_to_env(config)
     state = state_from_config(config)
 
     assert state.bgm_path == "~/Music/bgm.mp3"
@@ -165,28 +201,69 @@ def test_state_from_config_applies_bgm() -> None:
     assert state.bgm_loop is True
 
 
-def test_state_from_config_applies_color_grading() -> None:
+def test_state_from_config_applies_color_grading(_clean_env: None) -> None:
     """ColorGradingConfig.auto_lut이 반영된다."""
-    from tubearchive.config import AppConfig, ColorGradingConfig
+    from tubearchive.config import AppConfig, ColorGradingConfig, apply_config_to_env
 
     config = AppConfig(color_grading=ColorGradingConfig(auto_lut=True))
+    apply_config_to_env(config)
     state = state_from_config(config)
     assert state.auto_lut is True
 
 
-def test_state_from_config_none_fields_keep_defaults() -> None:
-    """None 필드는 TuiOptionState 기본값을 유지한다."""
-    from tubearchive.config import AppConfig, GeneralConfig
+def test_state_from_config_none_fields_keep_defaults(_clean_env: None) -> None:
+    """None 필드는 기본값을 유지한다."""
+    from tubearchive.config import AppConfig, GeneralConfig, apply_config_to_env
 
-    # normalize_audio만 지정, 나머지는 None
-    config = AppConfig(general=GeneralConfig(normalize_audio=True))
+    config = AppConfig(general=GeneralConfig(stabilize=True))
+    apply_config_to_env(config)
     state = state_from_config(config)
 
-    # normalize_audio만 변경됨
-    assert state.normalize_audio is True
-    # 나머지는 기본값
-    assert state.stabilize == default_state().stabilize
+    assert state.stabilize is True
+    # stabilize 외 나머지는 기본값
     assert state.parallel == default_state().parallel
+
+
+# ---------------------------------------------------------------------------
+# ENV 우선순위 테스트 — ENV > config.toml
+# ---------------------------------------------------------------------------
+
+
+def test_env_overrides_config(monkeypatch: pytest.MonkeyPatch, _clean_env: None) -> None:
+    """환경변수가 config.toml 값을 덮어쓴다."""
+    from tubearchive.config import AppConfig, GeneralConfig, apply_config_to_env
+
+    # config.toml은 stabilize=False, env는 true
+    monkeypatch.setenv("TUBEARCHIVE_STABILIZE", "true")
+    config = AppConfig(general=GeneralConfig(stabilize=False))
+    apply_config_to_env(config)
+    state = state_from_config(config)
+
+    assert state.stabilize is True  # ENV wins
+
+
+def test_env_overrides_config_parallel(monkeypatch: pytest.MonkeyPatch, _clean_env: None) -> None:
+    """환경변수 PARALLEL이 config.toml을 덮어쓴다."""
+    from tubearchive.config import AppConfig, GeneralConfig, apply_config_to_env
+
+    monkeypatch.setenv("TUBEARCHIVE_PARALLEL", "8")
+    config = AppConfig(general=GeneralConfig(parallel=2))
+    apply_config_to_env(config)
+    state = state_from_config(config)
+
+    assert state.parallel == 8
+
+
+def test_env_overrides_config_bgm_volume(monkeypatch: pytest.MonkeyPatch, _clean_env: None) -> None:
+    """환경변수 BGM_VOLUME이 config.toml을 덮어쓴다."""
+    from tubearchive.config import AppConfig, BGMConfig, apply_config_to_env
+
+    monkeypatch.setenv("TUBEARCHIVE_BGM_VOLUME", "0.7")
+    config = AppConfig(bgm=BGMConfig(bgm_volume=0.3))
+    apply_config_to_env(config)
+    state = state_from_config(config)
+
+    assert state.bgm_volume == pytest.approx(0.7)
 
 
 # ---------------------------------------------------------------------------
