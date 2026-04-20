@@ -789,8 +789,9 @@ TUBEARCHIVE_OUTPUT_DIR=~/Videos tubearchive ~/Downloads/clips/
 
 ### 임시 파일 경로
 
-트랜스코딩 중 생성되는 임시 파일은 `/tmp/tubearchive/`에 저장됩니다.
-- **작업 완료 시 자동 삭제** (폴더 전체 정리)
+트랜스코딩 중 생성되는 임시 파일은 `/tmp/tubearchive/{uuid8}/`에 저장됩니다.
+- 실행마다 UUID 서브디렉토리를 생성하여 **동시 실행 시 서로 간섭하지 않음**
+- **작업 완료 시 자동 삭제** (해당 실행의 서브디렉토리만 정리)
 - 시스템 재부팅 시에도 자동 정리
 - `--keep-temp` 옵션으로 임시 파일 보존 가능 (디버깅용)
 
@@ -798,42 +799,45 @@ TUBEARCHIVE_OUTPUT_DIR=~/Videos tubearchive ~/Downloads/clips/
 
 ```
 tubearchive/
-├── cli.py                # CLI 인터페이스 및 파이프라인 오케스트레이터
-├── config.py             # TOML 설정 파일 관리 (환경변수 Shim)
 ├── __init__.py           # 버전 정보
 ├── __main__.py           # python -m 진입점
-├── commands/
-│   ├── catalog.py        # 메타데이터 카탈로그/검색 CLI
-│   ├── project.py        # 프로젝트 관리 CLI (목록/상세 조회)
-│   └── stats.py          # 통계 대시보드 CLI
-├── core/
-│   ├── scanner.py        # 파일 스캔 (3가지 케이스)
-│   ├── detector.py       # ffprobe 메타데이터 감지
-│   ├── grouper.py        # 연속 파일 시퀀스 그룹핑 (GoPro/DJI)
-│   ├── ordering.py       # 파일 정렬/필터링/수동 재배열
-│   ├── transcoder.py     # 트랜스코딩 엔진 (Resume 지원)
-│   ├── merger.py         # concat 병합 (codec copy)
-│   ├── splitter.py       # 영상 분할 (segment muxer, 재인코딩 없음)
-│   ├── timelapse.py      # 타임랩스 생성 (배속/해상도/오디오)
-│   └── archiver.py       # 원본 파일 아카이브 관리
-├── database/
-│   ├── schema.py         # SQLite 스키마
-│   ├── repository.py     # CRUD Repository (Video/TranscodingJob/MergeJob/Split/Archive/Project)
-│   └── resume.py         # Resume 상태 추적
-├── ffmpeg/
-│   ├── executor.py       # FFmpeg 실행 및 진행률
-│   ├── effects.py        # 필터 (Portrait, Fade, Loudnorm, Denoise, Vidstab, BGM, LUT, Timelapse, Silence)
-│   ├── profiles.py       # 기기별 인코딩 프로파일
-│   └── thumbnail.py      # 썸네일 추출
-├── models/
-│   ├── video.py          # VideoFile, VideoMetadata, FadeConfig
-│   └── job.py            # TranscodingJob, MergeJob, SplitJob, Project, JobStatus
-├── youtube/
-│   ├── __init__.py       # 모듈 exports
-│   ├── auth.py           # OAuth 2.0 인증
-│   ├── uploader.py       # YouTube 업로드 (Resumable)
-│   └── playlist.py       # 플레이리스트 관리
-└── utils/
+├── config.py             # TOML 설정 파일 관리 (환경변수 Shim)
+├── app/                  # CLI 진입점 및 오케스트레이션
+│   ├── cli/
+│   │   └── main.py       # 파서·검증·파이프라인·업로드 라우팅
+│   └── queries/
+│       ├── catalog.py    # 메타데이터 카탈로그/검색 CLI
+│       ├── project.py    # 프로젝트 관리 CLI (목록/상세 조회)
+│       └── stats.py      # 통계 대시보드 CLI
+├── domain/               # 순수 비즈니스 로직
+│   ├── media/
+│   │   ├── scanner.py    # 파일 스캔 (3가지 케이스)
+│   │   ├── grouper.py    # 연속 파일 시퀀스 그룹핑 (GoPro/DJI)
+│   │   ├── ordering.py   # 파일 정렬/필터링/수동 재배열
+│   │   ├── transcoder.py # 트랜스코딩 엔진 (Resume 지원)
+│   │   ├── merger.py     # concat 병합 (codec copy, 샘플레이트·길이 검증)
+│   │   ├── splitter.py   # 영상 분할 (segment muxer, 재인코딩 없음)
+│   │   ├── timelapse.py  # 타임랩스 생성 (배속/해상도/오디오)
+│   │   └── archiver.py   # 원본 파일 아카이브 관리
+│   └── models/
+│       ├── video.py      # VideoFile, VideoMetadata, FadeConfig
+│       └── job.py        # TranscodingJob, MergeJob, SplitJob, Project, JobStatus
+├── infra/                # 외부 시스템 연동
+│   ├── ffmpeg/
+│   │   ├── executor.py   # FFmpeg 실행 및 진행률
+│   │   ├── effects.py    # 필터 (Portrait, Fade, Loudnorm, Denoise, Vidstab, BGM, LUT, Timelapse, Silence)
+│   │   ├── profiles.py   # 기기별 인코딩 프로파일 (-ar 48000 고정)
+│   │   └── thumbnail.py  # 썸네일 추출
+│   ├── db/
+│   │   ├── schema.py     # SQLite 스키마
+│   │   ├── repository.py # CRUD Repository (Video/TranscodingJob/MergeJob/Split/Archive/Project)
+│   │   └── resume.py     # Resume 상태 추적
+│   ├── youtube/
+│   │   ├── auth.py       # OAuth 2.0 인증
+│   │   ├── uploader.py   # YouTube 업로드 (Resumable)
+│   │   └── playlist.py   # 플레이리스트 관리
+│   └── notification/     # 훅 이벤트 알림
+└── shared/               # 공통 유틸리티
     ├── validators.py     # 입력 검증
     ├── progress.py       # 진행률 표시 (MultiProgressBar)
     ├── summary_generator.py  # 요약 파일 / YouTube 챕터 생성
