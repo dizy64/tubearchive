@@ -315,6 +315,7 @@ class ValidatedArgs:
     template_intro: Path | None = None
     template_outro: Path | None = None
     watermark: bool = False
+    watermark_text: str | None = None
     watermark_pos: str = "bottom-right"
     watermark_size: int = 48
     watermark_color: str = "white"
@@ -2217,7 +2218,10 @@ def _transcode_single(
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
         metadata = detect_metadata(video_file.path)
-        watermark_text = _make_watermark_text(video_file, metadata) if opts.watermark else None
+        if opts.watermark:
+            watermark_text = opts.watermark_text or _make_watermark_text(video_file, metadata)
+        else:
+            watermark_text = None
 
         output_path, video_id, silence_segments = transcoder.transcode_video(
             video_file,
@@ -2352,7 +2356,10 @@ def _transcode_sequential(
             fade_out = fade_config.fade_out if fade_config else None
 
             metadata = detect_metadata(video_file.path)
-            watermark_text = _make_watermark_text(video_file, metadata) if opts.watermark else None
+            if opts.watermark:
+                watermark_text = opts.watermark_text or _make_watermark_text(video_file, metadata)
+            else:
+                watermark_text = None
             output_path, video_id, silence_segments = transcoder.transcode_video(
                 video_file,
                 metadata=metadata,
@@ -2668,6 +2675,7 @@ def run_pipeline(
         lut_before_hdr=validated_args.lut_before_hdr,
         device_luts=validated_args.device_luts,
         watermark=validated_args.watermark,
+        watermark_text=validated_args.watermark_text or None,
         watermark_pos=validated_args.watermark_pos,
         watermark_size=validated_args.watermark_size,
         watermark_color=validated_args.watermark_color,
@@ -4628,6 +4636,20 @@ def main() -> None:
     적절한 핸들러 함수로 라우팅한다. 서브커맨드가 지정되지 않은
     기본 동작은 :func:`run_pipeline` (트랜스코딩 + 병합).
     """
+    import sys
+
+    # argparse보다 먼저 처리: nargs="*" targets와 충돌 방지
+    if len(sys.argv) > 1 and sys.argv[1] == "tui":
+        from tubearchive.app.tui import launch_tui
+
+        path_arg = sys.argv[2] if len(sys.argv) > 2 else None
+        has_config_flag = len(sys.argv) > 3 and sys.argv[3] == "--config"
+        tui_config_path = Path(sys.argv[4]) if has_config_flag else get_default_config_path()
+        tui_config = load_config(tui_config_path)
+        apply_config_to_env(tui_config)
+        launch_tui(initial_path=path_arg, config=tui_config)
+        return
+
     parser = create_parser()
     args = parser.parse_args()
 
