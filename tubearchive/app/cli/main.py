@@ -1002,6 +1002,45 @@ def create_parser() -> argparse.ArgumentParser:
         help="DB에서 device_model이 비어 있는 영상을 재스캔하여 기기 모델을 채운다",
     )
 
+    # 마이그레이션 옵션
+    parser.add_argument(
+        "--export-db",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="DB 전체를 JSON 파일로 내보낸다 (예: ~/backup.json)",
+    )
+
+    parser.add_argument(
+        "--import-db",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="JSON 파일에서 DB로 데이터를 가져온다 (예: ~/backup.json)",
+    )
+
+    parser.add_argument(
+        "--src-prefix",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="--import-db 경로 remapping: 원본 접두사 (예: /Users/old)",
+    )
+
+    parser.add_argument(
+        "--dst-prefix",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="--import-db 경로 remapping: 대상 접두사 (예: /Users/new)",
+    )
+
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="--import-db 충돌 시 기존 레코드를 덮어쓴다 (기본: skip)",
+    )
+
     parser.add_argument(
         "--catalog",
         action="store_true",
@@ -4730,6 +4769,25 @@ def main() -> None:
         # --fix-device-models 옵션 처리 (device_model 소급 수정)
         if args.fix_device_models:
             cmd_fix_device_models()
+            return
+
+        # --export-db 옵션 처리 (DB 내보내기)
+        if args.export_db:
+            from tubearchive.app.queries.migrate import cmd_export_db
+
+            cmd_export_db(Path(args.export_db))
+            return
+
+        # --import-db 옵션 처리 (DB 가져오기)
+        if args.import_db:
+            from tubearchive.app.queries.migrate import cmd_import_db
+
+            cmd_import_db(
+                Path(args.import_db),
+                src_prefix=args.src_prefix,
+                dst_prefix=args.dst_prefix,
+                overwrite=args.overwrite,
+            )
             return
 
         # --project-list 옵션 처리 (프로젝트 목록 조회)
