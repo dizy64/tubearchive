@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tubearchive.app.cli.main import ValidatedArgs
 from tubearchive.app.tui.models import TuiOptionState
 
 
 def build_validated_args(
     targets: list[Path],
     state: TuiOptionState,
-) -> object:
+) -> ValidatedArgs:
     """TUI 상태에서 ValidatedArgs를 생성한다.
 
     Args:
@@ -27,8 +28,6 @@ def build_validated_args(
     Raises:
         ValueError: targets가 비어있거나 유효하지 않은 값이 있을 경우.
     """
-    from tubearchive.app.cli.main import ValidatedArgs
-
     if not targets:
         raise ValueError("처리할 파일이나 디렉토리를 선택하세요.")
 

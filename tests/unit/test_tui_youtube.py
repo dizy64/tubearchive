@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import types
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from textual.app import App, ComposeResult
@@ -67,6 +68,34 @@ class _App(App[None]):
         yield YouTubePane()
 
 
+def _patch_upload_path() -> Any:
+    """DirectoryTree의 디렉토리 스캔 worker를 막아 테스트 속도를 높인다.
+
+    Textual의 DirectoryTree.reload()는 @work로 비동기 실행되므로
+    app.workers.wait_for_complete()가 스캔이 끝날 때까지 블록된다.
+    no-op으로 대체해 이 병목을 제거한다.
+    """
+    import contextlib
+    import tempfile
+
+    path = Path(tempfile.mkdtemp())
+
+    @contextlib.contextmanager
+    def _combined() -> Any:
+        p1 = patch(
+            "tubearchive.app.tui.screens.youtube.YouTubePane._upload_start_path",
+            staticmethod(lambda: path),
+        )
+        p2 = patch(
+            "textual.widgets._directory_tree.DirectoryTree.reload",
+            new_callable=AsyncMock,
+        )
+        with p1, p2:
+            yield
+
+    return _combined()
+
+
 # ------------------------------------------------------------------ #
 # 인증 상태 표시                                                       #
 # ------------------------------------------------------------------ #
@@ -77,6 +106,7 @@ async def test_pane_shows_authenticated_state() -> None:
     """인증 완료 상태에서 상태 라벨이 '인증 완료'이고 RadioSet/SelectionList가 활성화된다."""
     status = _auth_status(valid=True)
     with (
+        _patch_upload_path(),
         patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
         patch("tubearchive.infra.youtube.auth.get_authenticated_service", return_value=MagicMock()),
         patch("tubearchive.infra.youtube.playlist.list_playlists", return_value=[]),
@@ -93,7 +123,10 @@ async def test_pane_shows_authenticated_state() -> None:
 async def test_pane_shows_unauthenticated_no_secrets() -> None:
     """클라이언트 시크릿이 없을 때 '설정 필요' 라벨, 저장 경로, 설정 단계가 표시된다."""
     status = _auth_status(valid=False, has_secrets=False)
-    with patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status):
+    with (
+        _patch_upload_path(),
+        patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
+    ):
         app = _App()
         async with app.run_test(headless=True, size=(120, 40)):
             await app.workers.wait_for_complete()
@@ -109,7 +142,10 @@ async def test_pane_shows_unauthenticated_no_secrets() -> None:
 async def test_pane_shows_unauthenticated_needs_auth() -> None:
     """시크릿은 있지만 토큰이 없을 때 '인증 필요' 라벨이 표시된다."""
     status = _auth_status(valid=False, has_secrets=True)
-    with patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status):
+    with (
+        _patch_upload_path(),
+        patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
+    ):
         app = _App()
         async with app.run_test(headless=True, size=(120, 40)):
             await app.workers.wait_for_complete()
@@ -129,6 +165,7 @@ async def test_apply_updates_shared_state() -> None:
     status = _auth_status(valid=True)
     playlists = [_playlist("pl-1", "브이로그"), _playlist("pl-2", "여행")]
     with (
+        _patch_upload_path(),
         patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
         patch("tubearchive.infra.youtube.auth.get_authenticated_service", return_value=MagicMock()),
         patch("tubearchive.infra.youtube.playlist.list_playlists", return_value=playlists),
@@ -158,6 +195,7 @@ async def test_apply_without_pressing_does_not_mutate_state() -> None:
     """Apply를 누르지 않으면 app._youtube_applied가 설정되지 않는다."""
     status = _auth_status(valid=True)
     with (
+        _patch_upload_path(),
         patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
         patch("tubearchive.infra.youtube.auth.get_authenticated_service", return_value=MagicMock()),
         patch("tubearchive.infra.youtube.playlist.list_playlists", return_value=[]),
@@ -181,6 +219,7 @@ async def test_save_calls_save_config() -> None:
     status = _auth_status(valid=True)
     mock_save = MagicMock(return_value=Path("/tmp/config.toml"))
     with (
+        _patch_upload_path(),
         patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
         patch("tubearchive.infra.youtube.auth.get_authenticated_service", return_value=MagicMock()),
         patch("tubearchive.infra.youtube.playlist.list_playlists", return_value=[]),
@@ -205,6 +244,7 @@ async def test_save_passes_correct_privacy() -> None:
         return Path("/tmp/config.toml")
 
     with (
+        _patch_upload_path(),
         patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
         patch("tubearchive.infra.youtube.auth.get_authenticated_service", return_value=MagicMock()),
         patch("tubearchive.infra.youtube.playlist.list_playlists", return_value=[]),
@@ -222,7 +262,7 @@ async def test_save_passes_correct_privacy() -> None:
     from tubearchive.config import AppConfig
 
     assert isinstance(saved_configs[0], AppConfig)
-    assert saved_configs[0].youtube.upload_privacy == "private"  # type: ignore[union-attr]
+    assert saved_configs[0].youtube.upload_privacy == "private"
 
 
 # ------------------------------------------------------------------ #
@@ -236,6 +276,7 @@ async def test_refresh_playlists_button_calls_list_playlists() -> None:
     status = _auth_status(valid=True)
     mock_list = MagicMock(return_value=[_playlist("pl-1", "브이로그", 10)])
     with (
+        _patch_upload_path(),
         patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
         patch("tubearchive.infra.youtube.auth.get_authenticated_service", return_value=MagicMock()),
         patch("tubearchive.infra.youtube.playlist.list_playlists", mock_list),
@@ -264,6 +305,7 @@ async def test_auth_button_invokes_flow() -> None:
     mock_check = MagicMock(side_effect=[initial_status, post_auth_status])
 
     with (
+        _patch_upload_path(),
         patch("tubearchive.infra.youtube.auth.check_auth_status", mock_check),
         patch(
             "tubearchive.infra.youtube.auth.get_client_secrets_path",
@@ -325,3 +367,146 @@ def test_bridge_default_youtube_options() -> None:
 
     assert result.upload_privacy == "unlisted"
     assert result.playlist is None
+
+
+# ------------------------------------------------------------------ #
+# 직접 업로드                                                          #
+# ------------------------------------------------------------------ #
+
+
+@pytest.mark.asyncio
+async def test_upload_btn_disabled_without_file() -> None:
+    """인증 완료 상태에서도 파일을 선택하지 않으면 업로드 버튼이 비활성화된다."""
+    status = _auth_status(valid=True)
+    with (
+        _patch_upload_path(),
+        patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
+        patch("tubearchive.infra.youtube.auth.get_authenticated_service", return_value=MagicMock()),
+        patch("tubearchive.infra.youtube.playlist.list_playlists", return_value=[]),
+    ):
+        app = _App()
+        async with app.run_test(headless=True, size=(120, 40)):
+            await app.workers.wait_for_complete()
+            assert app.query_one("#yt-upload-btn", Button).disabled
+
+
+@pytest.mark.asyncio
+async def test_upload_btn_disabled_when_unauthenticated() -> None:
+    """미인증 상태에서는 파일을 선택해도 업로드 버튼이 비활성화 상태를 유지한다."""
+    status = _auth_status(valid=False, has_secrets=True)
+    with (
+        _patch_upload_path(),
+        patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
+    ):
+        app = _App()
+        async with app.run_test(headless=True, size=(120, 40)) as pilot:
+            await app.workers.wait_for_complete()
+            pane = app.query_one(YouTubePane)
+            pane._selected_upload_file = Path("/tmp/test.mp4")
+            pane._refresh_upload_btn()
+            await pilot.pause()
+            assert app.query_one("#yt-upload-btn", Button).disabled
+
+
+@pytest.mark.asyncio
+async def test_non_video_file_does_not_set_upload_target() -> None:
+    """지원하지 않는 확장자 파일 선택 시 _selected_upload_file이 None으로 유지된다."""
+    status = _auth_status(valid=True)
+    with (
+        _patch_upload_path(),
+        patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
+        patch("tubearchive.infra.youtube.auth.get_authenticated_service", return_value=MagicMock()),
+        patch("tubearchive.infra.youtube.playlist.list_playlists", return_value=[]),
+    ):
+        app = _App()
+        async with app.run_test(headless=True, size=(120, 40)) as pilot:
+            await app.workers.wait_for_complete()
+            pane = app.query_one(YouTubePane)
+
+            # .txt 파일 선택 — 핸들러에 직접 MagicMock 이벤트 전달
+            fake_event = MagicMock()
+            fake_event.path = Path("/tmp/readme.txt")
+            pane.on_directory_tree_file_selected(fake_event)
+            await pilot.pause()
+
+            assert pane._selected_upload_file is None
+            assert app.query_one("#yt-upload-btn", Button).disabled
+
+
+@pytest.mark.asyncio
+async def test_video_file_enables_upload_btn() -> None:
+    """지원 형식 비디오 파일 선택 시 업로드 버튼이 활성화된다."""
+    status = _auth_status(valid=True)
+    tmp_video = Path("/tmp/sample.mp4")
+    tmp_video.touch()
+    try:
+        with (
+            _patch_upload_path(),
+            patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
+            patch(
+                "tubearchive.infra.youtube.auth.get_authenticated_service",
+                return_value=MagicMock(),
+            ),
+            patch("tubearchive.infra.youtube.playlist.list_playlists", return_value=[]),
+        ):
+            app = _App()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await app.workers.wait_for_complete()
+                pane = app.query_one(YouTubePane)
+
+                # .mp4 파일 선택 — 핸들러에 직접 MagicMock 이벤트 전달
+                fake_event = MagicMock()
+                fake_event.path = tmp_video
+                pane.on_directory_tree_file_selected(fake_event)
+                await pilot.pause()
+
+                assert pane._selected_upload_file == tmp_video
+                assert not app.query_one("#yt-upload-btn", Button).disabled
+    finally:
+        tmp_video.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_upload_worker_calls_uploader() -> None:
+    """업로드 시작 버튼 클릭 시 YouTubeUploader.upload()가 1회 호출된다."""
+    status = _auth_status(valid=True)
+
+    mock_result = MagicMock()
+    mock_result.url = "https://youtu.be/test123"
+    mock_result.video_id = "test123"
+
+    mock_uploader_cls = MagicMock()
+    mock_uploader_cls.return_value.upload.return_value = mock_result
+
+    tmp_video = Path("/tmp/sample_upload.mp4")
+    tmp_video.touch()
+    try:
+        with (
+            _patch_upload_path(),
+            patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=status),
+            patch(
+                "tubearchive.infra.youtube.auth.get_authenticated_service",
+                return_value=MagicMock(),
+            ),
+            patch("tubearchive.infra.youtube.playlist.list_playlists", return_value=[]),
+            patch(
+                "tubearchive.infra.youtube.uploader.YouTubeUploader",
+                mock_uploader_cls,
+            ),
+        ):
+            app = _App()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await app.workers.wait_for_complete()
+                pane = app.query_one(YouTubePane)
+                pane._selected_upload_file = tmp_video
+                pane._is_authenticated = True
+                pane._refresh_upload_btn()
+                await pilot.pause()
+
+                _press_button(app, "yt-upload-btn")
+                await pilot.pause()
+                await app.workers.wait_for_complete()
+
+                mock_uploader_cls.return_value.upload.assert_called_once()
+    finally:
+        tmp_video.unlink(missing_ok=True)
