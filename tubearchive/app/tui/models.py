@@ -9,7 +9,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -110,6 +110,10 @@ class TuiOptionState:
     upload: bool = False
     project: str = ""
     notify: bool = False
+
+    # YouTube
+    upload_privacy: str = "unlisted"
+    upload_playlists: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +447,12 @@ def state_from_config(config: AppConfig) -> TuiOptionState:
 
     if config.general.subtitle_burn is not None:
         state.subtitle_burn = config.general.subtitle_burn
+
+    # --- YouTube ---
+    if config.youtube.upload_privacy is not None:
+        state.upload_privacy = config.youtube.upload_privacy
+    if config.youtube.playlist:
+        state.upload_playlists = list(config.youtube.playlist)
 
     # --- BGM ---
     env_bgm = os.environ.get(ENV_BGM_PATH)

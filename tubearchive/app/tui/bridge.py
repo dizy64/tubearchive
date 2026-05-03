@@ -123,6 +123,9 @@ def build_validated_args(
         upload=state.upload,
         project=state.project or None,
         notify=state.notify,
+        # YouTube
+        upload_privacy=state.upload_privacy,
+        playlist=state.upload_playlists or None,
         # 나머지 필드: TUI에서 미노출 → 기본값
         parallel=state.parallel,
     )

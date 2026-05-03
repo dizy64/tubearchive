@@ -24,6 +24,9 @@ class TubeArchiveApp(App[None]):
     TITLE = "TubeArchive"
     SUB_TITLE = "4K 영상 표준화 · 병합 대시보드"
 
+    # YouTube 탭에서 Apply/Save한 값을 Pipeline 탭과 공유하는 딕셔너리
+    _youtube_applied: dict[str, object]
+
     CSS = """
     TabbedContent {
         height: 1fr;
@@ -49,6 +52,7 @@ class TubeArchiveApp(App[None]):
         Binding("2", "switch_tab('projects')", "Projects"),
         Binding("3", "switch_tab('stats')", "Stats"),
         Binding("4", "switch_tab('history')", "History"),
+        Binding("5", "switch_tab('youtube')", "YouTube"),
         Binding("r", "refresh_data", "새로고침"),
         Binding("t", "toggle_dark", "테마 전환"),
     ]
@@ -62,6 +66,7 @@ class TubeArchiveApp(App[None]):
         self.initial_path = initial_path
         self.config = config or AppConfig()
         self._initial_state: TuiOptionState | None = self._make_initial_state()
+        self._youtube_applied: dict[str, object] = {}
 
     def _make_initial_state(self) -> TuiOptionState | None:
         """config에서 초기 TuiOptionState를 생성한다."""
@@ -91,6 +96,10 @@ class TubeArchiveApp(App[None]):
                 from tubearchive.app.tui.screens.history import HistoryPane
 
                 yield HistoryPane()
+            with TabPane("YouTube", id="youtube"):
+                from tubearchive.app.tui.screens.youtube import YouTubePane
+
+                yield YouTubePane()
         yield Footer()
 
     def action_switch_tab(self, tab_id: str) -> None:
@@ -113,6 +122,12 @@ class TubeArchiveApp(App[None]):
             from tubearchive.app.tui.screens.history import HistoryPane
 
             self.query_one(HistoryPane).load_data()
+        elif active == "youtube":
+            from tubearchive.app.tui.screens.youtube import YouTubePane
+
+            pane = self.query_one(YouTubePane)
+            pane._load_auth_status()
+            pane._load_playlists()
 
     # ------------------------------------------------------------------
     # 프리셋 저장/불러오기

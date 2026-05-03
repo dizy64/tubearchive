@@ -199,6 +199,12 @@ class PipelinePane(Widget):
 
         try:
             state = options.collect_state()
+            # YouTube 탭에서 Apply/Save한 값을 파이프라인 상태에 반영
+            yt = getattr(self.app, "_youtube_applied", {})
+            if "upload_privacy" in yt:
+                state.upload_privacy = str(yt["upload_privacy"])
+            if "upload_playlists" in yt:
+                state.upload_playlists = list(yt["upload_playlists"])
             validated_args = build_validated_args(targets, state)
         except ValueError as exc:
             self.query_one("#pipeline-status", Label).update(f"[red]{exc}[/]")

@@ -14,8 +14,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import tempfile
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1477,3 +1479,56 @@ def get_default_subtitle_format() -> str | None:
 def get_default_subtitle_burn() -> bool:
     """환경변수 ``TUBEARCHIVE_SUBTITLE_BURN`` 에서 자막 하드코딩 기본값을 가져온다."""
     return _get_env_bool(ENV_SUBTITLE_BURN)
+
+
+def save_config(config: AppConfig, path: Path | None = None) -> Path:
+    """YouTube 설정을 config.toml에 저장한다.
+
+    ``[youtube]`` 섹션의 ``upload_privacy`` / ``playlist`` 두 키만 갱신하고,
+    그 외 섹션·주석·포맷은 tomlkit round-trip으로 보존한다.
+    파일이 없으면 ``generate_default_config()`` 템플릿으로 신규 생성한다.
+    임시 파일 → ``os.replace()`` atomic write로 부분 쓰기를 방지한다.
+
+    Args:
+        config: YouTube 설정이 담긴 AppConfig.
+        path: 저장 경로. ``None`` 이면 기본 경로(``~/.tubearchive/config.toml``).
+
+    Returns:
+        저장된 파일 경로.
+    """
+    import tomlkit
+
+    target = path or get_default_config_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    if target.exists():
+        doc = tomlkit.parse(target.read_text(encoding="utf-8"))
+    else:
+        doc = tomlkit.parse(generate_default_config())
+
+    if "youtube" not in doc:
+        doc.add("youtube", tomlkit.table())
+
+    yt = doc["youtube"]
+
+    if config.youtube.upload_privacy is not None:
+        yt["upload_privacy"] = config.youtube.upload_privacy  # type: ignore[index]
+    elif "upload_privacy" in yt:  # type: ignore[operator]
+        del yt["upload_privacy"]  # type: ignore[union-attr]
+
+    arr = tomlkit.array()
+    for pid in config.youtube.playlist:
+        arr.append(pid)
+    yt["playlist"] = arr  # type: ignore[index]
+
+    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=".config_", suffix=".toml")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(tomlkit.dumps(doc))
+        Path(tmp_name).replace(target)
+    except Exception:
+        with contextlib.suppress(OSError):
+            Path(tmp_name).unlink()
+        raise
+
+    return target

@@ -329,6 +329,8 @@ class ValidatedArgs:
     schedule: str | None = None
     quality_report: bool = False
     hooks: HooksConfig = field(default_factory=HooksConfig)
+    upload_privacy: str = "unlisted"
+    playlist: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -1629,6 +1631,8 @@ def validate_args(
         notify=bool(getattr(args, "notify", False)) or get_default_notify(),
         schedule=schedule,
         hooks=hooks_config,
+        upload_privacy=getattr(args, "upload_privacy", None) or "unlisted",
+        playlist=getattr(args, "playlist", None),
     )
 
 

@@ -45,6 +45,7 @@ from tubearchive.config import (
     get_default_watch_poll_interval,
     get_default_watch_stability_checks,
     load_config,
+    save_config,
 )
 
 
@@ -1448,3 +1449,91 @@ device_luts = "not_a_table"
         assert "[color_grading]" in result
         assert "auto_lut" in result
         assert "device_luts" in result
+
+
+class TestSaveConfig:
+    """save_config() 테스트."""
+
+    def test_creates_new_file_from_template(self, tmp_path: Path) -> None:
+        """config.toml이 없을 때 템플릿 기반으로 신규 생성."""
+        config_file = tmp_path / "config.toml"
+        assert not config_file.exists()
+
+        config = AppConfig(youtube=YouTubeConfig(upload_privacy="public", playlist=["pl1", "pl2"]))
+        saved_path = save_config(config, config_file)
+
+        assert saved_path == config_file
+        assert config_file.exists()
+        text = config_file.read_text()
+        assert "public" in text
+        assert "pl1" in text
+
+    def test_updates_youtube_section_only(self, tmp_path: Path) -> None:
+        """[youtube] 섹션만 갱신하고 다른 섹션은 보존."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            "[general]\nparallel = 4\n\n[youtube]\nupload_chunk_mb = 32\n\n"
+            '[archive]\npolicy = "keep"\n'
+        )
+
+        config = AppConfig(youtube=YouTubeConfig(upload_privacy="private", playlist=["plA"]))
+        save_config(config, config_file)
+
+        loaded = load_config(config_file)
+        assert loaded.general.parallel == 4
+        assert loaded.youtube.upload_privacy == "private"
+        assert loaded.youtube.playlist == ["plA"]
+        assert loaded.youtube.upload_chunk_mb == 32
+        assert loaded.archive.policy == "keep"
+
+    def test_preserves_other_youtube_keys(self, tmp_path: Path) -> None:
+        """[youtube] 내 client_secrets 등 다른 키는 그대로 유지."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            '[youtube]\nclient_secrets = "/my/secrets.json"\nupload_chunk_mb = 64\n'
+        )
+
+        config = AppConfig(youtube=YouTubeConfig(upload_privacy="unlisted", playlist=[]))
+        save_config(config, config_file)
+
+        loaded = load_config(config_file)
+        assert loaded.youtube.client_secrets == "/my/secrets.json"
+        assert loaded.youtube.upload_chunk_mb == 64
+
+    def test_round_trip(self, tmp_path: Path) -> None:
+        """저장 후 load_config()로 다시 읽으면 같은 값."""
+        config_file = tmp_path / "config.toml"
+        config = AppConfig(youtube=YouTubeConfig(upload_privacy="public", playlist=["pl1"]))
+        save_config(config, config_file)
+
+        loaded = load_config(config_file)
+        assert loaded.youtube.upload_privacy == "public"
+        assert loaded.youtube.playlist == ["pl1"]
+
+    def test_empty_playlist(self, tmp_path: Path) -> None:
+        """빈 플레이리스트는 빈 배열로 저장."""
+        config_file = tmp_path / "config.toml"
+        config = AppConfig(youtube=YouTubeConfig(upload_privacy="unlisted", playlist=[]))
+        save_config(config, config_file)
+
+        loaded = load_config(config_file)
+        assert loaded.youtube.playlist == []
+
+    def test_returns_path(self, tmp_path: Path) -> None:
+        """저장된 파일 경로를 반환."""
+        config_file = tmp_path / "config.toml"
+        config = AppConfig()
+        result = save_config(config, config_file)
+        assert result == config_file
+
+    def test_uses_default_path_when_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """path=None 이면 기본 경로를 사용."""
+        fake_path = tmp_path / "config.toml"
+        monkeypatch.setattr("tubearchive.config.get_default_config_path", lambda: fake_path)
+
+        config = AppConfig(youtube=YouTubeConfig(upload_privacy="private", playlist=[]))
+        saved = save_config(config, None)
+        assert saved == fake_path
+        assert fake_path.exists()
