@@ -130,6 +130,26 @@ VIDEO_DENOISE_HQDN3D_LEVELS: dict[str, str] = {
     "heavy": "hqdn3d=6:4.5:12:9",
 }
 
+# 화이트밸런스 Kelvin 프리셋
+WB_PRESETS: dict[str, int] = {
+    "tungsten": 3200,
+    "fluorescent": 4000,
+    "daylight": 5500,
+    "cloudy": 6500,
+    "shade": 7500,
+}
+
+# 기기별 빌트인 기본 WB 프리셋
+# GoPro/DJI는 야외 촬영 위주이므로 cloudy가 기본값
+WB_DEVICE_DEFAULTS: dict[str, str] = {
+    "nikon": "daylight",
+    "canon": "daylight",
+    "sony": "daylight",
+    "iphone": "daylight",
+    "gopro": "cloudy",
+    "dji": "cloudy",
+}
+
 
 def create_lut_filter(lut_path: str) -> str:
     """
@@ -181,6 +201,20 @@ def create_video_denoise_filter(level: str = "medium") -> str:
     if key not in VIDEO_DENOISE_HQDN3D_LEVELS:
         raise ValueError(f"Unsupported video denoise level: {level!r}")
     return VIDEO_DENOISE_HQDN3D_LEVELS[key]
+
+
+def create_wb_filter(kelvin: int) -> str:
+    """화이트밸런스 필터 생성 (colortemperature).
+
+    ffmpeg 5.0+ 필요. 미지원 ffmpeg는 transcoder에서 graceful skip 처리.
+
+    Args:
+        kelvin: 색온도 (K)
+
+    Returns:
+        colortemperature 필터 문자열
+    """
+    return f"colortemperature=temperature={kelvin}"
 
 
 def create_hdr_to_sdr_filter(color_transfer: str | None) -> str:
