@@ -122,11 +122,17 @@ def cmd_list_playlists() -> None:
             print(f"   export {ENV_YOUTUBE_PLAYLIST}={ids}  # 여러 개")
 
     except Exception as e:
-        logger.error(f"Failed to list playlists: {e}")
+        logger.error("Failed to list playlists: %s", e)
         print(f"\n❌ 플레이리스트 조회 실패: {e}")
 
-        # 스코프 부족 에러 처리
-        if "insufficient" in str(e).lower() or "scope" in str(e).lower():
+        try:
+            from googleapiclient.errors import HttpError
+
+            is_forbidden = isinstance(e, HttpError) and e.resp.status == 403
+        except ImportError:
+            is_forbidden = "insufficient" in str(e).lower() or "scope" in str(e).lower()
+
+        if is_forbidden:
             from tubearchive.infra.youtube.auth import get_token_path
 
             token_path = get_token_path()

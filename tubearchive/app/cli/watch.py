@@ -220,12 +220,15 @@ def _run_watch_mode(
                         continue
 
                     try:
+                        effective_hooks = (
+                            current_args.hooks if current_args.hooks is not None else hooks
+                        )
                         _run_watch_pipeline(
                             pending,
                             parsed_args,
                             current_args,
                             notifier=notifier,
-                            hooks=current_args.hooks if hooks is None else hooks,
+                            hooks=effective_hooks,
                         )
                     except Exception as e:
                         logger.error("watch pipeline failed for %s: %s", pending, e)

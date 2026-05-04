@@ -15,7 +15,6 @@ import logging
 import shutil
 import subprocess
 import sys
-import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -69,7 +68,7 @@ def get_temp_dir() -> Path:
     한 쪽이 cleanup할 때 나머지의 임시 파일도 삭제되는 문제가 발생한다.
     UUID 서브디렉토리로 격리하여 각 실행이 독립적인 트랜잭션을 갖도록 한다.
     """
-    temp_base = Path(tempfile.gettempdir()) / "tubearchive" / uuid.uuid4().hex[:8]
+    temp_base = Path("/tmp/tubearchive") / uuid.uuid4().hex[:8]  # noqa: S108
     temp_base.mkdir(parents=True, exist_ok=True)
     return temp_base
 
@@ -1076,10 +1075,13 @@ def run_pipeline(
 
         if validated_args.subtitle_burn:
             logger.info("Applying hardcoded subtitles...")
-            final_path = _apply_subtitle_burn(
+            burned_path = _apply_subtitle_burn(
                 input_path=final_path,
                 subtitle_path=subtitle_path,
             )
+            # 원본을 burned 파일로 교체하여 --output 경로를 유지
+            final_path.unlink(missing_ok=True)
+            burned_path.rename(final_path)
 
     # 4.1 화질 리포트 출력 (선택)
     if validated_args.quality_report:
@@ -1744,7 +1746,7 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     print_video_list(video_files, header="최종 클립 순서")
 
     print(f"Output: {output_str}")
-    print(f"Temp dir: {get_temp_dir()}")
+    print("Temp dir: /tmp/tubearchive/<uuid>")
     print(f"Resume enabled: {not validated_args.no_resume}")
     print(f"Keep temp files: {validated_args.keep_temp}")
     print(f"Parallel workers: {validated_args.parallel}")

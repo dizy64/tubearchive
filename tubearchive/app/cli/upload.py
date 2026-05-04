@@ -343,7 +343,7 @@ def cmd_upload_only(args: argparse.Namespace, hooks: HooksConfig | None = None) 
     from tubearchive.app.cli.parser import parse_schedule_datetime
     from tubearchive.app.cli.validators import _resolve_set_thumbnail_path
 
-    file_path = Path(args.upload_only)
+    file_path = Path(args.upload_only).expanduser()
 
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -387,7 +387,7 @@ def cmd_upload_only(args: argparse.Namespace, hooks: HooksConfig | None = None) 
         thumbnail=set_thumbnail_path,
     )
 
-    if hooks is not None:
+    if hooks is not None and video_id is not None:
         run_hooks(
             hooks,
             "on_upload",
