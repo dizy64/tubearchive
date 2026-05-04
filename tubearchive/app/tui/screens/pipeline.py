@@ -245,7 +245,7 @@ class PipelinePane(Widget):
         root_logger.addHandler(log_handler)
         try:
             with contextlib.redirect_stdout(writer), contextlib.redirect_stderr(writer):
-                output_path = run_pipeline(validated_args, notifier=None)  # type: ignore[arg-type]
+                output_path = run_pipeline(validated_args, context=None)  # type: ignore[arg-type]
             self.app.call_from_thread(self._on_pipeline_done, output_path)
         except Exception as exc:
             self.app.call_from_thread(self._on_pipeline_error, str(exc))

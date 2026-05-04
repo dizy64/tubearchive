@@ -185,6 +185,9 @@ def cmd_init_config() -> None:
     print(f"설정 파일 생성됨: {config_path}")
 
 
+# --- context.py re-exports ---
+from tubearchive.app.cli.context import PipelineContext  # noqa: E402
+
 # --- parser.py re-exports ---
 from tubearchive.app.cli.parser import (  # noqa: E402, F401
     create_parser,
@@ -475,7 +478,7 @@ def main() -> None:
         pipeline_generated_subtitle_paths: list[Path] = []
         output_path = run_pipeline(
             validated_args,
-            notifier=notifier,
+            context=PipelineContext(notifier=notifier),
             generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
             generated_subtitle_paths=pipeline_generated_subtitle_paths,
         )

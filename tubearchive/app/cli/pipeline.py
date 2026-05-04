@@ -21,11 +21,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
-if TYPE_CHECKING:
-    from tubearchive.infra.notification.notifier import Notifier
-
+from tubearchive.app.cli.context import PipelineContext
 from tubearchive.app.cli.validators import ValidatedArgs
 from tubearchive.config import HooksConfig
 from tubearchive.domain.media.backup import BackupExecutor, BackupResult
@@ -810,7 +808,7 @@ def _run_error_hook(
 
 def run_pipeline(
     validated_args: ValidatedArgs,
-    notifier: Notifier | None = None,
+    context: PipelineContext | None = None,
     generated_thumbnail_paths: list[Path] | None = None,
     generated_subtitle_paths: list[Path] | None = None,
 ) -> Path:
@@ -821,13 +819,14 @@ def run_pipeline(
 
     Args:
         validated_args: 검증된 인자
-        notifier: 알림 오케스트레이터 (None이면 알림 비활성화)
+        context: 파이프라인 실행 컨텍스트 (notifier + on_progress 콜백, None이면 비활성화)
         generated_thumbnail_paths: 썸네일 생성 결과 저장용 출력 버퍼 (기본값 None)
         generated_subtitle_paths: 자막 생성 결과 저장용 출력 버퍼 (기본값 None)
 
     Returns:
         최종 출력 파일 경로
     """
+    notifier = context.notifier if context else None
     # 1. 파일 스캔
     logger.info("Scanning video files...")
     video_files = scan_videos(validated_args.targets)

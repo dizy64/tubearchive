@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import Event, Lock
 from typing import TYPE_CHECKING, Any
 
+from tubearchive.app.cli.context import PipelineContext
 from tubearchive.app.cli.pipeline import _run_error_hook, run_pipeline
 from tubearchive.app.cli.upload import _upload_after_pipeline
 from tubearchive.app.cli.validators import ValidatedArgs, validate_args
@@ -106,7 +107,7 @@ def _run_watch_pipeline(
     pipeline_generated_thumbnail_paths: list[Path] = []
     output_path = run_pipeline(
         pipeline_args,
-        notifier=notifier,
+        context=PipelineContext(notifier=notifier),
         generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
     )
     logger.info("완료: %s", output_path)
