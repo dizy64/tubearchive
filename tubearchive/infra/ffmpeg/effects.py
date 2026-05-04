@@ -876,23 +876,47 @@ def _build_portrait_video_filter(
     lut_filter: str = "",
     lut_before_hdr: bool = False,
     watermark_filter: str = "",
+    video_denoise_filter: str = "",
+    wb_filter: str = "",
 ) -> str:
     """세로 영상용 filter_complex 문자열 생성.
 
-    기본: stabilize → HDR → split → blur → overlay → LUT → fade
-    before: stabilize → LUT → HDR → split → blur → overlay → fade
+    기본: stabilize → [hqdn3d] → HDR → [colortemperature] → split → blur+overlay → LUT → fade
+    before: stabilize → [hqdn3d] → LUT → HDR → [colortemperature] → split → blur+overlay → fade
     """
     fg_height = target_height
     fg_width = int(source_width * (fg_height / source_height))
 
     # 입력 체인 구성. filter(None, [...])로 빈 문자열("")을 제거하여
     # 선택적 필터(stabilize, lut, hdr)가 없을 때 쉼표가 남지 않게 한다.
+    # hqdn3d는 항상 HDR 변환 전, colortemperature는 항상 HDR 변환 후
     if lut_before_hdr:
         split_input = ",".join(
-            filter(None, [stabilize_filter, lut_filter, hdr_filter, "split=2[bg][fg]"])
+            filter(
+                None,
+                [
+                    stabilize_filter,
+                    video_denoise_filter,  # hqdn3d: 항상 HDR 전
+                    lut_filter,
+                    hdr_filter,
+                    wb_filter,  # colortemperature: 항상 HDR 후
+                    "split=2[bg][fg]",
+                ],
+            )
         )
     else:
-        split_input = ",".join(filter(None, [stabilize_filter, hdr_filter, "split=2[bg][fg]"]))
+        split_input = ",".join(
+            filter(
+                None,
+                [
+                    stabilize_filter,
+                    video_denoise_filter,  # hqdn3d: 항상 HDR 전
+                    hdr_filter,
+                    wb_filter,  # colortemperature: 항상 HDR 후
+                    "split=2[bg][fg]",
+                ],
+            )
+        )
 
     # 배경: 스케일 → crop → blur
     bg_chain = (
@@ -923,11 +947,13 @@ def _build_landscape_video_filter(
     lut_filter: str = "",
     lut_before_hdr: bool = False,
     watermark_filter: str = "",
+    video_denoise_filter: str = "",
+    wb_filter: str = "",
 ) -> str:
     """가로 영상용 -vf 필터 문자열 생성.
 
-    기본: stabilize → HDR → scale+pad → LUT → fade
-    before: stabilize → LUT → HDR → scale+pad → fade
+    기본: stabilize → [hqdn3d] → HDR → [colortemperature] → scale+pad → LUT → fade
+    before: stabilize → [hqdn3d] → LUT → HDR → [colortemperature] → scale+pad → fade
     """
     scale_pad = (
         f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
@@ -937,8 +963,10 @@ def _build_landscape_video_filter(
     if lut_before_hdr:
         chain = [
             stabilize_filter,
+            video_denoise_filter,  # hqdn3d: 항상 HDR 전
             lut_filter,
             hdr_filter,
+            wb_filter,  # colortemperature: 항상 HDR 후
             scale_pad,
             watermark_filter,
             fade_filters,
@@ -946,7 +974,9 @@ def _build_landscape_video_filter(
     else:
         chain = [
             stabilize_filter,
+            video_denoise_filter,  # hqdn3d: 항상 HDR 전
             hdr_filter,
+            wb_filter,  # colortemperature: 항상 HDR 후
             scale_pad,
             lut_filter,
             watermark_filter,
@@ -973,6 +1003,9 @@ def create_combined_filter(
     denoise_level: str = "medium",
     silence_remove: str = "",
     loudnorm_analysis: LoudnormAnalysis | None = None,
+    video_denoise: bool = False,
+    video_denoise_strength: str = "medium",
+    wb_kelvin: int | None = None,
     lut_path: str | None = None,
     lut_before_hdr: bool = False,
     watermark_text: str | None = None,
@@ -1033,6 +1066,16 @@ def create_combined_filter(
     if lut_path:
         lut_filter_str = create_lut_filter(lut_path)
 
+    # 영상 노이즈 제거 필터 생성
+    video_denoise_filter_str = ""
+    if video_denoise:
+        video_denoise_filter_str = create_video_denoise_filter(video_denoise_strength)
+
+    # 화이트밸런스 필터 생성
+    wb_filter_str = ""
+    if wb_kelvin is not None:
+        wb_filter_str = create_wb_filter(wb_kelvin)
+
     watermark_filter = ""
     if watermark_text:
         watermark_filter = create_watermark_filter(
@@ -1063,6 +1106,8 @@ def create_combined_filter(
             lut_filter=lut_filter_str,
             watermark_filter=watermark_filter,
             lut_before_hdr=lut_before_hdr,
+            video_denoise_filter=video_denoise_filter_str,
+            wb_filter=wb_filter_str,
         )
     else:
         video_filter = _build_landscape_video_filter(
@@ -1074,6 +1119,8 @@ def create_combined_filter(
             lut_filter=lut_filter_str,
             watermark_filter=watermark_filter,
             lut_before_hdr=lut_before_hdr,
+            video_denoise_filter=video_denoise_filter_str,
+            wb_filter=wb_filter_str,
         )
 
     audio_filter = create_audio_filter_chain(
