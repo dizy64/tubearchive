@@ -631,6 +631,7 @@ def _transcode_parallel(
                 )
             ] = i
 
+        first_error: Exception | None = None
         for future in as_completed(futures):
             idx = futures[future]
             try:
@@ -640,7 +641,10 @@ def _transcode_parallel(
             except Exception as e:
                 logger.error(f"Failed to transcode {video_files[idx].path}: {e}")
                 on_complete(idx, video_files[idx].path.name, "실패", success=False)
-                raise
+                if first_error is None:
+                    first_error = e
+        if first_error is not None:
+            raise first_error
 
     return [results[i] for i in range(total_count)]
 

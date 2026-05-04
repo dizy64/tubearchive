@@ -57,7 +57,7 @@ class _FileRow(Static):
     def render(self) -> str:
         icon = _ICONS[self._status]
         color = _COLORS[self._status]
-        name = self._filename[:40]
+        name = escape(self._filename[:40])
         if self._status == "processing":
             pct = f"{self._percent:3d}%"
             eta = f"  ETA {self._eta}" if self._eta else ""

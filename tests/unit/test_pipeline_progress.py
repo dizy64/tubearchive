@@ -259,3 +259,58 @@ def test_transcode_parallel_emits_start_and_done_events(tmp_path: Path) -> None:
     assert len(done_events) == 1
     assert done_events[0].file_index == 0
     assert done_events[0].success is True
+
+
+def test_transcode_parallel_emits_done_for_all_files_on_partial_failure(
+    tmp_path: Path,
+) -> None:
+    """파일 중 하나가 실패해도 나머지 FileDoneEvent가 모두 emit된 뒤 예외가 전파된다."""
+    from tubearchive.app.cli.context import FileDoneEvent, PipelineContext
+    from tubearchive.app.cli.pipeline import TranscodeOptions, _transcode_parallel
+    from tubearchive.domain.models.clip import ClipInfo
+
+    events: list[object] = []
+    ctx = PipelineContext(on_progress=events.append)
+
+    fake_video_a = MagicMock()
+    fake_video_a.path = tmp_path / "a.mov"
+    fake_video_b = MagicMock()
+    fake_video_b.path = tmp_path / "b.mov"
+
+    clip_a = ClipInfo(name="a", duration=5.0, device="x", shot_time=None)
+    clip_b = ClipInfo(name="b", duration=5.0, device="x", shot_time=None)
+    opts = TranscodeOptions()
+
+    call_count = 0
+
+    def fake_collect_clip_info(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return clip_a if call_count == 1 else clip_b
+
+    with (
+        patch("tubearchive.app.cli.pipeline.Transcoder") as mock_tc_cls,
+        patch("tubearchive.app.cli.pipeline.detect_metadata"),
+        patch(
+            "tubearchive.app.cli.pipeline._collect_clip_info",
+            side_effect=fake_collect_clip_info,
+        ),
+    ):
+        mock_tc = MagicMock()
+        mock_tc_cls.return_value.__enter__ = MagicMock(return_value=mock_tc)
+        mock_tc_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        # 두 번째 파일 트랜스코딩은 실패
+        mock_tc.transcode_video.side_effect = [
+            (tmp_path / "a_tc.mp4", 1, []),
+            RuntimeError("transcode failed"),
+        ]
+
+        with pytest.raises(RuntimeError, match="transcode failed"):
+            _transcode_parallel([fake_video_a, fake_video_b], tmp_path, 2, opts, context=ctx)
+
+    done_events = [e for e in events if isinstance(e, FileDoneEvent)]
+    # 두 파일 모두 FileDoneEvent가 emit되어야 한다
+    assert len(done_events) == 2
+    success_flags = {e.file_index: e.success for e in done_events}
+    assert False in success_flags.values(), "실패한 파일의 FileDoneEvent.success가 False여야 함"
