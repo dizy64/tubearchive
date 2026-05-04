@@ -169,3 +169,16 @@ async def test_pipeline_on_error_updates_state() -> None:
         btn = pane.query_one("#run-button", Button)
         assert btn.disabled is False
         assert str(btn.label) == "다시 실행"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_uses_file_progress_panel() -> None:
+    """PipelinePane이 FileProgressPanel을 포함한다."""
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.file_progress_panel import FileProgressPanel
+
+    app = TubeArchiveApp()
+    async with app.run_test(headless=True, size=(120, 40)):
+        pane = app.query_one(PipelinePane)
+        panel = pane.query_one(FileProgressPanel)
+        assert panel is not None
