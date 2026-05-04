@@ -748,7 +748,7 @@ tubearchive ~/Videos/ --upload
 | `TUBEARCHIVE_PARALLEL` | 병렬 트랜스코딩 수 | 1 (순차 처리) |
 | `TUBEARCHIVE_DENOISE` | 오디오 노이즈 제거 (true/false) | false |
 | `TUBEARCHIVE_DENOISE_LEVEL` | 노이즈 제거 강도 (light/medium/heavy) | medium |
-| `TUBEARCHIVE_NORMALIZE_AUDIO` | EBU R128 loudnorm 정규화 (true/false) | false |
+| `TUBEARCHIVE_NORMALIZE_AUDIO` | EBU R128 loudnorm 정규화 (true/false) | true |
 | `TUBEARCHIVE_STABILIZE` | 영상 안정화 vidstab (true/false) | false |
 | `TUBEARCHIVE_STABILIZE_STRENGTH` | 안정화 강도 (light/medium/heavy) | medium |
 | `TUBEARCHIVE_STABILIZE_CROP` | 안정화 크롭 모드 (crop/expand) | crop |
