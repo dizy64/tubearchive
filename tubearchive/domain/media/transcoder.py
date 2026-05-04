@@ -28,6 +28,7 @@ from tubearchive.infra.ffmpeg.effects import (
     StabilizeCrop,
     StabilizeStrength,
     create_combined_filter,
+    create_denoise_audio_filter,
     create_loudnorm_analysis_filter,
     create_vidstab_detect_filter,
     create_vidstab_transform_filter,
@@ -244,7 +245,11 @@ class Transcoder:
 
     # ---------- 공개 API ----------
 
-    def _run_loudnorm_analysis(self, video_file: VideoFile) -> LoudnormAnalysis:
+    def _run_loudnorm_analysis(
+        self,
+        video_file: VideoFile,
+        pre_filter: str = "",
+    ) -> LoudnormAnalysis:
         """EBU R128 loudnorm 1st pass — 오디오 라우드니스 분석.
 
         FFmpeg의 ``loudnorm`` 필터를 분석 모드(``print_format=json``)로
@@ -253,14 +258,17 @@ class Transcoder:
 
         Args:
             video_file: 분석 대상 영상 파일.
+            pre_filter: loudnorm 앞에 적용할 오디오 필터 (예: denoise 필터).
+                2nd pass의 실제 입력과 측정 환경을 일치시키기 위해 사용한다.
 
         Returns:
             1st pass 분석 결과 (:class:`LoudnormAnalysis`).
         """
         analysis_filter = create_loudnorm_analysis_filter()
+        full_filter = f"{pre_filter},{analysis_filter}" if pre_filter else analysis_filter
         cmd = self.executor.build_loudness_analysis_command(
             input_path=video_file.path,
-            audio_filter=analysis_filter,
+            audio_filter=full_filter,
         )
         logger.info("Running loudnorm analysis pass")
         stderr = self.executor.run_analysis(cmd)
@@ -439,11 +447,14 @@ class Transcoder:
         self.resume_mgr.set_temp_file(job_id, output_path)
 
         # 5. loudnorm 분석 (활성화된 경우, 트랜스코딩 전에 실행)
-        # 오디오 스트림이 없는 영상에서는 오디오 분석을 스킵한다
+        # 오디오 스트림이 없는 영상에서는 오디오 분석을 스킵한다.
+        # denoise가 함께 활성화된 경우, 1st pass도 denoise를 거친 오디오를 측정해야
+        # 2nd pass와 측정 환경이 일치하여 loudnorm 특성 불일치를 방지한다.
         loudnorm_analysis: LoudnormAnalysis | None = None
         if normalize_audio and metadata.has_audio:
             try:
-                loudnorm_analysis = self._run_loudnorm_analysis(video_file)
+                pre_filter = create_denoise_audio_filter(denoise_level) if denoise else ""
+                loudnorm_analysis = self._run_loudnorm_analysis(video_file, pre_filter=pre_filter)
                 logger.info(
                     f"Loudnorm: I={loudnorm_analysis.input_i:.1f}dB "
                     f"TP={loudnorm_analysis.input_tp:.1f}dB "
