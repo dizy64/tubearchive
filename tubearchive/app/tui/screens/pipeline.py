@@ -18,10 +18,15 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import Button, Label
 
+from tubearchive.app.cli.context import PipelineContext
+from tubearchive.app.cli.pipeline import run_pipeline
 from tubearchive.app.tui.models import TuiOptionState
 from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
+from tubearchive.app.tui.widgets.file_progress_panel import FileProgressPanel
 from tubearchive.app.tui.widgets.option_panels import OptionsPane
-from tubearchive.app.tui.widgets.progress_panel import ProgressPanel
+from tubearchive.infra.notification.notifier import Notifier
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # stdout/stderr 인터셉터
@@ -79,7 +84,7 @@ class PipelinePane(Widget):
     - 우측(60%): 옵션 패널 (카테고리별 Collapsible)
     - 하단: Run 버튼 + 상태 메시지
 
-    실행 버튼을 누르면 옵션 뷰가 ProgressPanel 로 전환되고,
+    실행 버튼을 누르면 옵션 뷰가 FileProgressPanel 로 전환되고,
     완료/오류 시 옵션 뷰로 복귀한다.
     """
 
@@ -124,7 +129,7 @@ class PipelinePane(Widget):
             with Horizontal(id="pipeline-body"):
                 yield FileBrowserPane(initial_path=self.initial_path)
                 yield OptionsPane(initial_state=self._initial_state)
-            yield ProgressPanel(id="pipeline-progress")
+            yield FileProgressPanel(id="pipeline-progress")
             with Horizontal(id="pipeline-footer"):
                 yield Button("실행", id="run-button", variant="primary", disabled=True)
                 yield Label(
@@ -210,34 +215,48 @@ class PipelinePane(Widget):
             self.query_one("#pipeline-status", Label).update(f"[red]{exc}[/]")
             return
 
+        notifier = None
+        if getattr(validated_args, "notify", False):
+            try:
+                from tubearchive.config import load_config
+                from tubearchive.infra.notification.notifier import Notifier
+
+                cfg = load_config()
+                notifier = Notifier(cfg.notification)
+            except Exception as exc:
+                logger.warning("Notifier 초기화 실패, 알림 비활성화: %s", exc)
+
         self._pipeline_active = True
         self._show_progress_view()
 
         target_label = targets[0].name if targets else "?"
-        panel = self.query_one(ProgressPanel)
+        panel = self.query_one(FileProgressPanel)
         panel.start(f"처리 중: {target_label}")
         self.query_one("#pipeline-status", Label).update("실행 중...")
 
-        self._run_pipeline_worker(validated_args)
+        self._run_pipeline_worker(validated_args, notifier)
 
     @work(thread=True, exclusive=True)
-    def _run_pipeline_worker(self, validated_args: object) -> None:
+    def _run_pipeline_worker(self, validated_args: object, notifier: Notifier | None) -> None:
         """worker 스레드에서 run_pipeline() 실행.
 
         stdout/stderr를 캡처하고 logging 핸들러를 임시 추가해
-        모든 출력을 ProgressPanel.append_log() 로 전달한다.
+        모든 출력을 FileProgressPanel.append_log() 로 전달한다.
+        PipelineContext.on_progress 콜백으로 파일별 이벤트를 패널에 전달한다.
         """
         import contextlib
 
-        from tubearchive.app.cli.pipeline import run_pipeline
-
-        panel = self.query_one(ProgressPanel)
+        panel = self.query_one(FileProgressPanel)
 
         def _safe_append(text: str) -> None:
             self.app.call_from_thread(panel.append_log, text)
 
+        def _on_progress(event: object) -> None:
+            self.app.call_from_thread(panel.handle_event, event)
+
         writer = _TuiWriter(_safe_append)
         log_handler = _TuiLogHandler(_safe_append)
+        context = PipelineContext(notifier=notifier, on_progress=_on_progress)
 
         root_logger = logging.getLogger()
         prev_level = root_logger.level
@@ -245,7 +264,7 @@ class PipelinePane(Widget):
         root_logger.addHandler(log_handler)
         try:
             with contextlib.redirect_stdout(writer), contextlib.redirect_stderr(writer):
-                output_path = run_pipeline(validated_args, notifier=None)  # type: ignore[arg-type]
+                output_path = run_pipeline(validated_args, context=context)  # type: ignore[arg-type]
             self.app.call_from_thread(self._on_pipeline_done, output_path)
         except Exception as exc:
             self.app.call_from_thread(self._on_pipeline_error, str(exc))
@@ -254,7 +273,7 @@ class PipelinePane(Widget):
             root_logger.setLevel(prev_level)
 
     # ------------------------------------------------------------------
-    # 완료/오류 콜백 (call_from_thread 경유, メインスレッド)
+    # 완료/오류 콜백 (call_from_thread 경유, 메인 스레드)
     # ------------------------------------------------------------------
 
     def _reset_after_pipeline(self) -> None:
@@ -265,14 +284,14 @@ class PipelinePane(Widget):
         btn.disabled = False
 
     def _on_pipeline_done(self, output_path: Path) -> None:
-        panel = self.query_one(ProgressPanel)
+        panel = self.query_one(FileProgressPanel)
         output_str = str(output_path) if output_path != Path() else "(완료)"
         panel.finish(output_str)
         self.query_one("#pipeline-status", Label).update(f"완료: {output_str}")
         self._reset_after_pipeline()
 
     def _on_pipeline_error(self, message: str) -> None:
-        panel = self.query_one(ProgressPanel)
+        panel = self.query_one(FileProgressPanel)
         panel.error(message)
         self.query_one("#pipeline-status", Label).update(f"[red]오류: {message}[/]")
         self._reset_after_pipeline()

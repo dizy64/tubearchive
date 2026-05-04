@@ -169,3 +169,117 @@ async def test_pipeline_on_error_updates_state() -> None:
         btn = pane.query_one("#run-button", Button)
         assert btn.disabled is False
         assert str(btn.label) == "다시 실행"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_uses_file_progress_panel() -> None:
+    """PipelinePane이 FileProgressPanel을 포함한다."""
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.file_progress_panel import FileProgressPanel
+
+    app = TubeArchiveApp()
+    async with app.run_test(headless=True, size=(120, 40)):
+        pane = app.query_one(PipelinePane)
+        panel = pane.query_one(FileProgressPanel)
+        assert panel is not None
+
+
+# ---------------------------------------------------------------------------
+# Notifier 조건부 생성 경로 테스트
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_launch_pipeline_creates_notifier_when_notify_enabled() -> None:
+    """notify=True이고 Notifier 생성 성공 시 notifier 인스턴스가 worker에 전달된다."""
+    from unittest.mock import MagicMock, patch
+
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
+    from tubearchive.app.tui.widgets.option_panels import OptionsPane
+
+    app = TubeArchiveApp()
+    async with app.run_test(headless=True, size=(120, 40)):
+        pane = app.query_one(PipelinePane)
+        browser = pane.query_one(FileBrowserPane)
+        options = pane.query_one(OptionsPane)
+
+        mock_validated_args = MagicMock()
+        mock_validated_args.notify = True
+        mock_notifier = MagicMock()
+        captured: list[object] = []
+
+        def fake_worker(validated_args: object, notifier: object) -> None:
+            captured.append(notifier)
+
+        with (
+            patch(
+                "tubearchive.app.tui.bridge.build_validated_args",
+                return_value=mock_validated_args,
+            ),
+            patch(
+                "tubearchive.infra.notification.notifier.Notifier",
+                return_value=mock_notifier,
+            ),
+            patch("tubearchive.config.load_config", return_value=MagicMock()),
+            patch.object(options, "collect_state", return_value=MagicMock()),
+            patch.object(browser, "get_selected_targets", return_value=[Path("/tmp/a.mp4")]),
+            patch.object(pane, "_run_pipeline_worker", side_effect=fake_worker),
+            patch.object(pane, "_show_progress_view"),
+        ):
+            pane._launch_pipeline()
+
+        assert len(captured) == 1
+        # notifier가 None이 아닌 값(mock)으로 전달됐다
+        assert captured[0] is not None
+
+
+@pytest.mark.asyncio
+async def test_launch_pipeline_falls_back_to_none_notifier_on_error() -> None:
+    """Notifier 생성 실패 시 notifier=None으로 폴백하고 경고 로그를 남긴다."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
+    from tubearchive.app.tui.widgets.option_panels import OptionsPane
+
+    app = TubeArchiveApp()
+    async with app.run_test(headless=True, size=(120, 40)):
+        pane = app.query_one(PipelinePane)
+        browser = pane.query_one(FileBrowserPane)
+        options = pane.query_one(OptionsPane)
+
+        mock_validated_args = MagicMock()
+        mock_validated_args.notify = True
+        captured: list[object] = []
+
+        def fake_worker(validated_args: object, notifier: object) -> None:
+            captured.append(notifier)
+
+        with (
+            patch(
+                "tubearchive.app.tui.bridge.build_validated_args",
+                return_value=mock_validated_args,
+            ),
+            patch(
+                "tubearchive.infra.notification.notifier.Notifier",
+                side_effect=RuntimeError("config error"),
+            ),
+            patch("tubearchive.config.load_config", return_value=MagicMock()),
+            patch.object(options, "collect_state", return_value=MagicMock()),
+            patch.object(browser, "get_selected_targets", return_value=[Path("/tmp/a.mp4")]),
+            patch.object(pane, "_run_pipeline_worker", side_effect=fake_worker),
+            patch.object(pane, "_show_progress_view"),
+            patch.object(
+                logging.getLogger("tubearchive.app.tui.screens.pipeline"),
+                "warning",
+            ) as mock_warn,
+        ):
+            pane._launch_pipeline()
+
+        assert len(captured) == 1
+        assert captured[0] is None
+        mock_warn.assert_called_once()
+        args = mock_warn.call_args[0]
+        assert "Notifier" in args[0]
