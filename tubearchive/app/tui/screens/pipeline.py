@@ -18,10 +18,13 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import Button, Label
 
+from tubearchive.app.cli.context import PipelineContext
+from tubearchive.app.cli.pipeline import run_pipeline
 from tubearchive.app.tui.models import TuiOptionState
 from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
 from tubearchive.app.tui.widgets.file_progress_panel import FileProgressPanel
 from tubearchive.app.tui.widgets.option_panels import OptionsPane
+from tubearchive.infra.notification.notifier import Notifier
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +237,7 @@ class PipelinePane(Widget):
         self._run_pipeline_worker(validated_args, notifier)
 
     @work(thread=True, exclusive=True)
-    def _run_pipeline_worker(self, validated_args: object, notifier: object) -> None:
+    def _run_pipeline_worker(self, validated_args: object, notifier: Notifier | None) -> None:
         """worker 스레드에서 run_pipeline() 실행.
 
         stdout/stderr를 캡처하고 logging 핸들러를 임시 추가해
@@ -242,9 +245,6 @@ class PipelinePane(Widget):
         PipelineContext.on_progress 콜백으로 파일별 이벤트를 패널에 전달한다.
         """
         import contextlib
-
-        from tubearchive.app.cli.context import PipelineContext
-        from tubearchive.app.cli.pipeline import run_pipeline
 
         panel = self.query_one(FileProgressPanel)
 
@@ -256,7 +256,7 @@ class PipelinePane(Widget):
 
         writer = _TuiWriter(_safe_append)
         log_handler = _TuiLogHandler(_safe_append)
-        context = PipelineContext(notifier=notifier, on_progress=_on_progress)  # type: ignore[arg-type]
+        context = PipelineContext(notifier=notifier, on_progress=_on_progress)
 
         root_logger = logging.getLogger()
         prev_level = root_logger.level

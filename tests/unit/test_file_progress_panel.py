@@ -5,6 +5,7 @@ import pytest
 
 from tubearchive.app.cli.context import (
     FileDoneEvent,
+    FileProgressEvent,
     FileStartEvent,
 )
 
@@ -74,4 +75,34 @@ async def test_file_progress_panel_finish_updates_status() -> None:
 
         label = pilot.app.query_one("#fp-header", Label)
         label_text = str(label.render())
-        assert "완료" in label_text or "/output/merged.mp4" in label_text
+        # render()는 markup을 벗긴 plain text 반환
+        assert "완료" in label_text
+        assert "/output/merged.mp4" in label_text
+
+
+@pytest.mark.asyncio
+async def test_file_progress_panel_updates_progress_on_event() -> None:
+    """FileProgressEvent 수신 시 해당 행의 진행률이 갱신된다."""
+    from unittest.mock import MagicMock
+
+    from textual.app import App, ComposeResult
+
+    from tubearchive.app.tui.widgets.file_progress_panel import FileProgressPanel, _FileRow
+
+    class TestApp(App):
+        def compose(self) -> ComposeResult:
+            yield FileProgressPanel(id="panel")
+
+    mock_info = MagicMock()
+    mock_info.percent = 50
+    mock_info.calculate_eta = MagicMock(return_value=None)
+
+    async with TestApp().run_test(headless=True, size=(120, 40)) as pilot:
+        panel = pilot.app.query_one(FileProgressPanel)
+        panel.handle_event(FileStartEvent(filename="a.mov", file_index=0, total_files=1))
+        panel.handle_event(FileProgressEvent(filename="a.mov", info=mock_info))
+        await pilot.pause()
+
+        row = panel.query(_FileRow).first()
+        assert row._percent == 50
+        assert row._status == "processing"
