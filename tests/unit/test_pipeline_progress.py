@@ -249,5 +249,8 @@ def test_transcode_parallel_emits_start_and_done_events(tmp_path: Path) -> None:
     start_events = [e for e in events if isinstance(e, FileStartEvent)]
     done_events = [e for e in events if isinstance(e, FileDoneEvent)]
     assert len(start_events) == 1
+    assert start_events[0].filename == "clip.mov"
+    assert start_events[0].file_index == 0
+    assert start_events[0].total_files == 1
     assert len(done_events) == 1
     assert done_events[0].success is True

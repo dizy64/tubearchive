@@ -576,8 +576,9 @@ def _transcode_parallel(
             )
             if completed_count == total_count:
                 print()  # 줄바꿈
-            if context and context.on_progress:
-                context.on_progress(FileDoneEvent(filename=filename, success=success))
+        # emit outside the lock — on_progress is an arbitrary callable
+        if context and context.on_progress:
+            context.on_progress(FileDoneEvent(filename=filename, success=success))
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures: dict[Future[TranscodeResult], int] = {}
