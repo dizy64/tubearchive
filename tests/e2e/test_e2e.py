@@ -436,7 +436,9 @@ class TestSubtitlePipeline:
 
         result_path = run_pipeline(args)
 
-        assert result_path == burned_file
-        assert burned_file.exists()
+        # burn 후 원본 경로(output_file)로 rename되므로 result는 output_file
+        assert result_path == output_file
+        assert output_file.exists()
+        assert not burned_file.exists()
         assert mock_burn.call_count == 1
         assert mock_burn.call_args.kwargs["subtitle_path"] == subtitle_file
