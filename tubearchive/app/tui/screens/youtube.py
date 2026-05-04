@@ -484,9 +484,7 @@ class YouTubePane(Widget):
                         add_to_playlist(service, pl_id, result.video_id)
                 append(f"[green]📋 플레이리스트({len(playlist_ids)}개) 추가 완료[/]")
 
-            self.app.call_from_thread(
-                self.app.notify, f"업로드 완료: {result.url}", timeout=5
-            )
+            self.app.call_from_thread(self.app.notify, f"업로드 완료: {result.url}", timeout=5)
 
         except YouTubeUploadError as exc:
             append(f"[red bold]❌ 업로드 실패:[/] {exc}")
@@ -495,9 +493,7 @@ class YouTubePane(Widget):
             )
         except Exception as exc:
             append(f"[red bold]❌ 오류:[/] {exc}")
-            self.app.call_from_thread(
-                self.app.notify, f"오류: {exc}", severity="error", timeout=5
-            )
+            self.app.call_from_thread(self.app.notify, f"오류: {exc}", severity="error", timeout=5)
         finally:
             self.app.call_from_thread(self._set_upload_btn, False)
 

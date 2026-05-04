@@ -265,9 +265,7 @@ def test_import_raises_if_json_missing(tmp_path: Path) -> None:
 def test_import_raises_on_wrong_format_version(tmp_path: Path) -> None:
     """format_version이 다르면 ValueError를 발생시킨다."""
     bad_json = tmp_path / "bad.json"
-    bad_json.write_text(
-        json.dumps({"format_version": 99, "tables": {}}), encoding="utf-8"
-    )
+    bad_json.write_text(json.dumps({"format_version": 99, "tables": {}}), encoding="utf-8")
     with pytest.raises(ValueError, match="format_version"):
         cmd_import_db(bad_json)
 
@@ -275,9 +273,7 @@ def test_import_raises_on_wrong_format_version(tmp_path: Path) -> None:
 def test_import_raises_on_missing_tables_key(tmp_path: Path) -> None:
     """'tables' 키가 없으면 ValueError를 발생시킨다."""
     bad_json = tmp_path / "bad.json"
-    bad_json.write_text(
-        json.dumps({"format_version": FORMAT_VERSION}), encoding="utf-8"
-    )
+    bad_json.write_text(json.dumps({"format_version": FORMAT_VERSION}), encoding="utf-8")
     with pytest.raises(ValueError, match="tables"):
         cmd_import_db(bad_json)
 
@@ -326,9 +322,7 @@ def test_remap_paths_split_jobs_output_files(tmp_path: Path) -> None:
 
 def test_remap_paths_non_path_table_unchanged(tmp_path: Path) -> None:
     """경로 컬럼이 없는 테이블은 변경 없이 그대로 반환된다."""
-    tables = {
-        "projects": [{"id": 1, "name": "제주도", "description": None}]
-    }
+    tables = {"projects": [{"id": 1, "name": "제주도", "description": None}]}
     result = _remap_paths(tables, "/old", "/new")
     assert result["projects"] == tables["projects"]
 
