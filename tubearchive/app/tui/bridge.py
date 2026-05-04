@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tubearchive.app.cli.main import ValidatedArgs
+from tubearchive.app.cli.validators import ValidatedArgs
 from tubearchive.app.tui.models import TuiOptionState
 
 

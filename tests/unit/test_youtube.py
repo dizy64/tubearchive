@@ -980,7 +980,7 @@ class TestScheduleUpload:
         from tubearchive.app.cli.main import parse_schedule_datetime
 
         # 미래 시간 (2050년)
-        with patch("tubearchive.app.cli.main.logger") as mock_logger:
+        with patch("tubearchive.app.cli.parser.logger") as mock_logger:
             result = parse_schedule_datetime("2050-12-31T23:59:59")
             # 로컬 타임존이 추가되어야 함
             assert result.startswith("2050-12-31T23:59:59")
