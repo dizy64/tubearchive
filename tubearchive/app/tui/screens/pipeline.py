@@ -23,6 +23,8 @@ from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
 from tubearchive.app.tui.widgets.file_progress_panel import FileProgressPanel
 from tubearchive.app.tui.widgets.option_panels import OptionsPane
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # stdout/stderr 인터셉터
 # ---------------------------------------------------------------------------
@@ -218,8 +220,8 @@ class PipelinePane(Widget):
 
                 cfg = load_config()
                 notifier = Notifier(cfg.notification)
-            except Exception:  # noqa: S110
-                pass
+            except Exception as exc:
+                logger.warning("Notifier 초기화 실패, 알림 비활성화: %s", exc)
 
         self._pipeline_active = True
         self._show_progress_view()
@@ -271,7 +273,7 @@ class PipelinePane(Widget):
             root_logger.setLevel(prev_level)
 
     # ------------------------------------------------------------------
-    # 완료/오류 콜백 (call_from_thread 경유, メインスレッド)
+    # 완료/오류 콜백 (call_from_thread 경유, 메인 스레드)
     # ------------------------------------------------------------------
 
     def _reset_after_pipeline(self) -> None:
