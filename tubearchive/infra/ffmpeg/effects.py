@@ -7,6 +7,7 @@
     - **HDR → SDR**: BT.2020 → BT.709 색공간 변환
     - **Dip-to-Black**: 클립 시작/끝 페이드 인·아웃
     - **오디오 노이즈 제거**: afftdn 기반 (light/medium/heavy)
+    - **영상 노이즈 제거**: hqdn3d 기반 (light/medium/heavy)
     - **무음 구간 감지/제거**: silencedetect, silenceremove 필터
     - **라우드니스 정규화**: EBU R128 loudnorm 2-pass
     - **영상 안정화**: vidstab detect + transform
