@@ -70,4 +70,8 @@ async def test_file_progress_panel_finish_updates_status() -> None:
         panel = pilot.app.query_one(FileProgressPanel)
         panel.finish("/output/merged.mp4")
         await pilot.pause()
-        # 예외 없이 완료되면 OK
+        from textual.widgets import Label
+
+        label = pilot.app.query_one("#fp-header", Label)
+        label_text = str(label.render())
+        assert "완료" in label_text or "/output/merged.mp4" in label_text

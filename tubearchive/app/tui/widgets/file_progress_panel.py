@@ -149,9 +149,8 @@ class FileProgressPanel(Widget):
             maybe_row = self._file_rows.get(event.filename)
             if maybe_row is not None:
                 maybe_row.mark_done(event.success)
-            if event.success:
-                self._done_count += 1
-                self._update_overall_bar()
+            self._done_count += 1
+            self._update_overall_bar()
 
     def append_log(self, text: str) -> None:
         """로그 한 줄 추가."""
@@ -164,8 +163,7 @@ class FileProgressPanel(Widget):
         self._total_files = 0
         self.query_one("#fp-header", Label).update(label)
         files_container = self.query_one("#fp-files", Vertical)
-        for child in list(files_container.children):
-            child.remove()
+        files_container.remove_children()
         bar = self.query_one("#fp-overall-bar", ProgressBar)
         bar.update(total=None)
         self.query_one("#fp-log", RichLog).clear()
