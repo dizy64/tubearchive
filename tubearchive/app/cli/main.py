@@ -62,10 +62,6 @@ def database_session() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-# NOTE: STATUS_ICONS, CATALOG_STATUS_SENTINEL, format_duration, normalize_status_filter 등
-#       카탈로그/상태 관련 상수와 유틸리티는 tubearchive.app.queries.catalog에서 import합니다.
-
-
 def safe_input(prompt: str) -> str:
     """
     터미널에서 안전하게 입력 받기.
@@ -94,15 +90,10 @@ def safe_input(prompt: str) -> str:
     except (OSError, subprocess.SubprocessError):
         pass
 
-    # fallback: 기본 input
     try:
         return input().strip()
     except (EOFError, KeyboardInterrupt):
         return ""
-
-
-# NOTE: 환경변수 상수(ENV_*)와 기본값 헬퍼(get_default_*)는
-#       tubearchive.config 모듈에서 import합니다.
 
 
 def setup_logging(
@@ -201,7 +192,6 @@ from tubearchive.app.cli.parser import (  # noqa: E402, F401
 )
 
 # --- pipeline.py re-exports (after module-level code) ---
-# These are intentional re-exports for backward compatibility.
 from tubearchive.app.cli.pipeline import (  # noqa: E402, F401
     TranscodeOptions,
     TranscodeResult,
@@ -297,8 +287,6 @@ def main() -> None:
     적절한 핸들러 함수로 라우팅한다. 서브커맨드가 지정되지 않은
     기본 동작은 :func:`run_pipeline` (트랜스코딩 + 병합).
     """
-    import sys
-
     # argparse보다 먼저 처리: nargs="*" targets와 충돌 방지
     if len(sys.argv) > 1 and sys.argv[1] == "tui":
         from tubearchive.app.tui import launch_tui
@@ -359,44 +347,36 @@ def main() -> None:
     output_path: Path | None = None
 
     try:
-        # --setup-youtube 옵션 처리 (설정 가이드)
         if args.setup_youtube:
             cmd_setup_youtube()
             return
 
-        # --youtube-auth 옵션 처리 (브라우저 인증)
         if args.youtube_auth:
             cmd_youtube_auth()
             return
 
-        # --list-playlists 옵션 처리 (플레이리스트 목록)
         if args.list_playlists:
             cmd_list_playlists()
             return
 
-        # --reset-build 옵션 처리 (빌드 기록 초기화)
         if args.reset_build is not None:
             cmd_reset_build(args.reset_build)
             return
 
-        # --reset-upload 옵션 처리 (업로드 기록 초기화)
         if args.reset_upload is not None:
             cmd_reset_upload(args.reset_upload)
             return
 
-        # --fix-device-models 옵션 처리 (device_model 소급 수정)
         if args.fix_device_models:
             cmd_fix_device_models()
             return
 
-        # --export-db 옵션 처리 (DB 내보내기)
         if args.export_db:
             from tubearchive.app.queries.migrate import cmd_export_db
 
             cmd_export_db(Path(args.export_db))
             return
 
-        # --import-db 옵션 처리 (DB 가져오기)
         if args.import_db:
             from tubearchive.app.queries.migrate import cmd_import_db
 
@@ -408,26 +388,22 @@ def main() -> None:
             )
             return
 
-        # --project-list 옵션 처리 (프로젝트 목록 조회)
         if args.project_list:
             from tubearchive.app.queries.project import cmd_project_list
 
             cmd_project_list(output_json=args.json)
             return
 
-        # --project-detail 옵션 처리 (프로젝트 상세 조회)
         if args.project_detail is not None:
             from tubearchive.app.queries.project import cmd_project_detail
 
             cmd_project_detail(args.project_detail, output_json=args.json)
             return
 
-        # --status-detail 옵션 처리 (작업 상세 조회)
         if args.status_detail is not None:
             cmd_status_detail(args.status_detail)
             return
 
-        # --status 옵션 처리 (작업 현황 조회)
         if args.status == CATALOG_STATUS_SENTINEL:
             cmd_status()
             return
@@ -436,7 +412,6 @@ def main() -> None:
         if args.period and not args.stats:
             logger.warning("--period 옵션은 --stats와 함께 사용해야 합니다.")
 
-        # --stats 옵션 처리 (통계 대시보드)
         if args.stats:
             from tubearchive.app.queries.stats import cmd_stats as _cmd_stats
 
@@ -444,7 +419,6 @@ def main() -> None:
                 _cmd_stats(conn, period=args.period)
             return
 
-        # --catalog / --search 옵션 처리 (메타데이터 조회)
         if (args.json or args.csv) and not (
             args.catalog
             or args.search is not None
@@ -462,7 +436,6 @@ def main() -> None:
             cmd_catalog(args)
             return
 
-        # --upload-only 옵션 처리 (업로드만)
         if args.upload_only:
             cmd_upload_only(args, hooks=config.hooks)
             return

@@ -1169,8 +1169,6 @@ class TestCmdSetupYoutube:
     """cmd_setup_youtube: 인증 상태 가이드 출력."""
 
     def test_prints_guide(self, capsys: pytest.CaptureFixture[str]) -> None:
-        from unittest.mock import MagicMock, patch
-
         from tubearchive.app.cli.youtube import cmd_setup_youtube
 
         mock_status = MagicMock()
@@ -1186,8 +1184,6 @@ class TestCmdSetupYoutube:
     def test_prints_auth_hint_when_browser_auth_needed(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from unittest.mock import MagicMock, patch
-
         from tubearchive.app.cli.youtube import cmd_setup_youtube
 
         mock_status = MagicMock()
@@ -1205,8 +1201,6 @@ class TestCmdYoutubeAuth:
     """cmd_youtube_auth: OAuth 인증 흐름."""
 
     def test_already_authenticated_returns_early(self, capsys: pytest.CaptureFixture[str]) -> None:
-        from unittest.mock import MagicMock, patch
-
         from tubearchive.app.cli.youtube import cmd_youtube_auth
 
         mock_status = MagicMock()
@@ -1220,10 +1214,6 @@ class TestCmdYoutubeAuth:
         assert "이미 인증되어 있습니다" in out
 
     def test_no_client_secrets_raises(self) -> None:
-        from unittest.mock import MagicMock, patch
-
-        import pytest
-
         from tubearchive.app.cli.youtube import cmd_youtube_auth
         from tubearchive.infra.youtube.auth import YouTubeAuthError
 
@@ -1241,8 +1231,6 @@ class TestCmdYoutubeAuth:
     def test_successful_auth_saves_credentials(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from unittest.mock import MagicMock, patch
-
         from tubearchive.app.cli.youtube import cmd_youtube_auth
 
         mock_status = MagicMock()
@@ -1273,8 +1261,6 @@ class TestCmdListPlaylists:
     """cmd_list_playlists: 플레이리스트 목록 조회."""
 
     def test_prints_playlist_table(self, capsys: pytest.CaptureFixture[str]) -> None:
-        from unittest.mock import MagicMock, patch
-
         from tubearchive.app.cli.youtube import cmd_list_playlists
         from tubearchive.infra.youtube.playlist import Playlist
 
@@ -1298,8 +1284,6 @@ class TestCmdListPlaylists:
         assert "PLabc" in out
 
     def test_empty_playlist_shows_message(self, capsys: pytest.CaptureFixture[str]) -> None:
-        from unittest.mock import MagicMock, patch
-
         from tubearchive.app.cli.youtube import cmd_list_playlists
 
         mock_service = MagicMock()
@@ -1317,10 +1301,6 @@ class TestCmdListPlaylists:
         assert "플레이리스트가 없습니다" in out
 
     def test_api_error_raises(self) -> None:
-        from unittest.mock import patch
-
-        import pytest
-
         from tubearchive.app.cli.youtube import cmd_list_playlists
 
         with (

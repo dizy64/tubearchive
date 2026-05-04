@@ -235,49 +235,48 @@ def cmd_fix_device_models() -> None:
         repo = VideoRepository(conn)
         rows = repo.get_missing_device_model(include_heuristic=True)
 
-    total = len(rows)
-    if total == 0:
-        print("재감지가 필요한 영상이 없습니다.")
-        return
+        total = len(rows)
+        if total == 0:
+            print("재감지가 필요한 영상이 없습니다.")
+            return
 
-    print(f"device_model 재스캔 대상 {total}개 처리 시작...")
+        print(f"device_model 재스캔 대상 {total}개 처리 시작...")
 
-    updated = 0
-    skipped_missing = 0
-    skipped_no_model = 0
+        updated = 0
+        skipped_missing = 0
+        skipped_no_model = 0
 
-    for row in rows:
-        video_id: int = row["id"]
-        path = Path(row["original_path"])
+        for row in rows:
+            video_id: int = row["id"]
+            path = Path(row["original_path"])
 
-        if not path.exists():
-            skipped_missing += 1
-            logger.debug("파일 없음, 건너뜀: %s", path)
-            continue
+            if not path.exists():
+                skipped_missing += 1
+                logger.debug("파일 없음, 건너뜀: %s", path)
+                continue
 
-        try:
-            probe_data = _run_ffprobe(path)
-            device_model = _extract_device_model(probe_data, path)
-        except Exception as exc:
-            logger.debug("ffprobe 실패 (%s): %s", path.name, exc)
-            skipped_no_model += 1
-            continue
+            try:
+                probe_data = _run_ffprobe(path)
+                device_model = _extract_device_model(probe_data, path)
+            except Exception as exc:
+                logger.debug("ffprobe 실패 (%s): %s", path.name, exc)
+                skipped_no_model += 1
+                continue
 
-        if not device_model:
-            skipped_no_model += 1
-            logger.debug("모델 감지 불가: %s", path.name)
-            continue
+            if not device_model:
+                skipped_no_model += 1
+                logger.debug("모델 감지 불가: %s", path.name)
+                continue
 
-        with database_session() as conn:
-            VideoRepository(conn).update_device_model(video_id, device_model)
-        updated += 1
-        logger.info("갱신: %s → %s", path.name, device_model)
+            repo.update_device_model(video_id, device_model)
+            updated += 1
+            logger.info("갱신: %s → %s", path.name, device_model)
 
-    print(
-        f"완료: {updated}개 갱신"
-        f", {skipped_missing}개 파일 없음"
-        f", {skipped_no_model}개 모델 감지 불가"
-    )
+        print(
+            f"완료: {updated}개 갱신"
+            f", {skipped_missing}개 파일 없음"
+            f", {skipped_no_model}개 모델 감지 불가"
+        )
 
 
 __all__ = [

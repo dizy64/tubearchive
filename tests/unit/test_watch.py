@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from threading import Event
 from unittest.mock import MagicMock, patch
@@ -124,19 +125,11 @@ class TestSetupFileObserver:
 class TestRunWatchPipeline:
     """_run_watch_pipeline: 단일 파일 파이프라인 실행."""
 
-    @patch("tubearchive.app.cli.watch.run_pipeline")
-    def test_calls_run_pipeline_with_watch_false(
-        self,
-        mock_pipeline: MagicMock,
-        tmp_path: Path,
-    ) -> None:
+    @pytest.fixture
+    def base_validated(self, tmp_path: Path) -> object:
         from tubearchive.app.cli.validators import ValidatedArgs
-        from tubearchive.app.cli.watch import _run_watch_pipeline
 
-        mock_pipeline.return_value = tmp_path / "output.mp4"
-
-        args = MagicMock()
-        validated = ValidatedArgs(
+        return ValidatedArgs(
             targets=[tmp_path / "dummy.mp4"],
             output=None,
             output_dir=None,
@@ -148,10 +141,22 @@ class TestRunWatchPipeline:
             upload=False,
         )
 
+    @patch("tubearchive.app.cli.watch.run_pipeline")
+    def test_calls_run_pipeline_with_watch_false(
+        self,
+        mock_pipeline: MagicMock,
+        tmp_path: Path,
+        base_validated: object,
+    ) -> None:
+        from tubearchive.app.cli.watch import _run_watch_pipeline
+
+        mock_pipeline.return_value = tmp_path / "output.mp4"
+
+        args = MagicMock()
         test_file = tmp_path / "clip.mp4"
         test_file.touch()
 
-        _run_watch_pipeline(test_file, args, validated)
+        _run_watch_pipeline(test_file, args, base_validated)
 
         mock_pipeline.assert_called_once()
         call_args = mock_pipeline.call_args[0][0]
@@ -165,26 +170,15 @@ class TestRunWatchPipeline:
         mock_pipeline: MagicMock,
         mock_upload: MagicMock,
         tmp_path: Path,
+        base_validated: object,
     ) -> None:
-        from tubearchive.app.cli.validators import ValidatedArgs
         from tubearchive.app.cli.watch import _run_watch_pipeline
 
         output = tmp_path / "output.mp4"
         mock_pipeline.return_value = output
 
         args = MagicMock()
-        validated = ValidatedArgs(
-            targets=[tmp_path / "dummy.mp4"],
-            output=None,
-            output_dir=None,
-            no_resume=False,
-            keep_temp=False,
-            dry_run=False,
-            watch=True,
-            watch_paths=[tmp_path],
-            upload=True,
-        )
-
+        validated = dataclasses.replace(base_validated, upload=True)  # type: ignore[arg-type]
         test_file = tmp_path / "clip.mp4"
         test_file.touch()
 
@@ -198,29 +192,17 @@ class TestRunWatchPipeline:
         self,
         mock_pipeline: MagicMock,
         tmp_path: Path,
+        base_validated: object,
     ) -> None:
-        from tubearchive.app.cli.validators import ValidatedArgs
         from tubearchive.app.cli.watch import _run_watch_pipeline
 
         mock_pipeline.return_value = tmp_path / "output.mp4"
 
         args = MagicMock()
-        validated = ValidatedArgs(
-            targets=[tmp_path / "dummy.mp4"],
-            output=None,
-            output_dir=None,
-            no_resume=False,
-            keep_temp=False,
-            dry_run=False,
-            watch=True,
-            watch_paths=[tmp_path],
-            upload=False,
-        )
-
         test_file = tmp_path / "clip.mp4"
         test_file.touch()
 
         with patch("tubearchive.app.cli.watch._upload_after_pipeline") as mock_upload:
-            _run_watch_pipeline(test_file, args, validated)
+            _run_watch_pipeline(test_file, args, base_validated)
 
         mock_upload.assert_not_called()
