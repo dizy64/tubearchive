@@ -8,6 +8,7 @@ source "${SCRIPT_DIR}/hook-helpers.sh"
 # 1) 변경된 Python 파일 lint/포맷 검사
 # 2) mypy 타입 검사
 # 3) 단위 테스트 (E2E는 GitHub PR 파이프라인에서만 수행)
+# 4) 보안 감사 (uv.lock 또는 pyproject.toml 변경 시)
 #
 # 설치: bash scripts/install-hooks.sh
 
@@ -51,6 +52,15 @@ fi
 info "pytest unit 실행 중..."
 if ! uv run pytest tests/unit/ -q; then
     fail "단위 테스트 실패. 테스트를 수정한 후 다시 커밋하세요."
+fi
+
+# 5. pip-audit (uv.lock 또는 pyproject.toml 변경 시)
+dep_files_changed=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(uv\.lock|pyproject\.toml)$' || true)
+if [ -n "$dep_files_changed" ]; then
+    info "의존성 파일 변경 감지 — pip-audit 보안 감사 실행 중..."
+    if ! uv run pip-audit; then
+        fail "pip-audit 보안 취약점이 발견됐습니다. uv lock --upgrade-package <패키지명> 후 다시 커밋하세요."
+    fi
 fi
 
 info "모든 검사 통과!"
