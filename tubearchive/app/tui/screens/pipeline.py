@@ -229,7 +229,7 @@ class PipelinePane(Widget):
         """
         import contextlib
 
-        from tubearchive.app.cli.main import run_pipeline
+        from tubearchive.app.cli.pipeline import run_pipeline
 
         panel = self.query_one(ProgressPanel)
 

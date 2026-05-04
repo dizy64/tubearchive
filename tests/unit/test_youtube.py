@@ -980,7 +980,7 @@ class TestScheduleUpload:
         from tubearchive.app.cli.main import parse_schedule_datetime
 
         # 미래 시간 (2050년)
-        with patch("tubearchive.app.cli.main.logger") as mock_logger:
+        with patch("tubearchive.app.cli.parser.logger") as mock_logger:
             result = parse_schedule_datetime("2050-12-31T23:59:59")
             # 로컬 타임존이 추가되어야 함
             assert result.startswith("2050-12-31T23:59:59")
@@ -1158,3 +1158,156 @@ class TestSelectPlaylistInteractive:
 
         result = select_playlist_interactive(playlists)
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# YouTube CLI 커맨드 (youtube.py) 테스트
+# ---------------------------------------------------------------------------
+
+
+class TestCmdSetupYoutube:
+    """cmd_setup_youtube: 인증 상태 가이드 출력."""
+
+    def test_prints_guide(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from tubearchive.app.cli.youtube import cmd_setup_youtube
+
+        mock_status = MagicMock()
+        mock_status.get_setup_guide.return_value = "Setup guide text"
+        mock_status.needs_browser_auth = False
+
+        with patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=mock_status):
+            cmd_setup_youtube()
+
+        out = capsys.readouterr().out
+        assert "Setup guide text" in out
+
+    def test_prints_auth_hint_when_browser_auth_needed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from tubearchive.app.cli.youtube import cmd_setup_youtube
+
+        mock_status = MagicMock()
+        mock_status.get_setup_guide.return_value = "guide"
+        mock_status.needs_browser_auth = True
+
+        with patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=mock_status):
+            cmd_setup_youtube()
+
+        out = capsys.readouterr().out
+        assert "--youtube-auth" in out
+
+
+class TestCmdYoutubeAuth:
+    """cmd_youtube_auth: OAuth 인증 흐름."""
+
+    def test_already_authenticated_returns_early(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from tubearchive.app.cli.youtube import cmd_youtube_auth
+
+        mock_status = MagicMock()
+        mock_status.has_valid_token = True
+        mock_status.token_path = "/path/to/token.json"
+
+        with patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=mock_status):
+            cmd_youtube_auth()
+
+        out = capsys.readouterr().out
+        assert "이미 인증되어 있습니다" in out
+
+    def test_no_client_secrets_raises(self) -> None:
+        from tubearchive.app.cli.youtube import cmd_youtube_auth
+        from tubearchive.infra.youtube.auth import YouTubeAuthError
+
+        mock_status = MagicMock()
+        mock_status.has_valid_token = False
+        mock_status.has_client_secrets = False
+        mock_status.client_secrets_path = "/missing/secrets.json"
+
+        with (
+            patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=mock_status),
+            pytest.raises(YouTubeAuthError),
+        ):
+            cmd_youtube_auth()
+
+    def test_successful_auth_saves_credentials(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from tubearchive.app.cli.youtube import cmd_youtube_auth
+
+        mock_status = MagicMock()
+        mock_status.has_valid_token = False
+        mock_status.has_client_secrets = True
+
+        mock_creds = MagicMock()
+        token_path = tmp_path / "token.json"
+
+        with (
+            patch("tubearchive.infra.youtube.auth.check_auth_status", return_value=mock_status),
+            patch(
+                "tubearchive.infra.youtube.auth.get_client_secrets_path",
+                return_value=tmp_path / "secrets.json",
+            ),
+            patch("tubearchive.infra.youtube.auth.get_token_path", return_value=token_path),
+            patch("tubearchive.infra.youtube.auth.run_auth_flow", return_value=mock_creds),
+            patch("tubearchive.infra.youtube.auth.save_credentials") as mock_save,
+        ):
+            cmd_youtube_auth()
+
+        mock_save.assert_called_once_with(mock_creds, token_path)
+        out = capsys.readouterr().out
+        assert "인증 완료" in out
+
+
+class TestCmdListPlaylists:
+    """cmd_list_playlists: 플레이리스트 목록 조회."""
+
+    def test_prints_playlist_table(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from tubearchive.app.cli.youtube import cmd_list_playlists
+        from tubearchive.infra.youtube.playlist import Playlist
+
+        mock_service = MagicMock()
+        playlists = [
+            Playlist(id="PLabc", title="My Playlist", item_count=5),
+            Playlist(id="PLxyz", title="Another", item_count=10),
+        ]
+
+        with (
+            patch(
+                "tubearchive.infra.youtube.auth.get_authenticated_service",
+                return_value=mock_service,
+            ),
+            patch("tubearchive.infra.youtube.playlist.list_playlists", return_value=playlists),
+        ):
+            cmd_list_playlists()
+
+        out = capsys.readouterr().out
+        assert "My Playlist" in out
+        assert "PLabc" in out
+
+    def test_empty_playlist_shows_message(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from tubearchive.app.cli.youtube import cmd_list_playlists
+
+        mock_service = MagicMock()
+
+        with (
+            patch(
+                "tubearchive.infra.youtube.auth.get_authenticated_service",
+                return_value=mock_service,
+            ),
+            patch("tubearchive.infra.youtube.playlist.list_playlists", return_value=[]),
+        ):
+            cmd_list_playlists()
+
+        out = capsys.readouterr().out
+        assert "플레이리스트가 없습니다" in out
+
+    def test_api_error_raises(self) -> None:
+        from tubearchive.app.cli.youtube import cmd_list_playlists
+
+        with (
+            patch(
+                "tubearchive.infra.youtube.auth.get_authenticated_service",
+                side_effect=Exception("API error"),
+            ),
+            pytest.raises(Exception, match="API error"),
+        ):
+            cmd_list_playlists()

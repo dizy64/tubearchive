@@ -1166,15 +1166,16 @@ class TestValidateArgs:
             return replace(validated_args, hooks=hooks)
 
         with (
-            patch("tubearchive.app.cli.main.signal.signal", side_effect=_register_signal),
+            patch("tubearchive.app.cli.watch.signal.signal", side_effect=_register_signal),
             patch(
-                "tubearchive.app.cli.main._setup_file_observer",
+                "tubearchive.app.cli.watch._setup_file_observer",
                 return_value=(_DummyObserver(), object()),
             ),
             patch(
-                "tubearchive.app.cli.main.load_config", return_value=AppConfig(hooks=reloaded_hooks)
+                "tubearchive.app.cli.watch.load_config",
+                return_value=AppConfig(hooks=reloaded_hooks),
             ),
-            patch("tubearchive.app.cli.main.validate_args", side_effect=_capture_validate_args),
+            patch("tubearchive.app.cli.watch.validate_args", side_effect=_capture_validate_args),
         ):
             watch_thread = threading.Thread(
                 target=_run_watch_mode,
@@ -2004,8 +2005,8 @@ class TestMain:
 class TestUploadAfterPipeline:
     """_upload_after_pipeline 테스트."""
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.resolve_playlist_ids", return_value=[])
     @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_passes_privacy(
         self,
@@ -2033,15 +2034,15 @@ class TestUploadAfterPipeline:
             upload_chunk=32,
         )
 
-        with patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo):
+        with patch("tubearchive.app.cli.upload.MergeJobRepository", return_value=mock_repo):
             _upload_after_pipeline(output_path, args)
 
         mock_upload.assert_called_once()
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["privacy"] == "private"
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.resolve_playlist_ids", return_value=[])
     @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_uses_explicit_thumbnail(
         self,
@@ -2070,7 +2071,7 @@ class TestUploadAfterPipeline:
             upload_chunk=32,
         )
 
-        with patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo):
+        with patch("tubearchive.app.cli.upload.MergeJobRepository", return_value=mock_repo):
             _upload_after_pipeline(
                 output_path,
                 args,
@@ -2081,8 +2082,8 @@ class TestUploadAfterPipeline:
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["thumbnail"] == thumbnail
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.resolve_playlist_ids", return_value=[])
     @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_passes_subtitle_args(
         self,
@@ -2111,7 +2112,7 @@ class TestUploadAfterPipeline:
             upload_chunk=32,
         )
 
-        with patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo):
+        with patch("tubearchive.app.cli.upload.MergeJobRepository", return_value=mock_repo):
             _upload_after_pipeline(
                 output_path,
                 args,
@@ -2124,8 +2125,8 @@ class TestUploadAfterPipeline:
         assert call_kwargs["subtitle_path"] == subtitle_path
         assert call_kwargs["subtitle_language"] == "ko"
 
-    @patch("tubearchive.app.cli.main._upload_split_files")
-    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.upload._upload_split_files")
+    @patch("tubearchive.app.cli.upload.resolve_playlist_ids", return_value=[])
     @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_passes_subtitle_args_to_split_upload(
         self,
@@ -2156,7 +2157,7 @@ class TestUploadAfterPipeline:
 
         with (
             patch(
-                "tubearchive.app.cli.main.MergeJobRepository",
+                "tubearchive.app.cli.upload.MergeJobRepository",
                 return_value=MagicMock(
                     get_latest=MagicMock(
                         return_value=MagicMock(
@@ -2169,7 +2170,7 @@ class TestUploadAfterPipeline:
                 ),
             ),
             patch(
-                "tubearchive.app.cli.main.SplitJobRepository",
+                "tubearchive.app.cli.upload.SplitJobRepository",
                 return_value=MagicMock(
                     get_by_merge_job_id=MagicMock(
                         return_value=[MagicMock(id=5, output_files=[split_file])]
@@ -2189,8 +2190,8 @@ class TestUploadAfterPipeline:
         assert call_kwargs["subtitle_path"] == subtitle_path
         assert call_kwargs["subtitle_language"] == "ko"
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.resolve_playlist_ids", return_value=[])
     @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_uses_single_generated_thumbnail(
         self,
@@ -2219,7 +2220,7 @@ class TestUploadAfterPipeline:
             upload_chunk=32,
         )
 
-        with patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo):
+        with patch("tubearchive.app.cli.upload.MergeJobRepository", return_value=mock_repo):
             _upload_after_pipeline(
                 output_path,
                 args,
@@ -2229,9 +2230,9 @@ class TestUploadAfterPipeline:
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["thumbnail"] == generated
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main._resolve_upload_thumbnail")
-    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload._resolve_upload_thumbnail")
+    @patch("tubearchive.app.cli.upload.resolve_playlist_ids", return_value=[])
     @patch("tubearchive.app.cli.main.init_database")
     def test_upload_after_pipeline_logs_selected_thumbnail(
         self,
@@ -2264,7 +2265,7 @@ class TestUploadAfterPipeline:
         mock_resolve_thumbnail.return_value = thumbnail
 
         with (
-            patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo),
+            patch("tubearchive.app.cli.upload.MergeJobRepository", return_value=mock_repo),
             caplog.at_level("INFO"),
         ):
             _upload_after_pipeline(
@@ -2332,8 +2333,8 @@ class TestResolveUploadThumbnail:
 class TestUploadSplitFiles:
     """_upload_split_files 분할 업로드 테스트."""
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.probe_duration", return_value=3600.0)
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.probe_duration", return_value=3600.0)
     def test_uploads_each_split_file(
         self,
         _mock_probe: MagicMock,
@@ -2367,8 +2368,8 @@ class TestUploadSplitFiles:
 
         assert mock_upload.call_count == 2
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.probe_duration", return_value=3600.0)
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.probe_duration", return_value=3600.0)
     def test_title_includes_part_numbers(
         self,
         _mock_probe: MagicMock,
@@ -2402,8 +2403,8 @@ class TestUploadSplitFiles:
         assert "(Part 1/2)" in first_call_title
         assert "(Part 2/2)" in second_call_title
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.resolve_playlist_ids", return_value=[])
     @patch("tubearchive.app.cli.main.init_database")
     def test_falls_back_when_no_split_files(
         self,
@@ -2439,8 +2440,8 @@ class TestUploadSplitFiles:
         )
 
         with (
-            patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo),
-            patch("tubearchive.app.cli.main.SplitJobRepository", return_value=mock_split_repo),
+            patch("tubearchive.app.cli.upload.MergeJobRepository", return_value=mock_repo),
+            patch("tubearchive.app.cli.upload.SplitJobRepository", return_value=mock_split_repo),
         ):
             _upload_after_pipeline(output_path, args)
 
@@ -2449,9 +2450,9 @@ class TestUploadSplitFiles:
         call_kwargs = mock_upload.call_args[1]
         assert call_kwargs["file_path"] == output_path
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.probe_duration", return_value=3600.0)
-    @patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[])
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.probe_duration", return_value=3600.0)
+    @patch("tubearchive.app.cli.upload.resolve_playlist_ids", return_value=[])
     @patch("tubearchive.app.cli.main.init_database")
     def test_uploads_split_files_when_present(
         self,
@@ -2500,8 +2501,8 @@ class TestUploadSplitFiles:
         )
 
         with (
-            patch("tubearchive.app.cli.main.MergeJobRepository", return_value=mock_repo),
-            patch("tubearchive.app.cli.main.SplitJobRepository", return_value=mock_split_repo),
+            patch("tubearchive.app.cli.upload.MergeJobRepository", return_value=mock_repo),
+            patch("tubearchive.app.cli.upload.SplitJobRepository", return_value=mock_split_repo),
         ):
             _upload_after_pipeline(output_path, args)
 
@@ -2512,8 +2513,8 @@ class TestUploadSplitFiles:
 class TestUploadOnly:
     """--upload-only 처리 테스트."""
 
-    @patch("tubearchive.app.cli.main.run_hooks")
-    @patch("tubearchive.app.cli.main.upload_to_youtube", return_value="yt123")
+    @patch("tubearchive.app.cli.upload.run_hooks")
+    @patch("tubearchive.app.cli.upload.upload_to_youtube", return_value="yt123")
     def test_upload_only_calls_upload_hook(
         self,
         mock_upload: MagicMock,
@@ -2538,11 +2539,11 @@ class TestUploadOnly:
 
         with (
             patch(
-                "tubearchive.app.cli.main.MergeJobRepository",
+                "tubearchive.app.cli.upload.MergeJobRepository",
                 return_value=MagicMock(get_by_output_path=MagicMock(return_value=None)),
             ),
-            patch("tubearchive.app.cli.main.resolve_playlist_ids", return_value=[]),
-            patch("tubearchive.app.cli.main._resolve_set_thumbnail_path", return_value=None),
+            patch("tubearchive.app.cli.upload.resolve_playlist_ids", return_value=[]),
+            patch("tubearchive.app.cli.validators._resolve_set_thumbnail_path", return_value=None),
         ):
             result = cmd_upload_only(args, hooks=HooksConfig(on_upload=("echo upload",)))
 
@@ -2554,8 +2555,8 @@ class TestUploadOnly:
         assert context.output_path == file_path
         assert context.youtube_id == "yt123"
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.probe_duration", return_value=3600.0)
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.probe_duration", return_value=3600.0)
     def test_split_upload_reuses_thumbnail_for_all_parts(
         self,
         _mock_probe: MagicMock,
@@ -2590,8 +2591,8 @@ class TestUploadOnly:
         assert mock_upload.call_count == 2
         assert all(call.kwargs["thumbnail"] == thumbnail for call in mock_upload.call_args_list)
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.probe_duration", return_value=60.0)
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.probe_duration", return_value=60.0)
     def test_malformed_clips_json_does_not_crash(
         self,
         _mock_probe: MagicMock,
@@ -2616,8 +2617,8 @@ class TestUploadOnly:
 
         assert mock_upload.call_count == 1
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.probe_duration", return_value=60.0)
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.probe_duration", return_value=60.0)
     def test_none_clips_json_does_not_crash(
         self,
         _mock_probe: MagicMock,
@@ -2642,8 +2643,8 @@ class TestUploadOnly:
 
         assert mock_upload.call_count == 1
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
-    @patch("tubearchive.app.cli.main.probe_duration", return_value=3600.0)
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.probe_duration", return_value=3600.0)
     def test_partial_upload_failure_continues(
         self,
         _mock_probe: MagicMock,
@@ -3190,3 +3191,76 @@ class TestStabilizeCLI:
         assert opts.stabilize is True
         assert opts.stabilize_strength == "heavy"
         assert opts.stabilize_crop == "expand"
+
+
+class TestFormatYoutubeTitle:
+    """format_youtube_title: 날짜 → 한국어 포맷 변환."""
+
+    def test_converts_yyyymmdd_prefix(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("20240115 도쿄 여행") == "2024년 1월 15일 도쿄 여행"
+
+    def test_strips_leading_zero_from_month_and_day(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("20240101") == "2024년 1월 1일"
+
+    def test_date_only_no_rest(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("20231225") == "2023년 12월 25일"
+
+    def test_no_date_pattern_returns_original(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("제주도 여행") == "제주도 여행"
+
+    def test_partial_date_returns_original(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("2024-01-15 여행") == "2024-01-15 여행"
+
+    def test_empty_string_returns_empty(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("") == ""
+
+
+class TestResolvePlaylistIds:
+    """resolve_playlist_ids: 플레이리스트 ID 우선순위 처리."""
+
+    def test_none_arg_with_env_returns_env_ids(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tubearchive.app.cli.upload import resolve_playlist_ids
+
+        monkeypatch.setenv("TUBEARCHIVE_YOUTUBE_PLAYLIST", "PLaaa,PLbbb")
+        result = resolve_playlist_ids(None)
+        assert result == ["PLaaa", "PLbbb"]
+
+    def test_none_arg_without_env_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tubearchive.app.cli.upload import resolve_playlist_ids
+
+        monkeypatch.delenv("TUBEARCHIVE_YOUTUBE_PLAYLIST", raising=False)
+        result = resolve_playlist_ids(None)
+        assert result == []
+
+    def test_direct_ids_returned_as_is(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tubearchive.app.cli.upload import resolve_playlist_ids
+
+        monkeypatch.delenv("TUBEARCHIVE_YOUTUBE_PLAYLIST", raising=False)
+        result = resolve_playlist_ids(["PLxxx", "PLyyy"])
+        assert result == ["PLxxx", "PLyyy"]
+
+    def test_empty_list_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tubearchive.app.cli.upload import resolve_playlist_ids
+
+        monkeypatch.delenv("TUBEARCHIVE_YOUTUBE_PLAYLIST", raising=False)
+        result = resolve_playlist_ids([])
+        assert result == []
+
+    def test_env_with_spaces_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tubearchive.app.cli.upload import resolve_playlist_ids
+
+        monkeypatch.setenv("TUBEARCHIVE_YOUTUBE_PLAYLIST", " PLaaa , PLbbb ")
+        result = resolve_playlist_ids(None)
+        assert result == ["PLaaa", "PLbbb"]

@@ -393,7 +393,7 @@ class TestSubtitlePipeline:
         assert mock_generate.call_args.kwargs["language"] == "en"
         assert mock_generate.call_args.kwargs["model"] == "tiny"
 
-    @patch("tubearchive.app.cli.main._apply_subtitle_burn")
+    @patch("tubearchive.app.cli.pipeline._apply_subtitle_burn")
     @patch("tubearchive.domain.media.subtitle.generate_subtitles")
     def test_run_pipeline_burns_subtitles(
         self,
