@@ -116,7 +116,6 @@ class FileProgressPanel(Widget):
     def __init__(self, id: str | None = None) -> None:  # noqa: A002
         super().__init__(id=id)
         self._file_rows: dict[int, _FileRow] = {}
-        self._filename_to_index: dict[str, int] = {}
         self._done_count = 0
         self._total_files = 0
 
@@ -138,22 +137,19 @@ class FileProgressPanel(Widget):
             self.query_one("#fp-header", Label).update(f"처리 중: {event.total_files}개 파일")
             row = _FileRow(filename=event.filename)
             self._file_rows[event.file_index] = row
-            self._filename_to_index[event.filename] = event.file_index
             self.query_one("#fp-files", Vertical).mount(row)
             row.mark_processing()
 
         elif isinstance(event, FileProgressEvent):
-            idx = self._filename_to_index.get(event.filename)
-            maybe_row = self._file_rows.get(idx) if idx is not None else None
-            if maybe_row is not None:
+            target = self._file_rows.get(event.file_index)
+            if target is not None:
                 eta = _format_eta(event.info)
-                maybe_row.update_progress(event.info.percent, eta)
+                target.update_progress(event.info.percent, eta)
 
         elif isinstance(event, FileDoneEvent):
-            idx = self._filename_to_index.get(event.filename)
-            maybe_row = self._file_rows.get(idx) if idx is not None else None
-            if maybe_row is not None:
-                maybe_row.mark_done(event.success)
+            target = self._file_rows.get(event.file_index)
+            if target is not None:
+                target.mark_done(event.success)
             self._done_count += 1
             self._update_overall_bar()
 
@@ -164,7 +160,6 @@ class FileProgressPanel(Widget):
     def start(self, label: str = "처리 중...") -> None:
         """실행 시작 상태로 초기화."""
         self._file_rows.clear()
-        self._filename_to_index.clear()
         self._done_count = 0
         self._total_files = 0
         self.query_one("#fp-header", Label).update(label)

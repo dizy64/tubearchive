@@ -25,6 +25,7 @@ class FileProgressEvent:
     """파일 트랜스코딩 진행률 이벤트."""
 
     filename: str
+    file_index: int
     info: ProgressInfo
 
 
@@ -33,6 +34,7 @@ class FileDoneEvent:
     """파일 트랜스코딩 완료 이벤트."""
 
     filename: str
+    file_index: int
     success: bool
 
 

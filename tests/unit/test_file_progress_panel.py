@@ -47,7 +47,7 @@ async def test_file_progress_panel_marks_done() -> None:
     async with TestApp().run_test(headless=True, size=(120, 40)) as pilot:
         panel = pilot.app.query_one(FileProgressPanel)
         panel.handle_event(FileStartEvent(filename="a.mov", file_index=0, total_files=1))
-        panel.handle_event(FileDoneEvent(filename="a.mov", success=True))
+        panel.handle_event(FileDoneEvent(filename="a.mov", file_index=0, success=True))
         await pilot.pause()
 
         from tubearchive.app.tui.widgets.file_progress_panel import _FileRow
@@ -100,7 +100,7 @@ async def test_file_progress_panel_updates_progress_on_event() -> None:
     async with TestApp().run_test(headless=True, size=(120, 40)) as pilot:
         panel = pilot.app.query_one(FileProgressPanel)
         panel.handle_event(FileStartEvent(filename="a.mov", file_index=0, total_files=1))
-        panel.handle_event(FileProgressEvent(filename="a.mov", info=mock_info))
+        panel.handle_event(FileProgressEvent(filename="a.mov", file_index=0, info=mock_info))
         await pilot.pause()
 
         row = panel.query(_FileRow).first()

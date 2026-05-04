@@ -24,14 +24,17 @@ def test_file_start_event_is_frozen() -> None:
 
 def test_file_progress_event_carries_progress_info() -> None:
     info = ProgressInfo(percent=45, current_time=10.0, total_duration=100.0, fps=29.0)
-    e = FileProgressEvent(filename="a.mov", info=info)
+    e = FileProgressEvent(filename="a.mov", file_index=0, info=info)
+    assert e.file_index == 0
     assert e.info.percent == 45
 
 
 def test_file_done_event_success_and_failure() -> None:
-    ok = FileDoneEvent(filename="a.mov", success=True)
-    fail = FileDoneEvent(filename="a.mov", success=False)
+    ok = FileDoneEvent(filename="a.mov", file_index=0, success=True)
+    fail = FileDoneEvent(filename="a.mov", file_index=1, success=False)
+    assert ok.file_index == 0
     assert ok.success is True
+    assert fail.file_index == 1
     assert fail.success is False
 
 

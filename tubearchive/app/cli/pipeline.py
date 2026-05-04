@@ -491,6 +491,9 @@ def _transcode_single(
     video_file: VideoFile,
     temp_dir: Path,
     opts: TranscodeOptions,
+    context: PipelineContext | None = None,
+    file_index: int = 0,
+    total_count: int = 1,
 ) -> TranscodeResult:
     """단일 파일을 독립 Transcoder 컨텍스트에서 트랜스코딩한다.
 
@@ -501,10 +504,27 @@ def _transcode_single(
         video_file: 트랜스코딩할 원본 영상
         temp_dir: 트랜스코딩 출력 임시 디렉토리
         opts: 공통 트랜스코딩 옵션 (denoise, loudnorm, fade 등)
+        context: 파이프라인 진행률 컨텍스트 (TUI 연동용, None이면 기존 동작)
+        file_index: 파일 인덱스 (0-based)
+        total_count: 전체 파일 수
 
     Returns:
         ``TranscodeResult`` (출력 경로, video DB ID, 클립 메타데이터)
     """
+    filename = video_file.path.name
+    _emit_progress(
+        context,
+        FileStartEvent(filename=filename, file_index=file_index, total_files=total_count),
+    )
+
+    def _on_progress_info(
+        info: ProgressInfo,
+        _ctx: PipelineContext | None = context,
+        _fname: str = filename,
+        _idx: int = file_index,
+    ) -> None:
+        _emit_progress(_ctx, FileProgressEvent(filename=_fname, file_index=_idx, info=info))
+
     fade_config = opts.fade_map.get(video_file.path) if opts.fade_map else None
     fade_in = fade_config.fade_in if fade_config else None
     fade_out = fade_config.fade_out if fade_config else None
@@ -540,6 +560,7 @@ def _transcode_single(
             watermark_size=opts.watermark_size,
             watermark_color=opts.watermark_color,
             watermark_alpha=opts.watermark_alpha,
+            progress_info_callback=_on_progress_info,
         )
         clip_info = _collect_clip_info(video_file, metadata)
         return TranscodeResult(
@@ -593,20 +614,22 @@ def _transcode_parallel(
             if completed_count == total_count:
                 print()  # 줄바꿈
         # emit outside the lock — on_progress is an arbitrary callable
-        _emit_progress(context, FileDoneEvent(filename=filename, success=success))
+        _emit_progress(context, FileDoneEvent(filename=filename, file_index=idx, success=success))
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures: dict[Future[TranscodeResult], int] = {}
         for i, video_file in enumerate(video_files):
-            _emit_progress(
-                context,
-                FileStartEvent(
-                    filename=video_file.path.name,
-                    file_index=i,
-                    total_files=total_count,
-                ),
-            )
-            futures[executor.submit(_transcode_single, video_file, temp_dir, opts)] = i
+            futures[
+                executor.submit(
+                    _transcode_single,
+                    video_file,
+                    temp_dir,
+                    opts,
+                    context,
+                    i,
+                    total_count,
+                )
+            ] = i
 
         for future in as_completed(futures):
             idx = futures[future]
@@ -664,10 +687,13 @@ def _transcode_sequential(
                 info: ProgressInfo,
                 _filename: str = filename,
                 _ctx: PipelineContext | None = context,
+                _idx: int = i,
             ) -> None:
                 """FFmpeg 상세 진행률을 MultiProgressBar 및 PipelineContext에 전달."""
                 progress.update_with_info(info)
-                _emit_progress(_ctx, FileProgressEvent(filename=_filename, info=info))
+                _emit_progress(
+                    _ctx, FileProgressEvent(filename=_filename, file_index=_idx, info=info)
+                )
 
             fade_config = opts.fade_map.get(video_file.path) if opts.fade_map else None
             fade_in = fade_config.fade_in if fade_config else None
@@ -716,9 +742,15 @@ def _transcode_sequential(
                 )
                 progress.finish_file()
 
-                _emit_progress(context, FileDoneEvent(filename=video_file.path.name, success=True))
+                _emit_progress(
+                    context,
+                    FileDoneEvent(filename=video_file.path.name, file_index=i, success=True),
+                )
             except Exception:
-                _emit_progress(context, FileDoneEvent(filename=video_file.path.name, success=False))
+                _emit_progress(
+                    context,
+                    FileDoneEvent(filename=video_file.path.name, file_index=i, success=False),
+                )
                 raise
 
     return results

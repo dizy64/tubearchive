@@ -215,11 +215,15 @@ def test_transcode_sequential_emits_start_and_done_events(tmp_path: Path) -> Non
 
     assert len(done_events) == 1
     assert done_events[0].filename == "clip.mov"
+    assert done_events[0].file_index == 0
     assert done_events[0].success is True
 
 
 def test_transcode_parallel_emits_start_and_done_events(tmp_path: Path) -> None:
-    """_transcode_parallel이 각 파일에 대해 FileStartEvent와 FileDoneEvent를 emit한다."""
+    """_transcode_parallel이 각 파일에 대해 FileStartEvent와 FileDoneEvent를 emit한다.
+
+    FileStartEvent는 루프 선행이 아닌 워커 내부(_transcode_single)에서 emit되어야 한다.
+    """
     from tubearchive.app.cli.context import FileDoneEvent, FileStartEvent, PipelineContext
     from tubearchive.app.cli.pipeline import TranscodeOptions, _transcode_parallel
     from tubearchive.domain.models.clip import ClipInfo
@@ -230,19 +234,19 @@ def test_transcode_parallel_emits_start_and_done_events(tmp_path: Path) -> None:
     fake_video = MagicMock()
     fake_video.path = tmp_path / "clip.mov"
 
+    fake_result_clip = ClipInfo(name="clip", duration=5.0, device="x", shot_time=None)
     opts = TranscodeOptions()
 
+    # _transcode_single이 실제로 실행되어야 FileStartEvent가 워커 내부에서 emit된다.
     with (
-        patch("tubearchive.app.cli.pipeline._transcode_single") as mock_single,
+        patch("tubearchive.app.cli.pipeline.Transcoder") as mock_tc_cls,
+        patch("tubearchive.app.cli.pipeline.detect_metadata"),
+        patch("tubearchive.app.cli.pipeline._collect_clip_info", return_value=fake_result_clip),
     ):
-        from tubearchive.app.cli.pipeline import TranscodeResult
-
-        mock_single.return_value = TranscodeResult(
-            output_path=tmp_path / "out.mp4",
-            video_id=1,
-            clip_info=ClipInfo(name="clip", duration=5.0, device="x", shot_time=None),
-            silence_segments=[],
-        )
+        mock_tc = MagicMock()
+        mock_tc_cls.return_value.__enter__ = MagicMock(return_value=mock_tc)
+        mock_tc_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_tc.transcode_video.return_value = (tmp_path / "out.mp4", 1, [])
 
         _transcode_parallel([fake_video], tmp_path, 1, opts, context=ctx)
 
@@ -253,4 +257,5 @@ def test_transcode_parallel_emits_start_and_done_events(tmp_path: Path) -> None:
     assert start_events[0].file_index == 0
     assert start_events[0].total_files == 1
     assert len(done_events) == 1
+    assert done_events[0].file_index == 0
     assert done_events[0].success is True
