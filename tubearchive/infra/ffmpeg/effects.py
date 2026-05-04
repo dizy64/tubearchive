@@ -8,6 +8,7 @@
     - **Dip-to-Black**: 클립 시작/끝 페이드 인·아웃
     - **오디오 노이즈 제거**: afftdn 기반 (light/medium/heavy)
     - **영상 노이즈 제거**: hqdn3d 기반 (light/medium/heavy)
+    - **화이트밸런스**: colortemperature 기반 (ffmpeg 5.0+, Kelvin 직접 지정 / 기기 프리셋)
     - **무음 구간 감지/제거**: silencedetect, silenceremove 필터
     - **라우드니스 정규화**: EBU R128 loudnorm 2-pass
     - **영상 안정화**: vidstab detect + transform
@@ -203,17 +204,26 @@ def create_video_denoise_filter(level: str = "medium") -> str:
     return VIDEO_DENOISE_HQDN3D_LEVELS[key]
 
 
+_WB_KELVIN_MIN = 1000
+_WB_KELVIN_MAX = 40_000
+
+
 def create_wb_filter(kelvin: int) -> str:
     """화이트밸런스 필터 생성 (colortemperature).
 
     ffmpeg 5.0+ 필요. 미지원 ffmpeg는 transcoder에서 graceful skip 처리.
 
     Args:
-        kelvin: 색온도 (K)
+        kelvin: 색온도 (K, 1000-40000 범위)
 
     Returns:
         colortemperature 필터 문자열
+
+    Raises:
+        ValueError: 유효하지 않은 Kelvin 값
     """
+    if not (_WB_KELVIN_MIN <= kelvin <= _WB_KELVIN_MAX):
+        raise ValueError(f"Kelvin must be {_WB_KELVIN_MIN}-{_WB_KELVIN_MAX}, got: {kelvin}")
     return f"colortemperature=temperature={kelvin}"
 
 
