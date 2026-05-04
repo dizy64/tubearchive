@@ -23,7 +23,12 @@ from pathlib import Path
 from threading import Lock
 from typing import Literal
 
-from tubearchive.app.cli.context import PipelineContext
+from tubearchive.app.cli.context import (
+    FileDoneEvent,
+    FileProgressEvent,
+    FileStartEvent,
+    PipelineContext,
+)
 from tubearchive.app.cli.validators import ValidatedArgs
 from tubearchive.config import HooksConfig
 from tubearchive.domain.media.backup import BackupExecutor, BackupResult
@@ -598,6 +603,7 @@ def _transcode_sequential(
     video_files: list[VideoFile],
     temp_dir: Path,
     opts: TranscodeOptions,
+    context: PipelineContext | None = None,
 ) -> list[TranscodeResult]:
     """영상 파일을 순차적으로 트랜스코딩한다.
 
@@ -608,6 +614,7 @@ def _transcode_sequential(
         video_files: 트랜스코딩할 영상 목록
         temp_dir: 트랜스코딩 결과 저장 임시 디렉토리
         opts: 트랜스코딩 공통 옵션 (오디오·페이드 설정)
+        context: 파이프라인 진행률 컨텍스트 (TUI 연동용, None이면 기존 동작)
 
     Returns:
         트랜스코딩 결과 리스트 (출력 경로, video_id, 클립 정보)
@@ -616,12 +623,29 @@ def _transcode_sequential(
     progress = MultiProgressBar(total_files=len(video_files))
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
-        for video_file in video_files:
+        for i, video_file in enumerate(video_files):
             progress.start_file(video_file.path.name)
 
-            def on_progress_info(info: ProgressInfo) -> None:
-                """FFmpeg 상세 진행률을 MultiProgressBar에 전달."""
+            if context and context.on_progress:
+                context.on_progress(
+                    FileStartEvent(
+                        filename=video_file.path.name,
+                        file_index=i,
+                        total_files=len(video_files),
+                    )
+                )
+
+            filename = video_file.path.name
+
+            def on_progress_info(
+                info: ProgressInfo,
+                _filename: str = filename,
+                _ctx: PipelineContext | None = context,
+            ) -> None:
+                """FFmpeg 상세 진행률을 MultiProgressBar 및 PipelineContext에 전달."""
                 progress.update_with_info(info)
+                if _ctx and _ctx.on_progress:
+                    _ctx.on_progress(FileProgressEvent(filename=_filename, info=info))
 
             fade_config = opts.fade_map.get(video_file.path) if opts.fade_map else None
             fade_in = fade_config.fade_in if fade_config else None
@@ -668,6 +692,9 @@ def _transcode_sequential(
                 )
             )
             progress.finish_file()
+
+            if context and context.on_progress:
+                context.on_progress(FileDoneEvent(filename=video_file.path.name, success=True))
 
     return results
 
@@ -968,7 +995,7 @@ def run_pipeline(
         results = _transcode_parallel(video_files, temp_dir, parallel, transcode_opts)
     else:
         logger.info("Starting transcoding...")
-        results = _transcode_sequential(video_files, temp_dir, transcode_opts)
+        results = _transcode_sequential(video_files, temp_dir, transcode_opts, context=context)
 
     video_ids = [r.video_id for r in results]
     main_start = template_intro_count
