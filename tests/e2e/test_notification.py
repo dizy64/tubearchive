@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tubearchive.app.cli.context import PipelineContext
 from tubearchive.app.cli.main import ValidatedArgs, run_pipeline
 from tubearchive.config import (
     DiscordConfig,
@@ -82,7 +83,7 @@ class TestNotificationDuringPipeline:
             dry_run=False,
         )
 
-        run_pipeline(args, notifier=notifier)
+        run_pipeline(args, context=PipelineContext(notifier=notifier))
 
         # 알림이 2회 호출됨: transcode_complete + merge_complete
         assert mock_send.call_count == 2
@@ -120,7 +121,7 @@ class TestNotificationDuringPipeline:
             dry_run=False,
         )
 
-        run_pipeline(args, notifier=notifier)
+        run_pipeline(args, context=PipelineContext(notifier=notifier))
 
         assert mock_send.call_count == 2
         event_types = [call.args[0].event_type for call in mock_send.call_args_list]
@@ -156,7 +157,7 @@ class TestNotificationDuringPipeline:
             dry_run=False,
         )
 
-        run_pipeline(args, notifier=notifier)
+        run_pipeline(args, context=PipelineContext(notifier=notifier))
 
         # merge_complete 이벤트 찾기
         merge_events = [
@@ -190,7 +191,7 @@ class TestNotificationDuringPipeline:
         )
 
         # notifier=None으로 호출 — 예외 없이 완료해야 함
-        result = run_pipeline(args, notifier=None)
+        result = run_pipeline(args, context=None)
         assert result.exists()
 
     def test_disabled_event_not_sent(
@@ -233,7 +234,7 @@ class TestNotificationDuringPipeline:
             dry_run=False,
         )
 
-        run_pipeline(args, notifier=notifier)
+        run_pipeline(args, context=PipelineContext(notifier=notifier))
 
         # transcode_complete만 전송됨
         event_types = [call.args[0].event_type for call in mock_send.call_args_list]
@@ -271,5 +272,5 @@ class TestNotificationDuringPipeline:
         )
 
         # 예외 없이 파이프라인 완료
-        result = run_pipeline(args, notifier=notifier)
+        result = run_pipeline(args, context=PipelineContext(notifier=notifier))
         assert result.exists()
