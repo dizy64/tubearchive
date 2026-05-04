@@ -3191,3 +3191,76 @@ class TestStabilizeCLI:
         assert opts.stabilize is True
         assert opts.stabilize_strength == "heavy"
         assert opts.stabilize_crop == "expand"
+
+
+class TestFormatYoutubeTitle:
+    """format_youtube_title: 날짜 → 한국어 포맷 변환."""
+
+    def test_converts_yyyymmdd_prefix(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("20240115 도쿄 여행") == "2024년 1월 15일 도쿄 여행"
+
+    def test_strips_leading_zero_from_month_and_day(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("20240101") == "2024년 1월 1일"
+
+    def test_date_only_no_rest(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("20231225") == "2023년 12월 25일"
+
+    def test_no_date_pattern_returns_original(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("제주도 여행") == "제주도 여행"
+
+    def test_partial_date_returns_original(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("2024-01-15 여행") == "2024-01-15 여행"
+
+    def test_empty_string_returns_empty(self) -> None:
+        from tubearchive.app.cli.upload import format_youtube_title
+
+        assert format_youtube_title("") == ""
+
+
+class TestResolvePlaylistIds:
+    """resolve_playlist_ids: 플레이리스트 ID 우선순위 처리."""
+
+    def test_none_arg_with_env_returns_env_ids(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tubearchive.app.cli.upload import resolve_playlist_ids
+
+        monkeypatch.setenv("TUBEARCHIVE_YOUTUBE_PLAYLIST", "PLaaa,PLbbb")
+        result = resolve_playlist_ids(None)
+        assert result == ["PLaaa", "PLbbb"]
+
+    def test_none_arg_without_env_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tubearchive.app.cli.upload import resolve_playlist_ids
+
+        monkeypatch.delenv("TUBEARCHIVE_YOUTUBE_PLAYLIST", raising=False)
+        result = resolve_playlist_ids(None)
+        assert result == []
+
+    def test_direct_ids_returned_as_is(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tubearchive.app.cli.upload import resolve_playlist_ids
+
+        monkeypatch.delenv("TUBEARCHIVE_YOUTUBE_PLAYLIST", raising=False)
+        result = resolve_playlist_ids(["PLxxx", "PLyyy"])
+        assert result == ["PLxxx", "PLyyy"]
+
+    def test_empty_list_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tubearchive.app.cli.upload import resolve_playlist_ids
+
+        monkeypatch.delenv("TUBEARCHIVE_YOUTUBE_PLAYLIST", raising=False)
+        result = resolve_playlist_ids([])
+        assert result == []
+
+    def test_env_with_spaces_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tubearchive.app.cli.upload import resolve_playlist_ids
+
+        monkeypatch.setenv("TUBEARCHIVE_YOUTUBE_PLAYLIST", " PLaaa , PLbbb ")
+        result = resolve_playlist_ids(None)
+        assert result == ["PLaaa", "PLbbb"]
