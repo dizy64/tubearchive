@@ -245,7 +245,6 @@ def upload_to_youtube(
         logger.error(f"YouTube upload failed: {e}")
         print(f"\n❌ YouTube 업로드 실패: {e}")
         raise
-    return None
 
 
 def _resolve_upload_thumbnail(
@@ -347,10 +346,7 @@ def cmd_upload_only(args: argparse.Namespace, hooks: HooksConfig | None = None) 
     file_path = Path(args.upload_only)
 
     if not file_path.exists():
-        logger.error(f"File not found: {file_path}")
-        import sys as _sys
-
-        _sys.exit(1)
+        raise FileNotFoundError(f"File not found: {file_path}")
 
     # DB에서 MergeJob 조회 (경로로 찾기)
     merge_job_id = None
@@ -628,7 +624,7 @@ def _upload_after_pipeline(
     try:
         with database_session() as conn:
             repo = MergeJobRepository(conn)
-            job = repo.get_latest()
+            job = repo.get_by_output_path(output_path)
             if job:
                 merge_job_id = job.id
                 title = job.title
@@ -719,7 +715,7 @@ def _upload_after_pipeline(
             )
         )
 
-    if hooks is not None:
+    if hooks is not None and uploaded_ids:
         run_hooks(
             hooks,
             "on_upload",

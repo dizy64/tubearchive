@@ -109,8 +109,7 @@ def _run_watch_pipeline(
         notifier=notifier,
         generated_thumbnail_paths=pipeline_generated_thumbnail_paths,
     )
-    print("\n✅ 완료!")
-    print(f"📹 출력 파일: {output_path}")
+    logger.info("완료: %s", output_path)
 
     if pipeline_args.upload:
         _upload_after_pipeline(

@@ -211,15 +211,18 @@ def cmd_status_detail(job_id: int) -> None:
         if job.clips_info_json:
             try:
                 clips = json.loads(job.clips_info_json)
-                print(f"\n📹 클립 ({len(clips)}개):")
-                print("-" * 60)
-                for i, clip in enumerate(clips, 1):
-                    name = clip.get("name", "-")
-                    clip_duration = clip.get("duration", 0)
-                    device = clip.get("device", "-")
-                    shot_time = clip.get("shot_time", "-")
-                    print(f"  {i}. {name}")
-                    print(f"     기기: {device} | 촬영: {shot_time} | 길이: {clip_duration:.1f}s")
+                if isinstance(clips, list):
+                    print(f"\n📹 클립 ({len(clips)}개):")
+                    print("-" * 60)
+                    for i, clip in enumerate(clips, 1):
+                        name = clip.get("name", "-")
+                        clip_duration = clip.get("duration", 0)
+                        device = clip.get("device", "-")
+                        shot_time = clip.get("shot_time", "-")
+                        print(f"  {i}. {name}")
+                        print(
+                            f"     기기: {device} | 촬영: {shot_time} | 길이: {clip_duration:.1f}s"
+                        )
             except json.JSONDecodeError:
                 pass
 
@@ -258,7 +261,7 @@ def cmd_fix_device_models() -> None:
             try:
                 probe_data = _run_ffprobe(path)
                 device_model = _extract_device_model(probe_data, path)
-            except Exception as exc:
+            except (RuntimeError, OSError) as exc:
                 logger.debug("ffprobe 실패 (%s): %s", path.name, exc)
                 skipped_no_model += 1
                 continue

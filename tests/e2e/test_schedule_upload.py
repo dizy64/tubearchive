@@ -107,7 +107,7 @@ class TestScheduleWithCLI:
 class TestScheduleUploadIntegration:
     """스케줄 업로드 통합 테스트 (mock YouTube)."""
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
     def test_upload_with_schedule(
         self,
         mock_upload: MagicMock,
@@ -229,7 +229,7 @@ class TestScheduleUploadIntegration:
         call_kwargs = mock_uploader.upload.call_args.kwargs
         assert call_kwargs["publish_at"] == future_schedule
 
-    @patch("tubearchive.app.cli.main.upload_to_youtube")
+    @patch("tubearchive.app.cli.upload.upload_to_youtube")
     def test_upload_uses_set_thumbnail_option(
         self,
         mock_upload: MagicMock,

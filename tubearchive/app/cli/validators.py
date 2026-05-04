@@ -210,7 +210,7 @@ def validate_args(
         targets = [Path.cwd()]
     else:
         for target in args.targets:
-            path = Path(target)
+            path = Path(target).expanduser()
             if not path.exists():
                 raise FileNotFoundError(f"Target not found: {target}")
             targets.append(path)
@@ -218,14 +218,14 @@ def validate_args(
     # output 검증
     output: Path | None = None
     if args.output:
-        output = Path(args.output)
+        output = Path(args.output).expanduser()
         if not output.parent.exists():
             raise FileNotFoundError(f"Output directory not found: {output.parent}")
 
     # output_dir 검증 (CLI 인자 > 환경 변수 > None)
     output_dir: Path | None = None
     if args.output_dir:
-        output_dir = Path(args.output_dir)
+        output_dir = Path(args.output_dir).expanduser()
         if not output_dir.is_dir():
             raise FileNotFoundError(f"Output directory not found: {args.output_dir}")
     else:

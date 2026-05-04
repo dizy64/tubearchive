@@ -751,9 +751,8 @@ def _cleanup_temp(
     temp_dir: Path,
     results: list[TranscodeResult],
     final_path: Path,
-    video_ids: list[int],
 ) -> None:
-    """임시 파일 및 폴더를 정리하고 DB 상태를 업데이트한다."""
+    """임시 파일 및 폴더를 정리한다."""
     logger.info("Cleaning up temporary files...")
     for r in results:
         if r.output_path.exists() and r.output_path != final_path:
@@ -762,9 +761,6 @@ def _cleanup_temp(
             else:
                 r.output_path.unlink()
                 logger.debug(f"  Removed: {r.output_path}")
-
-    # DB 상태 업데이트: completed → merged
-    _mark_transcoding_jobs_merged(video_ids)
 
     # 임시 폴더 삭제
     if temp_dir.exists():
@@ -1195,9 +1191,10 @@ def run_pipeline(
             merge_job_id=merge_job_id,
         )
 
-    # 5. 임시 파일 정리
+    # 5. 임시 파일 정리 및 DB 상태 업데이트 (--keep-temp와 무관하게 항상 실행)
+    _mark_transcoding_jobs_merged(video_ids)
     if not validated_args.keep_temp:
-        _cleanup_temp(temp_dir, results, final_path, video_ids)
+        _cleanup_temp(temp_dir, results, final_path)
 
     # 5.5 원본 파일 아카이빙 (CLI 옵션 또는 config 정책)
     _archive_originals(video_paths_for_archive, validated_args)
