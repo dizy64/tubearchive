@@ -121,6 +121,15 @@ _VIDSTAB_CROP: dict[StabilizeCrop, str] = {
 }
 
 
+# 영상 노이즈 제거 (hqdn3d) 강도별 파라미터
+# 파라미터 순서: luma_spatial:chroma_spatial:luma_tmp:chroma_tmp
+VIDEO_DENOISE_HQDN3D_LEVELS: dict[str, str] = {
+    "light": "hqdn3d=2:1.5:6:4.5",
+    "medium": "hqdn3d=4:3:9:6.75",
+    "heavy": "hqdn3d=6:4.5:12:9",
+}
+
+
 def create_lut_filter(lut_path: str) -> str:
     """
     LUT(Look-Up Table) 적용 필터 생성.
@@ -153,6 +162,24 @@ def create_lut_filter(lut_path: str) -> str:
     for ch in ("\\", "'", ":", ";"):
         escaped = escaped.replace(ch, f"\\{ch}")
     return f"lut3d=file={escaped}"
+
+
+def create_video_denoise_filter(level: str = "medium") -> str:
+    """영상 노이즈 제거 필터 생성 (hqdn3d).
+
+    Args:
+        level: 강도 (light/medium/heavy)
+
+    Returns:
+        hqdn3d 필터 문자열
+
+    Raises:
+        ValueError: 지원하지 않는 강도
+    """
+    key = level.lower()
+    if key not in VIDEO_DENOISE_HQDN3D_LEVELS:
+        raise ValueError(f"Unsupported video denoise level: {level!r}")
+    return VIDEO_DENOISE_HQDN3D_LEVELS[key]
 
 
 def create_hdr_to_sdr_filter(color_transfer: str | None) -> str:
