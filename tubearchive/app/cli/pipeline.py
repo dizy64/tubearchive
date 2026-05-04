@@ -64,6 +64,22 @@ from tubearchive.shared.summary_generator import generate_single_file_descriptio
 logger = logging.getLogger(__name__)
 
 
+def _emit_progress(
+    context: PipelineContext | None,
+    event: FileStartEvent | FileProgressEvent | FileDoneEvent,
+) -> None:
+    """on_progress 콜백을 안전하게 호출한다.
+
+    콜백이 예외를 던져도 파이프라인이 중단되지 않도록 try/except로 감싼다.
+    """
+    if context is None or context.on_progress is None:
+        return
+    try:
+        context.on_progress(event)
+    except Exception:
+        logger.warning("Progress callback raised an exception", exc_info=True)
+
+
 def get_temp_dir() -> Path:
     """실행별 고유 임시 디렉토리 생성 및 반환.
 
@@ -577,20 +593,19 @@ def _transcode_parallel(
             if completed_count == total_count:
                 print()  # 줄바꿈
         # emit outside the lock — on_progress is an arbitrary callable
-        if context and context.on_progress:
-            context.on_progress(FileDoneEvent(filename=filename, success=success))
+        _emit_progress(context, FileDoneEvent(filename=filename, success=success))
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures: dict[Future[TranscodeResult], int] = {}
         for i, video_file in enumerate(video_files):
-            if context and context.on_progress:
-                context.on_progress(
-                    FileStartEvent(
-                        filename=video_file.path.name,
-                        file_index=i,
-                        total_files=total_count,
-                    )
-                )
+            _emit_progress(
+                context,
+                FileStartEvent(
+                    filename=video_file.path.name,
+                    file_index=i,
+                    total_files=total_count,
+                ),
+            )
             futures[executor.submit(_transcode_single, video_file, temp_dir, opts)] = i
 
         for future in as_completed(futures):
@@ -634,14 +649,14 @@ def _transcode_sequential(
         for i, video_file in enumerate(video_files):
             progress.start_file(video_file.path.name)
 
-            if context and context.on_progress:
-                context.on_progress(
-                    FileStartEvent(
-                        filename=video_file.path.name,
-                        file_index=i,
-                        total_files=len(video_files),
-                    )
-                )
+            _emit_progress(
+                context,
+                FileStartEvent(
+                    filename=video_file.path.name,
+                    file_index=i,
+                    total_files=len(video_files),
+                ),
+            )
 
             filename = video_file.path.name
 
@@ -652,8 +667,7 @@ def _transcode_sequential(
             ) -> None:
                 """FFmpeg 상세 진행률을 MultiProgressBar 및 PipelineContext에 전달."""
                 progress.update_with_info(info)
-                if _ctx and _ctx.on_progress:
-                    _ctx.on_progress(FileProgressEvent(filename=_filename, info=info))
+                _emit_progress(_ctx, FileProgressEvent(filename=_filename, info=info))
 
             fade_config = opts.fade_map.get(video_file.path) if opts.fade_map else None
             fade_in = fade_config.fade_in if fade_config else None
@@ -702,11 +716,9 @@ def _transcode_sequential(
                 )
                 progress.finish_file()
 
-                if context and context.on_progress:
-                    context.on_progress(FileDoneEvent(filename=video_file.path.name, success=True))
+                _emit_progress(context, FileDoneEvent(filename=video_file.path.name, success=True))
             except Exception:
-                if context and context.on_progress:
-                    context.on_progress(FileDoneEvent(filename=video_file.path.name, success=False))
+                _emit_progress(context, FileDoneEvent(filename=video_file.path.name, success=False))
                 raise
 
     return results

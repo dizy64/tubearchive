@@ -327,7 +327,7 @@ def run_pipeline(
 ```
 
 기존 `notifier:` 파라미터 독스트링 행 제거, `context:` 설명 추가:
-```
+```text
         context: 진행률 콜백 + 알림 오케스트레이터 (None이면 기존 동작)
 ```
 

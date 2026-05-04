@@ -9,6 +9,7 @@ worker 스레드에서 ``app.call_from_thread()`` 를 통해 안전하게 호출
 
 from __future__ import annotations
 
+from rich.markup import escape
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widget import Widget
@@ -114,7 +115,8 @@ class FileProgressPanel(Widget):
 
     def __init__(self, id: str | None = None) -> None:  # noqa: A002
         super().__init__(id=id)
-        self._file_rows: dict[str, _FileRow] = {}
+        self._file_rows: dict[int, _FileRow] = {}
+        self._filename_to_index: dict[str, int] = {}
         self._done_count = 0
         self._total_files = 0
 
@@ -123,7 +125,7 @@ class FileProgressPanel(Widget):
             yield Label("준비 중...", id="fp-header")
             yield Vertical(id="fp-files")
             yield ProgressBar(total=None, id="fp-overall-bar", show_eta=False)
-            yield RichLog(id="fp-log", highlight=True, markup=True, max_lines=500)
+            yield RichLog(id="fp-log", highlight=True, markup=False, max_lines=500)
 
     # ------------------------------------------------------------------
     # 공개 API (call_from_thread 경유 호출)
@@ -135,18 +137,21 @@ class FileProgressPanel(Widget):
             self._total_files = event.total_files
             self.query_one("#fp-header", Label).update(f"처리 중: {event.total_files}개 파일")
             row = _FileRow(filename=event.filename)
-            self._file_rows[event.filename] = row
+            self._file_rows[event.file_index] = row
+            self._filename_to_index[event.filename] = event.file_index
             self.query_one("#fp-files", Vertical).mount(row)
             row.mark_processing()
 
         elif isinstance(event, FileProgressEvent):
-            maybe_row = self._file_rows.get(event.filename)
+            idx = self._filename_to_index.get(event.filename)
+            maybe_row = self._file_rows.get(idx) if idx is not None else None
             if maybe_row is not None:
                 eta = _format_eta(event.info)
                 maybe_row.update_progress(event.info.percent, eta)
 
         elif isinstance(event, FileDoneEvent):
-            maybe_row = self._file_rows.get(event.filename)
+            idx = self._filename_to_index.get(event.filename)
+            maybe_row = self._file_rows.get(idx) if idx is not None else None
             if maybe_row is not None:
                 maybe_row.mark_done(event.success)
             self._done_count += 1
@@ -159,6 +164,7 @@ class FileProgressPanel(Widget):
     def start(self, label: str = "처리 중...") -> None:
         """실행 시작 상태로 초기화."""
         self._file_rows.clear()
+        self._filename_to_index.clear()
         self._done_count = 0
         self._total_files = 0
         self.query_one("#fp-header", Label).update(label)
@@ -172,11 +178,11 @@ class FileProgressPanel(Widget):
         """완료 상태로 갱신."""
         bar = self.query_one("#fp-overall-bar", ProgressBar)
         bar.update(total=100, progress=100.0)
-        self.query_one("#fp-header", Label).update(f"[green]완료:[/green] {output_path}")
+        self.query_one("#fp-header", Label).update(f"[green]완료:[/green] {escape(output_path)}")
 
     def error(self, message: str) -> None:
         """오류 상태로 갱신."""
-        self.query_one("#fp-header", Label).update(f"[red]오류:[/red] {message}")
+        self.query_one("#fp-header", Label).update(f"[red]오류:[/red] {escape(message)}")
 
     def _update_overall_bar(self) -> None:
         if self._total_files == 0:

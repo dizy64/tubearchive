@@ -86,8 +86,9 @@ if validated_args.notify:
 context = PipelineContext(notifier=notifier, on_progress=on_progress)
 ```
 
-파이프라인 내부에서 완료/오류 시점에 `context.notifier.send(event)` 호출.  
-`Notifier` 인터페이스는 기존 `infra/notification/notifier.py` 그대로 사용.
+파이프라인 내부에서 완료/오류 시점에 `context.notifier.notify(event)` 호출.  
+`Notifier` 인터페이스(`infra/notification/notifier.py`)는 TUI와 CLI 양쪽에서 모두 생성·전달 가능하다.  
+CLI에서도 `validated_args.notify` 플래그가 있으면 `main.py`에서 `Notifier`를 생성해 `PipelineContext`에 주입한다.
 
 ---
 
@@ -98,7 +99,7 @@ context = PipelineContext(notifier=notifier, on_progress=on_progress)
 
 ### 레이아웃
 
-```
+```text
 ┌ 진행 중: 3개 파일 ──────────────────────────────────┐
 │  →  clip_001.mov   ████████░░░░  45%  ETA 2:30     │
 │  ·  clip_002.mov                                   │
@@ -182,4 +183,4 @@ def _run_pipeline_worker(self, validated_args, notifier) -> None:
 - `ValidatedArgs` 필드 — 추가/변경 없음
 - 기존 `run_pipeline(args)` 호출 — `context` 기본값 `None`이라 그대로 동작
 - test_cli.py patch 경로 — `tubearchive.app.cli.pipeline.run_pipeline` 등 그대로
-- CLI 동작 — `notifier` 생성은 TUI 레이어에서만 발생
+- CLI 동작 — `notifier` 생성은 TUI 및 CLI 레이어(`main.py`)에서 `validated_args.notify` 플래그로 제어
