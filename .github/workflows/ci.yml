@@ -30,7 +30,7 @@ jobs:
 
   e2e-test:
     name: E2E Tests (Linux Container, ${{ matrix.shard }})
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -66,7 +66,7 @@ jobs:
 
   e2e-macos-smoke:
     name: E2E macOS Smoke (best effort)
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: macos-latest
     continue-on-error: true
     timeout-minutes: 20
