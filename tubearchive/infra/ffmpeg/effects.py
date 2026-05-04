@@ -1048,6 +1048,9 @@ def create_combined_filter(
         loudnorm_analysis: EBU R128 loudnorm 분석 결과 (None이면 미적용)
         lut_path: LUT 파일 경로 (None이면 미적용)
         lut_before_hdr: LUT를 HDR 변환 앞에 적용할지 여부
+        video_denoise: 영상 노이즈 제거(hqdn3d) 활성화 여부
+        video_denoise_strength: 영상 노이즈 제거 강도 (light/medium/heavy)
+        wb_kelvin: 화이트밸런스 색온도 (K). None이면 비활성화.
 
     Returns:
         (video_filter, audio_filter) 튜플
