@@ -216,3 +216,38 @@ def test_transcode_sequential_emits_start_and_done_events(tmp_path: Path) -> Non
     assert len(done_events) == 1
     assert done_events[0].filename == "clip.mov"
     assert done_events[0].success is True
+
+
+def test_transcode_parallel_emits_start_and_done_events(tmp_path: Path) -> None:
+    """_transcode_parallel이 각 파일에 대해 FileStartEvent와 FileDoneEvent를 emit한다."""
+    from tubearchive.app.cli.context import FileDoneEvent, FileStartEvent, PipelineContext
+    from tubearchive.app.cli.pipeline import TranscodeOptions, _transcode_parallel
+    from tubearchive.domain.models.clip import ClipInfo
+
+    events: list[object] = []
+    ctx = PipelineContext(on_progress=events.append)
+
+    fake_video = MagicMock()
+    fake_video.path = tmp_path / "clip.mov"
+
+    opts = TranscodeOptions()
+
+    with (
+        patch("tubearchive.app.cli.pipeline._transcode_single") as mock_single,
+    ):
+        from tubearchive.app.cli.pipeline import TranscodeResult
+
+        mock_single.return_value = TranscodeResult(
+            output_path=tmp_path / "out.mp4",
+            video_id=1,
+            clip_info=ClipInfo(name="clip", duration=5.0, device="x", shot_time=None),
+            silence_segments=[],
+        )
+
+        _transcode_parallel([fake_video], tmp_path, 1, opts, context=ctx)
+
+    start_events = [e for e in events if isinstance(e, FileStartEvent)]
+    done_events = [e for e in events if isinstance(e, FileDoneEvent)]
+    assert len(start_events) == 1
+    assert len(done_events) == 1
+    assert done_events[0].success is True

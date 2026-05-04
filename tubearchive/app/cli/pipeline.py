@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import sys
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -539,6 +539,7 @@ def _transcode_parallel(
     temp_dir: Path,
     max_workers: int,
     opts: TranscodeOptions,
+    context: PipelineContext | None = None,
 ) -> list[TranscodeResult]:
     """``ThreadPoolExecutor`` 를 사용한 병렬 트랜스코딩.
 
@@ -550,6 +551,7 @@ def _transcode_parallel(
         temp_dir: 임시 출력 디렉토리
         max_workers: 최대 동시 워커 수
         opts: 트랜스코딩 공통 옵션 (denoise, loudnorm, fade 등)
+        context: 파이프라인 진행률 컨텍스트 (TUI 연동용, None이면 기존 동작)
 
     Returns:
         원본 순서가 유지된 트랜스코딩 결과 리스트
@@ -562,8 +564,8 @@ def _transcode_parallel(
     total_count = len(video_files)
     print_lock = Lock()
 
-    def on_complete(idx: int, filename: str, status: str) -> None:
-        """병렬 워커 완료 콜백 -- 진행 카운터 갱신 및 콘솔 출력."""
+    def on_complete(idx: int, filename: str, status: str, success: bool) -> None:
+        """병렬 워커 완료 콜백 -- 진행 카운터 갱신, 콘솔 출력 및 이벤트 emit."""
         nonlocal completed_count
         with print_lock:
             completed_count += 1
@@ -574,26 +576,31 @@ def _transcode_parallel(
             )
             if completed_count == total_count:
                 print()  # 줄바꿈
+            if context and context.on_progress:
+                context.on_progress(FileDoneEvent(filename=filename, success=success))
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                _transcode_single,
-                video_file,
-                temp_dir,
-                opts,
-            ): i
-            for i, video_file in enumerate(video_files)
-        }
+        futures: dict[Future[TranscodeResult], int] = {}
+        for i, video_file in enumerate(video_files):
+            if context and context.on_progress:
+                context.on_progress(
+                    FileStartEvent(
+                        filename=video_file.path.name,
+                        file_index=i,
+                        total_files=total_count,
+                    )
+                )
+            futures[executor.submit(_transcode_single, video_file, temp_dir, opts)] = i
+
         for future in as_completed(futures):
             idx = futures[future]
             try:
                 result = future.result()
                 results[idx] = result
-                on_complete(idx, video_files[idx].path.name, "완료")
+                on_complete(idx, video_files[idx].path.name, "완료", success=True)
             except Exception as e:
                 logger.error(f"Failed to transcode {video_files[idx].path}: {e}")
-                on_complete(idx, video_files[idx].path.name, "실패")
+                on_complete(idx, video_files[idx].path.name, "실패", success=False)
                 raise
 
     return [results[i] for i in range(total_count)]
@@ -656,45 +663,50 @@ def _transcode_sequential(
                 watermark_text = opts.watermark_text or _make_watermark_text(video_file, metadata)
             else:
                 watermark_text = None
-            output_path, video_id, silence_segments = transcoder.transcode_video(
-                video_file,
-                metadata=metadata,
-                denoise=opts.denoise,
-                denoise_level=opts.denoise_level,
-                normalize_audio=opts.normalize_audio,
-                fade_duration=opts.fade_duration,
-                fade_in_duration=fade_in,
-                fade_out_duration=fade_out,
-                trim_silence=opts.trim_silence,
-                silence_threshold=opts.silence_threshold,
-                silence_min_duration=opts.silence_min_duration,
-                stabilize=opts.stabilize,
-                stabilize_strength=opts.stabilize_strength,
-                stabilize_crop=opts.stabilize_crop,
-                lut_path=str(opts.lut_path) if opts.lut_path else None,
-                auto_lut=opts.auto_lut,
-                lut_before_hdr=opts.lut_before_hdr,
-                device_luts=opts.device_luts,
-                watermark_text=watermark_text,
-                watermark_position=opts.watermark_pos,
-                watermark_size=opts.watermark_size,
-                watermark_color=opts.watermark_color,
-                watermark_alpha=opts.watermark_alpha,
-                progress_info_callback=on_progress_info,
-            )
-            clip_info = _collect_clip_info(video_file, metadata)
-            results.append(
-                TranscodeResult(
-                    output_path=output_path,
-                    video_id=video_id,
-                    clip_info=clip_info,
-                    silence_segments=silence_segments,
+            try:
+                output_path, video_id, silence_segments = transcoder.transcode_video(
+                    video_file,
+                    metadata=metadata,
+                    denoise=opts.denoise,
+                    denoise_level=opts.denoise_level,
+                    normalize_audio=opts.normalize_audio,
+                    fade_duration=opts.fade_duration,
+                    fade_in_duration=fade_in,
+                    fade_out_duration=fade_out,
+                    trim_silence=opts.trim_silence,
+                    silence_threshold=opts.silence_threshold,
+                    silence_min_duration=opts.silence_min_duration,
+                    stabilize=opts.stabilize,
+                    stabilize_strength=opts.stabilize_strength,
+                    stabilize_crop=opts.stabilize_crop,
+                    lut_path=str(opts.lut_path) if opts.lut_path else None,
+                    auto_lut=opts.auto_lut,
+                    lut_before_hdr=opts.lut_before_hdr,
+                    device_luts=opts.device_luts,
+                    watermark_text=watermark_text,
+                    watermark_position=opts.watermark_pos,
+                    watermark_size=opts.watermark_size,
+                    watermark_color=opts.watermark_color,
+                    watermark_alpha=opts.watermark_alpha,
+                    progress_info_callback=on_progress_info,
                 )
-            )
-            progress.finish_file()
+                clip_info = _collect_clip_info(video_file, metadata)
+                results.append(
+                    TranscodeResult(
+                        output_path=output_path,
+                        video_id=video_id,
+                        clip_info=clip_info,
+                        silence_segments=silence_segments,
+                    )
+                )
+                progress.finish_file()
 
-            if context and context.on_progress:
-                context.on_progress(FileDoneEvent(filename=video_file.path.name, success=True))
+                if context and context.on_progress:
+                    context.on_progress(FileDoneEvent(filename=video_file.path.name, success=True))
+            except Exception:
+                if context and context.on_progress:
+                    context.on_progress(FileDoneEvent(filename=video_file.path.name, success=False))
+                raise
 
     return results
 
@@ -992,7 +1004,9 @@ def run_pipeline(
     parallel = validated_args.parallel
     if parallel > 1:
         logger.info(f"Starting parallel transcoding (workers: {parallel})...")
-        results = _transcode_parallel(video_files, temp_dir, parallel, transcode_opts)
+        results = _transcode_parallel(
+            video_files, temp_dir, parallel, transcode_opts, context=context
+        )
     else:
         logger.info("Starting transcoding...")
         results = _transcode_sequential(video_files, temp_dir, transcode_opts, context=context)
