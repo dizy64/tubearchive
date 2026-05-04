@@ -77,7 +77,7 @@ def _emit_progress(
     try:
         context.on_progress(event)
     except Exception:
-        logger.warning("Progress callback raised an exception", exc_info=True)
+        logger.debug("Progress callback raised an exception", exc_info=True)
 
 
 def get_temp_dir() -> Path:

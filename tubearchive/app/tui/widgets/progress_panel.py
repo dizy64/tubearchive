@@ -7,6 +7,7 @@ worker 스레드에서 ``app.call_from_thread()`` 를 통해 안전하게 호출
 
 from __future__ import annotations
 
+from rich.markup import escape
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Label, ProgressBar, RichLog, Static
@@ -86,14 +87,14 @@ class ProgressPanel(Static):
         bar = self.query_one("#progress-bar", ProgressBar)
         bar.update(total=100, progress=100.0)
         self.query_one("#progress-percent", Label).update("100%")
-        self.set_status(f"[green]완료:[/green] {output_path}")
+        self.set_status(f"[green]완료:[/green] {escape(output_path)}")
 
     def error(self, message: str) -> None:
         """오류 상태로 갱신."""
         bar = self.query_one("#progress-bar", ProgressBar)
         bar.update(total=100, progress=0.0)
         self.query_one("#progress-percent", Label).update("")
-        self.set_status(f"[red]오류:[/red] {message}")
+        self.set_status(f"[red]오류:[/red] {escape(message)}")
 
     def append_log(self, text: str) -> None:
         """로그 한 줄 추가."""

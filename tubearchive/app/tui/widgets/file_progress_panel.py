@@ -9,6 +9,9 @@ worker 스레드에서 ``app.call_from_thread()`` 를 통해 안전하게 호출
 
 from __future__ import annotations
 
+import time
+from typing import Literal
+
 from rich.markup import escape
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -21,20 +24,27 @@ from tubearchive.app.cli.context import (
     FileStartEvent,
     ProgressEvent,
 )
+from tubearchive.shared.progress import ProgressInfo, format_time
 
-_ICONS: dict[str, str] = {
+_Status = Literal["pending", "processing", "done", "error"]
+
+_ICONS: dict[_Status, str] = {
     "pending": "·",
     "processing": "→",
     "done": "✓",
     "error": "✗",
 }
 
-_COLORS: dict[str, str] = {
+_COLORS: dict[_Status, str] = {
     "pending": "dim",
     "processing": "yellow",
     "done": "green",
     "error": "red",
 }
+
+# FFmpeg stderr는 10-25 Hz로 진행률 라인을 emit한다.
+# TUI 렌더링 루프 포화를 방지하기 위해 ~10 Hz로 스로틀한다.
+_REFRESH_INTERVAL = 0.1
 
 
 class _FileRow(Static):
@@ -50,9 +60,10 @@ class _FileRow(Static):
     def __init__(self, filename: str) -> None:
         super().__init__()
         self._filename = filename
-        self._status = "pending"
+        self._status: _Status = "pending"
         self._percent = 0
         self._eta = ""
+        self._last_refresh = 0.0
 
     def render(self) -> str:
         icon = _ICONS[self._status]
@@ -76,7 +87,10 @@ class _FileRow(Static):
         self._status = "processing"
         self._percent = percent
         self._eta = eta
-        self.refresh()
+        now = time.monotonic()
+        if now - self._last_refresh >= _REFRESH_INTERVAL:
+            self._last_refresh = now
+            self.refresh()
 
     def mark_done(self, success: bool) -> None:
         self._status = "done" if success else "error"
@@ -118,6 +132,7 @@ class FileProgressPanel(Widget):
         self._file_rows: dict[int, _FileRow] = {}
         self._done_count = 0
         self._total_files = 0
+        self._log_widget: RichLog | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -126,12 +141,14 @@ class FileProgressPanel(Widget):
             yield ProgressBar(total=None, id="fp-overall-bar", show_eta=False)
             yield RichLog(id="fp-log", highlight=True, markup=False, max_lines=500)
 
+    def on_mount(self) -> None:
+        self._log_widget = self.query_one("#fp-log", RichLog)
+
     # ------------------------------------------------------------------
     # 공개 API (call_from_thread 경유 호출)
     # ------------------------------------------------------------------
 
     def handle_event(self, event: ProgressEvent) -> None:
-        """ProgressEvent 수신 → 해당 행 갱신."""
         if isinstance(event, FileStartEvent):
             self._total_files = event.total_files
             self.query_one("#fp-header", Label).update(f"처리 중: {event.total_files}개 파일")
@@ -154,8 +171,8 @@ class FileProgressPanel(Widget):
             self._update_overall_bar()
 
     def append_log(self, text: str) -> None:
-        """로그 한 줄 추가."""
-        self.query_one("#fp-log", RichLog).write(text.rstrip())
+        log = self._log_widget or self.query_one("#fp-log", RichLog)
+        log.write(text.rstrip())
 
     def start(self, label: str = "처리 중...") -> None:
         """실행 시작 상태로 초기화."""
@@ -163,16 +180,14 @@ class FileProgressPanel(Widget):
         self._done_count = 0
         self._total_files = 0
         self.query_one("#fp-header", Label).update(label)
-        files_container = self.query_one("#fp-files", Vertical)
-        files_container.remove_children()
-        bar = self.query_one("#fp-overall-bar", ProgressBar)
-        bar.update(total=None)
-        self.query_one("#fp-log", RichLog).clear()
+        self.query_one("#fp-files", Vertical).remove_children()
+        self.query_one("#fp-overall-bar", ProgressBar).update(total=None)
+        log = self._log_widget or self.query_one("#fp-log", RichLog)
+        log.clear()
 
     def finish(self, output_path: str) -> None:
         """완료 상태로 갱신."""
-        bar = self.query_one("#fp-overall-bar", ProgressBar)
-        bar.update(total=100, progress=100.0)
+        self.query_one("#fp-overall-bar", ProgressBar).update(total=100, progress=100.0)
         self.query_one("#fp-header", Label).update(f"[green]완료:[/green] {escape(output_path)}")
 
     def error(self, message: str) -> None:
@@ -188,25 +203,8 @@ class FileProgressPanel(Widget):
         bar.update(progress=float(self._done_count))
 
 
-def _format_eta(info: object) -> str:
-    """ProgressInfo.calculate_eta() 결과를 포맷된 문자열로 반환.
-
-    ``calculate_eta`` 속성이 없거나 값이 None/0 이하이면 빈 문자열을 반환한다.
-    """
-    calculate_eta = getattr(info, "calculate_eta", None)
-    if calculate_eta is None or not callable(calculate_eta):
-        return ""
-    try:
-        eta_seconds = calculate_eta()
-    except Exception:
-        return ""
+def _format_eta(info: ProgressInfo) -> str:
+    eta_seconds = info.calculate_eta()
     if eta_seconds is None or eta_seconds <= 0:
         return ""
-    try:
-        from tubearchive.shared.progress import format_time
-
-        return format_time(eta_seconds)
-    except Exception:
-        minutes = int(eta_seconds // 60)
-        secs = int(eta_seconds % 60)
-        return f"{minutes}:{secs:02d}"
+    return format_time(eta_seconds)
