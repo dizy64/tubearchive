@@ -1158,6 +1158,7 @@ class TestValidateArgs:
         def _capture_validate_args(
             parsed_args: argparse.Namespace,
             device_luts: dict[str, str] | None = None,
+            device_wb: dict[str, str] | None = None,
             hooks: HooksConfig | None = None,
         ) -> object:
             # reload 시점에 validate_args로 들어오는 hook 설정을 기록

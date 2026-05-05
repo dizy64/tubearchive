@@ -22,6 +22,7 @@ from tubearchive.domain.media.subtitle import (
     SubtitleFormat,
     SubtitleModel,
 )
+from tubearchive.infra.ffmpeg.constants import WB_PRESETS
 
 logger = logging.getLogger(__name__)
 
@@ -553,13 +554,14 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     # 화이트밸런스 옵션
+    _wb_preset_choices = sorted(WB_PRESETS)
     parser.add_argument(
         "--wb-preset",
         type=str,
-        choices=["tungsten", "fluorescent", "daylight", "cloudy", "shade"],
+        choices=_wb_preset_choices,
         default=None,
         dest="wb_preset",
-        help="화이트밸런스 프리셋 (tungsten/fluorescent/daylight/cloudy/shade)",
+        help=f"화이트밸런스 프리셋 ({'/'.join(_wb_preset_choices)})",
     )
 
     parser.add_argument(

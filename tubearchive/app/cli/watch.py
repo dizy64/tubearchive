@@ -162,6 +162,7 @@ def _run_watch_mode(
         return validate_args(
             parsed_args,
             device_luts=updated_config.color_grading.device_luts or None,
+            device_wb=updated_config.color_grading.device_wb or None,
             hooks=updated_config.hooks,
         )
 

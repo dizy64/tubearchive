@@ -195,6 +195,7 @@ def _resolve_template_path(template_arg: str | Path | None) -> Path | None:
 def validate_args(
     args: argparse.Namespace,
     device_luts: dict[str, str] | None = None,
+    device_wb: dict[str, str] | None = None,
     hooks: HooksConfig | None = None,
 ) -> ValidatedArgs:
     """CLI 인자를 검증하고 :class:`ValidatedArgs` 로 변환한다.
@@ -480,11 +481,12 @@ def validate_args(
     lut_before_hdr: bool = getattr(args, "lut_before_hdr", False)
 
     # 영상 노이즈 제거 (CLI > 환경변수 > 기본값)
+    # 환경변수에서 level만 지정해도 활성화로 간주 (오디오 denoise와 동일 패턴)
     video_denoise_flag = bool(getattr(args, "video_denoise", False))
     video_denoise_level_arg = getattr(args, "video_denoise_level", None)
     env_video_denoise = get_default_video_denoise()
     env_video_denoise_level = get_default_video_denoise_level()
-    video_denoise = video_denoise_flag or env_video_denoise
+    video_denoise = video_denoise_flag or env_video_denoise or (env_video_denoise_level is not None)
     resolved_video_denoise_level = video_denoise_level_arg or env_video_denoise_level or "medium"
     if video_denoise_level_arg is not None:
         video_denoise = True
@@ -508,7 +510,10 @@ def validate_args(
 
     auto_wb_flag = getattr(args, "auto_white_balance", None)
     no_auto_wb_flag = getattr(args, "no_auto_white_balance", False)
+    # --no-auto-wb이 --auto-wb보다 우선 (명시적 비활성화)
     if no_auto_wb_flag:
+        if auto_wb_flag:
+            logger.warning("--auto-wb and --no-auto-wb both set; --no-auto-wb wins")
         auto_white_balance = False
     elif auto_wb_flag:
         auto_white_balance = True
@@ -606,7 +611,7 @@ def validate_args(
         video_denoise_strength=resolved_video_denoise_level,
         wb_kelvin=resolved_wb_kelvin,
         auto_white_balance=auto_white_balance,
-        device_wb=None,
+        device_wb=device_wb if device_wb else None,
         watermark=watermark_enabled,
         watermark_pos=watermark_pos,
         watermark_size=watermark_size,

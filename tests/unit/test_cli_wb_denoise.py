@@ -77,6 +77,16 @@ class TestVideoDenoise:
         assert result.video_denoise is True
         assert result.video_denoise_strength == "heavy"
 
+    @patch("tubearchive.app.cli.validators.get_default_video_denoise", return_value=False)
+    @patch("tubearchive.app.cli.validators.get_default_video_denoise_level", return_value="light")
+    def test_env_level_only_implies_enable(
+        self, _mock_level: object, _mock_flag: object, valid_args: argparse.Namespace
+    ) -> None:
+        """환경변수에서 level만 지정해도 활성화 (오디오 denoise와 동일 패턴)."""
+        result = validate_args(valid_args)
+        assert result.video_denoise is True
+        assert result.video_denoise_strength == "light"
+
 
 class TestWbPreset:
     """--wb-preset 검증."""
@@ -159,6 +169,37 @@ class TestAutoWhiteBalance:
     def test_env_auto_wb_fallback(self, _mock: object, valid_args: argparse.Namespace) -> None:
         result = validate_args(valid_args)
         assert result.auto_white_balance is True
+
+    def test_both_flags_warning(
+        self, valid_args: argparse.Namespace, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """--auto-wb와 --no-auto-wb를 동시에 지정 시 경고 출력 + --no-auto-wb 우선."""
+        import logging
+
+        valid_args.auto_white_balance = True
+        valid_args.no_auto_white_balance = True
+        with caplog.at_level(logging.WARNING, logger="tubearchive.app.cli.validators"):
+            result = validate_args(valid_args)
+        assert result.auto_white_balance is False
+        assert any("--no-auto-wb wins" in m for m in caplog.messages)
+
+
+class TestDeviceWbConfig:
+    """validate_args(device_wb=...) 파라미터로 config의 device_wb 전달 검증."""
+
+    def test_device_wb_param_threaded_through(self, valid_args: argparse.Namespace) -> None:
+        device_wb = {"gopro": "cloudy", "nikon": "daylight"}
+        result = validate_args(valid_args, device_wb=device_wb)
+        assert result.device_wb == device_wb
+
+    def test_device_wb_default_none(self, valid_args: argparse.Namespace) -> None:
+        result = validate_args(valid_args)
+        assert result.device_wb is None
+
+    def test_device_wb_empty_dict_normalized_to_none(self, valid_args: argparse.Namespace) -> None:
+        """빈 dict은 None으로 정규화 (config.toml에 섹션이 없는 경우와 동등)."""
+        result = validate_args(valid_args, device_wb={})
+        assert result.device_wb is None
 
 
 class TestResolveAutoWb:

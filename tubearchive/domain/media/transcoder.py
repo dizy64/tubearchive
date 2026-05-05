@@ -575,7 +575,7 @@ class Transcoder:
 
             effective_device_wb = device_wb if device_wb else dict(WB_DEVICE_DEFAULTS)
             resolved_wb_kelvin = _resolve_auto_wb(metadata.device_model, effective_device_wb)
-            if resolved_wb_kelvin:
+            if resolved_wb_kelvin is not None:
                 logger.info(
                     "Auto-WB matched: %dK for %s", resolved_wb_kelvin, metadata.device_model
                 )
