@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from pathlib import Path
 
 from textual.app import ComposeResult
@@ -45,6 +46,13 @@ def _save_last_dir(directory: Path) -> None:
         pass
 
 
+class FilteredDirectoryTree(DirectoryTree):
+    """숨김 파일(.으로 시작)을 제외하는 DirectoryTree."""
+
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [p for p in paths if not p.name.startswith(".")]
+
+
 class FileBrowserPane(Widget):
     """디렉토리 트리 + 선택 목록 + 경로 직접 입력 패널.
 
@@ -66,15 +74,24 @@ class FileBrowserPane(Widget):
         padding: 0 1;
         overflow: hidden;
     }
+    #tree-header {
+        height: auto;
+        align: left middle;
+    }
+    #tree-header Label {
+        width: 1fr;
+    }
+    #tree-up-btn {
+        width: 8;
+        min-width: 8;
+    }
     #browser-tree {
         height: 1fr;
         min-height: 8;
     }
     #path-input-row {
-        height: 3;
+        height: auto;
         margin-top: 1;
-        align: left middle;
-        overflow: hidden;
     }
     #path-input {
         width: 1fr;
@@ -84,9 +101,8 @@ class FileBrowserPane(Widget):
         margin-left: 1;
     }
     #selected-header {
-        height: 1;
+        height: auto;
         margin-top: 1;
-        align: left middle;
     }
     #selected-label {
         color: $text-muted;
@@ -123,24 +139,38 @@ class FileBrowserPane(Widget):
     def __init__(self, initial_path: Path | None = None) -> None:
         super().__init__()
         self.initial_path = initial_path
+        self._tree_root: Path = Path.home()
+        self._focus_target: Path | None = None
         self._selected: list[Path] = []
         if initial_path is not None:
             self._selected.append(initial_path)
             self.target_count = 1
 
     def compose(self) -> ComposeResult:
-        # 트리 루트는 항상 / (상위 탐색 보장)
-        # 마지막 사용 디렉토리는 입력 필드 기본값으로만 사용
-        initial_input = ""
+        # 트리 루트 결정:
+        #   initial_path 있음 → 부모를 루트로, initial_path 노드 포커싱
+        #   last_dir 있음    → 부모를 루트로, last_dir 노드 포커싱
+        #   없음             → 홈 디렉토리
         if self.initial_path:
-            initial_input = str(self.initial_path)
+            p = self.initial_path
+            self._tree_root = p.parent
+            self._focus_target = p
+            initial_input = str(p)
         else:
             last_dir = _load_last_dir()
             if last_dir:
-                initial_input = str(last_dir)
+                self._tree_root = last_dir.parent
+                self._focus_target = last_dir
+            else:
+                self._tree_root = Path.home()
+                self._focus_target = None
+            initial_input = str(last_dir or self._tree_root)
+
         with Vertical():
-            yield Label("[bold]대상 경로 선택[/]", classes="section-title")
-            yield DirectoryTree(str(Path("/")), id="browser-tree")
+            with Horizontal(id="tree-header"):
+                yield Label("[bold]대상 경로 선택[/]", classes="section-title")
+                yield Button("↑", id="tree-up-btn", variant="default")
+            yield FilteredDirectoryTree(str(self._tree_root), id="browser-tree")
             with Horizontal(id="path-input-row"):
                 yield Input(
                     value=initial_input,
@@ -155,6 +185,22 @@ class FileBrowserPane(Widget):
 
     def on_mount(self) -> None:
         self._rebuild_list()
+        if self._focus_target:
+            self.set_timer(0.25, self._focus_initial_node)
+
+    def _focus_initial_node(self) -> None:
+        """트리에서 _focus_target 노드를 찾아 커서를 이동한다."""
+        target = self._focus_target
+        if not target:
+            return
+        tree = self.query_one("#browser-tree", FilteredDirectoryTree)
+        for node in tree.root.children:
+            try:
+                if Path(node.data.path) == target:  # type: ignore[union-attr]
+                    tree.move_cursor(node)
+                    return
+            except (AttributeError, TypeError):
+                pass
 
     # ------------------------------------------------------------------
     # 트리 이벤트: 클릭 시 입력 필드에 경로 반영
@@ -167,11 +213,14 @@ class FileBrowserPane(Widget):
         self.query_one("#path-input", Input).value = str(event.path)
 
     # ------------------------------------------------------------------
-    # 추가 / 제거
+    # 추가 / 제거 / 상위 이동
     # ------------------------------------------------------------------
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "path-add-btn":
+        if event.button.id == "tree-up-btn":
+            event.stop()
+            self._go_up()
+        elif event.button.id == "path-add-btn":
             event.stop()
             self._add_from_input()
         elif event.button.id == "clear-all-btn":
@@ -190,6 +239,14 @@ class FileBrowserPane(Widget):
                 self._rebuild_list()
                 self._notify_pipeline()
 
+    def _go_up(self) -> None:
+        """트리를 한 단계 상위 디렉토리로 이동한다."""
+        parent = self._tree_root.parent
+        if parent == self._tree_root:
+            return  # 이미 루트(/)
+        self._tree_root = parent
+        self.query_one("#browser-tree", FilteredDirectoryTree).path = self._tree_root
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "path-input":
             event.stop()
@@ -204,7 +261,6 @@ class FileBrowserPane(Widget):
             self._selected.append(path)
             self._rebuild_list()
             self._notify_pipeline()
-            # 다음 실행 시 이 부근에서 트리가 시작되도록 저장
             _save_last_dir(path.parent if path.is_file() else path)
 
     def _rebuild_list(self) -> None:
@@ -212,7 +268,6 @@ class FileBrowserPane(Widget):
         container = self.query_one("#selected-list", ScrollableContainer)
         container.remove_children()
 
-        # 전체 삭제 버튼 활성/비활성
         clear_btn = self.query_one("#clear-all-btn", Button)
         clear_btn.disabled = not self._selected
 
@@ -224,7 +279,7 @@ class FileBrowserPane(Widget):
             display = path.name
             parent = str(path.parent)
             if len(parent) > 25:
-                parent = "\u2026" + parent[-24:]
+                parent = "…" + parent[-24:]
             rows.append(
                 Horizontal(
                     Label(f"{parent}/{display}", classes="selected-path"),

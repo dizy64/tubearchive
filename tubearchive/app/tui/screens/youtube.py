@@ -28,6 +28,8 @@ from textual.widgets import (
     Static,
 )
 
+from tubearchive.app.tui.widgets.file_browser import FilteredDirectoryTree
+
 _CHECKING = "인증 상태 확인 중..."
 _AUTHING = "🔐 브라우저에서 Google 계정으로 인증해 주세요..."
 
@@ -57,6 +59,9 @@ class YouTubePane(Widget):
     YouTubePane {
         height: 1fr;
     }
+    #yt-body {
+        height: 1fr;
+    }
     #yt-scroll {
         height: 1fr;
         overflow-y: auto;
@@ -74,7 +79,6 @@ class YouTubePane(Widget):
     }
     #yt-status-bar {
         height: auto;
-        align: left middle;
         margin-bottom: 1;
     }
     #yt-status-text {
@@ -97,7 +101,6 @@ class YouTubePane(Widget):
     }
     #yt-auth-btns {
         height: auto;
-        align: left middle;
     }
     #yt-auth-btn {
         margin-right: 1;
@@ -111,13 +114,20 @@ class YouTubePane(Widget):
         margin-bottom: 1;
     }
     #yt-pl-bar {
-        height: 3;
-        align: left middle;
+        height: auto;
     }
     #yt-pl-count {
         margin-left: 2;
     }
     /* 직접 업로드 */
+    #yt-tree-header {
+        height: auto;
+        margin-bottom: 1;
+    }
+    #yt-tree-up-btn {
+        width: 8;
+        min-width: 8;
+    }
     #yt-upload-tree {
         height: 8;
         border: solid $surface-lighten-2;
@@ -135,16 +145,14 @@ class YouTubePane(Widget):
         display: none;
     }
     #yt-upload-bar {
-        height: 3;
-        align: left middle;
+        height: auto;
     }
     #yt-upload-btn {
         margin-right: 1;
     }
     /* 하단 액션 바 */
     #yt-action-bar {
-        height: 3;
-        align: left middle;
+        height: auto;
         border-top: solid $accent;
         padding: 0 1;
     }
@@ -154,60 +162,63 @@ class YouTubePane(Widget):
     """
 
     def compose(self) -> ComposeResult:
-        with ScrollableContainer(id="yt-scroll"):
-            # 인증 섹션
-            with Vertical(classes="yt-section"):
-                yield Label("인증 상태", classes="section-label")
-                with Horizontal(id="yt-status-bar"):
-                    yield Static(_CHECKING, id="yt-status-text")
-                yield Static("", id="yt-guide-text")
-                yield Static("", id="yt-setup-steps")
-                with Horizontal(id="yt-auth-btns"):
-                    yield Button("인증", id="yt-auth-btn", variant="primary")
-                    yield Button(
-                        "Google Cloud Console 열기",
-                        id="yt-console-btn",
-                        variant="warning",
+        with Vertical(id="yt-body"):
+            with ScrollableContainer(id="yt-scroll"):
+                # 인증 섹션
+                with Vertical(classes="yt-section"):
+                    yield Label("인증 상태", classes="section-label")
+                    with Horizontal(id="yt-status-bar"):
+                        yield Static(_CHECKING, id="yt-status-text")
+                    yield Static("", id="yt-guide-text")
+                    yield Static("", id="yt-setup-steps")
+                    with Horizontal(id="yt-auth-btns"):
+                        yield Button("인증", id="yt-auth-btn", variant="primary")
+                        yield Button(
+                            "Google Cloud Console 열기",
+                            id="yt-console-btn",
+                            variant="warning",
+                        )
+                        yield Button("새로고침", id="yt-refresh-status-btn", variant="default")
+
+                # 공개 설정 섹션 — disabled 없이 항상 활성화
+                with Vertical(classes="yt-section"):
+                    yield Label("영상 공개 설정", classes="section-label")
+                    with RadioSet(id="yt-privacy-set"):
+                        yield RadioButton("Public (공개)", id="rb-public")
+                        yield RadioButton("Unlisted (링크 공유)", id="rb-unlisted")
+                        yield RadioButton("Private (비공개)", id="rb-private")
+
+                # 플레이리스트 섹션
+                with Vertical(classes="yt-section"):
+                    yield Label("추가할 플레이리스트", classes="section-label")
+                    yield SelectionList[str](id="yt-playlist-list", disabled=True)
+                    with Horizontal(id="yt-pl-bar"):
+                        yield Button("새로고침", id="yt-refresh-playlists-btn", variant="default")
+                        yield Static("선택됨: 0개", id="yt-pl-count")
+
+                # 직접 업로드 섹션
+                with Vertical(classes="yt-section"):
+                    yield Label("직접 업로드", classes="section-label")
+                    with Horizontal(id="yt-tree-header"):
+                        yield Button("..", id="yt-tree-up-btn", variant="default")
+                    yield FilteredDirectoryTree(
+                        str(self._upload_start_path()),
+                        id="yt-upload-tree",
                     )
-                    yield Button("새로고침", id="yt-refresh-status-btn", variant="default")
+                    yield Static("선택된 파일: (없음)", id="yt-upload-file")
+                    yield RichLog(id="yt-upload-log", max_lines=20, highlight=False, markup=True)
+                    with Horizontal(id="yt-upload-bar"):
+                        yield Button(
+                            "업로드 시작",
+                            id="yt-upload-btn",
+                            variant="success",
+                            disabled=True,
+                        )
 
-            # 공개 설정 섹션
-            with Vertical(classes="yt-section"):
-                yield Label("영상 공개 설정", classes="section-label")
-                with RadioSet(id="yt-privacy-set", disabled=True):
-                    yield RadioButton("Public (공개)", id="rb-public")
-                    yield RadioButton("Unlisted (링크 공유)", id="rb-unlisted")
-                    yield RadioButton("Private (비공개)", id="rb-private")
-
-            # 플레이리스트 섹션
-            with Vertical(classes="yt-section"):
-                yield Label("추가할 플레이리스트", classes="section-label")
-                yield SelectionList[str](id="yt-playlist-list", disabled=True)
-                with Horizontal(id="yt-pl-bar"):
-                    yield Button("새로고침", id="yt-refresh-playlists-btn", variant="default")
-                    yield Static("선택됨: 0개", id="yt-pl-count")
-
-            # 직접 업로드 섹션
-            with Vertical(classes="yt-section"):
-                yield Label("직접 업로드", classes="section-label")
-                yield DirectoryTree(
-                    str(self._upload_start_path()),
-                    id="yt-upload-tree",
-                )
-                yield Static("선택된 파일: (없음)", id="yt-upload-file")
-                yield RichLog(id="yt-upload-log", max_lines=20, highlight=False, markup=True)
-                with Horizontal(id="yt-upload-bar"):
-                    yield Button(
-                        "업로드 시작",
-                        id="yt-upload-btn",
-                        variant="success",
-                        disabled=True,
-                    )
-
-        # 하단 액션 바
-        with Horizontal(id="yt-action-bar"):
-            yield Button("Apply", id="yt-apply-btn", variant="success")
-            yield Button("Save", id="yt-save-btn", variant="primary")
+            # 하단 액션 바
+            with Horizontal(id="yt-action-bar"):
+                yield Button("Apply", id="yt-apply-btn", variant="success")
+                yield Button("Save", id="yt-save-btn", variant="primary")
 
     # ------------------------------------------------------------------
     # 마운트 / 인증
@@ -218,13 +229,11 @@ class YouTubePane(Widget):
         self._selected_upload_file: Path | None = None
         self._load_auth_status()
         self._restore_privacy_from_app_state()
+        self._apply_pending_privacy()
 
     @staticmethod
     def _upload_start_path() -> Path:
-        """DirectoryTree 시작 경로: ~/Movies → ~/Videos → ~/ 순으로 폴백."""
-        for candidate in (Path.home() / "Movies", Path.home() / "Videos", Path.home()):
-            if candidate.exists():
-                return candidate
+        """DirectoryTree 시작 경로: 홈 디렉토리 (어디든 탐색 가능)."""
         return Path.home()
 
     def _restore_privacy_from_app_state(self) -> None:
@@ -260,7 +269,6 @@ class YouTubePane(Widget):
         status_widget = self.query_one("#yt-status-text", Static)
         guide_widget = self.query_one("#yt-guide-text", Static)
         setup_steps = self.query_one("#yt-setup-steps", Static)
-        privacy_set = self.query_one("#yt-privacy-set", RadioSet)
         playlist_list = self.query_one("#yt-playlist-list", SelectionList)
         auth_btn = self.query_one("#yt-auth-btn", Button)
         console_btn = self.query_one("#yt-console-btn", Button)
@@ -273,7 +281,6 @@ class YouTubePane(Widget):
             auth_btn.label = "재인증"
             auth_btn.disabled = False
             console_btn.display = False
-            privacy_set.disabled = False
             playlist_list.disabled = False
             self._apply_pending_privacy()
             self._load_playlists()
@@ -296,7 +303,6 @@ class YouTubePane(Widget):
             auth_btn.label = "인증"
             auth_btn.disabled = True
             console_btn.display = True
-            privacy_set.disabled = True
             playlist_list.disabled = True
         else:
             self._is_authenticated = False
@@ -309,7 +315,6 @@ class YouTubePane(Widget):
             auth_btn.label = "인증"
             auth_btn.disabled = False
             console_btn.display = False
-            privacy_set.disabled = True
             playlist_list.disabled = True
 
         self._refresh_upload_btn()
@@ -406,6 +411,15 @@ class YouTubePane(Widget):
     # ------------------------------------------------------------------
     # 직접 업로드
     # ------------------------------------------------------------------
+
+    def _upload_tree_go_up(self) -> None:
+        """업로드 트리를 한 단계 상위 디렉토리로 이동한다."""
+        with contextlib.suppress(Exception):
+            tree = self.query_one("#yt-upload-tree", FilteredDirectoryTree)
+            current = Path(str(tree.path))
+            parent = current.parent
+            if parent != current:
+                tree.path = parent
 
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         """DirectoryTree에서 파일 선택 시 처리."""
@@ -508,7 +522,9 @@ class YouTubePane(Widget):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id
-        if btn_id == "yt-auth-btn":
+        if btn_id == "yt-tree-up-btn":
+            self._upload_tree_go_up()
+        elif btn_id == "yt-auth-btn":
             self._do_auth()
         elif btn_id == "yt-console-btn":
             self._open_console()

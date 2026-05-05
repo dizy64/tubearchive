@@ -22,6 +22,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tubearchive.infra.ffmpeg.constants import WB_PRESETS
+
 logger = logging.getLogger(__name__)
 
 # 환경변수 매핑
@@ -53,6 +55,9 @@ ENV_STABILIZE = "TUBEARCHIVE_STABILIZE"
 ENV_STABILIZE_STRENGTH = "TUBEARCHIVE_STABILIZE_STRENGTH"
 ENV_STABILIZE_CROP = "TUBEARCHIVE_STABILIZE_CROP"
 ENV_AUTO_LUT = "TUBEARCHIVE_AUTO_LUT"
+ENV_VIDEO_DENOISE = "TUBEARCHIVE_VIDEO_DENOISE"
+ENV_VIDEO_DENOISE_LEVEL = "TUBEARCHIVE_VIDEO_DENOISE_LEVEL"
+ENV_AUTO_WHITE_BALANCE = "TUBEARCHIVE_AUTO_WHITE_BALANCE"
 ENV_WATCH_PATHS = "TUBEARCHIVE_WATCH_PATHS"
 ENV_WATCH_POLL_INTERVAL = "TUBEARCHIVE_WATCH_POLL_INTERVAL"
 ENV_WATCH_STABILITY_CHECKS = "TUBEARCHIVE_WATCH_STABILITY_CHECKS"
@@ -184,6 +189,10 @@ class ColorGradingConfig:
     """기기 모델명 기반 자동 LUT 적용 여부."""
     device_luts: dict[str, str] = field(default_factory=dict)
     """기기 키워드 → LUT 파일 경로 매핑 (config.toml 전용, env var 없음)."""
+    auto_white_balance: bool | None = None
+    """기기 모델명 기반 자동 화이트밸런스 적용 여부."""
+    device_wb: dict[str, str] = field(default_factory=dict)
+    """기기 키워드 → WB 프리셋 이름 매핑 (WB_PRESETS 키 사용)."""
 
 
 @dataclass(frozen=True)
@@ -586,9 +595,34 @@ def _parse_color_grading(data: dict[str, object]) -> ColorGradingConfig:
     elif raw_device_luts is not None:
         _warn_type(f"{section}.device_luts", "table", raw_device_luts)
 
+    auto_white_balance = _parse_bool(data, "auto_white_balance", section)
+
+    # device_wb: 중첩 테이블 {키워드: WB 프리셋 이름}
+    # 값이 WB_PRESETS 키에 없으면 해당 항목 무시 + warning
+    device_wb: dict[str, str] = {}
+    raw_device_wb = data.get("device_wb")
+    if isinstance(raw_device_wb, dict):
+        for key, value in raw_device_wb.items():
+            if not isinstance(value, str):
+                _warn_type(f"{section}.device_wb.{key}", "str", value)
+            elif value not in WB_PRESETS:
+                logger.warning(
+                    "[%s] device_wb.%s = %r is not a valid WB preset, ignoring. Valid presets: %s",
+                    section,
+                    key,
+                    value,
+                    ", ".join(sorted(WB_PRESETS)),
+                )
+            else:
+                device_wb[key] = value
+    elif raw_device_wb is not None:
+        _warn_type(f"{section}.device_wb", "table", raw_device_wb)
+
     return ColorGradingConfig(
         auto_lut=auto_lut,
         device_luts=device_luts,
+        auto_white_balance=auto_white_balance,
+        device_wb=device_wb,
     )
 
 
@@ -966,6 +1000,10 @@ def apply_config_to_env(config: AppConfig, *, overwrite: bool = False) -> None:
     # color grading
     if config.color_grading.auto_lut is not None:
         mappings.append((ENV_AUTO_LUT, str(config.color_grading.auto_lut).lower()))
+    if config.color_grading.auto_white_balance is not None:
+        mappings.append(
+            (ENV_AUTO_WHITE_BALANCE, str(config.color_grading.auto_white_balance).lower())
+        )
 
     # template
     if config.template.intro is not None:
@@ -1430,6 +1468,32 @@ def get_default_watch_log_path() -> Path | None:
 def get_default_auto_lut() -> bool:
     """환경변수 ``TUBEARCHIVE_AUTO_LUT`` 에서 자동 LUT 적용 여부를 가져온다."""
     return _get_env_bool(ENV_AUTO_LUT)
+
+
+def get_default_video_denoise() -> bool:
+    """환경변수 ``TUBEARCHIVE_VIDEO_DENOISE`` 에서 영상 노이즈 제거 여부를 가져온다."""
+    return _get_env_bool(ENV_VIDEO_DENOISE)
+
+
+def get_default_video_denoise_level() -> str | None:
+    """환경변수 ``TUBEARCHIVE_VIDEO_DENOISE_LEVEL`` 에서 강도를 가져온다.
+
+    Returns:
+        ``light`` / ``medium`` / ``heavy`` 또는 None (미설정·유효하지 않은 값).
+    """
+    env_level = os.environ.get(ENV_VIDEO_DENOISE_LEVEL)
+    if not env_level:
+        return None
+    normalized = env_level.strip().lower()
+    if normalized in {"light", "medium", "heavy"}:
+        return normalized
+    logger.warning("%s=%s is not a valid level", ENV_VIDEO_DENOISE_LEVEL, env_level)
+    return None
+
+
+def get_default_auto_white_balance() -> bool:
+    """환경변수 ``TUBEARCHIVE_AUTO_WHITE_BALANCE`` 에서 WB 자동 교정 여부를 가져온다."""
+    return _get_env_bool(ENV_AUTO_WHITE_BALANCE)
 
 
 def get_default_notify() -> bool:

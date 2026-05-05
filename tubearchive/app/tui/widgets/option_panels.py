@@ -114,14 +114,13 @@ class OptionsPane(Widget):
         overflow-y: auto;
     }
     #preset-bar {
-        height: 3;
+        height: auto;
         padding: 0 1;
-        align: left middle;
         border-bottom: solid $accent;
     }
     #preset-bar Button {
         margin-right: 1;
-        min-width: 10;
+        min-width: 12;
     }
     Collapsible {
         margin-bottom: 0;
@@ -144,6 +143,7 @@ class OptionsPane(Widget):
             with Horizontal(id="preset-bar"):
                 yield Button("저장", id="preset-save", variant="default")
                 yield Button("불러오기", id="preset-load", variant="default")
+                yield Button("기본값 저장", id="preset-save-defaults", variant="warning")
             with ScrollableContainer(id="options-scroll"):
                 for category in CATEGORY_DEFS:
                     with Collapsible(title=category.title, collapsed=category.collapsed):
@@ -151,7 +151,7 @@ class OptionsPane(Widget):
                             yield _OptionRow(opt, self._initial)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id in ("preset-save", "preset-load"):
+        if event.button.id in ("preset-save", "preset-load", "preset-save-defaults"):
             event.stop()
             self.post_message(self.PresetAction(event.button.id))
 

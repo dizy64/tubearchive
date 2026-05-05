@@ -101,10 +101,9 @@ class PipelinePane(Widget):
         display: none;
     }
     #pipeline-footer {
-        height: 5;
+        height: auto;
         border-top: solid $accent;
-        padding: 1 2;
-        align: left middle;
+        padding: 0 2;
     }
     #run-button {
         margin-right: 2;
@@ -161,6 +160,8 @@ class PipelinePane(Widget):
             app.action_save_preset()
         elif event.action == "preset-load":
             app.action_load_preset()
+        elif event.action == "preset-save-defaults":
+            app.action_save_defaults()
 
     # ------------------------------------------------------------------
     # 버튼 이벤트

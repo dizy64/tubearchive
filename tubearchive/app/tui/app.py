@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.css.query import NoMatches
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from tubearchive.config import AppConfig
@@ -33,6 +34,9 @@ class TubeArchiveApp(App[None]):
     }
     TabPane {
         padding: 0 1;
+    }
+    Tab {
+        padding: 0 3;
     }
     .section-title {
         color: $accent;
@@ -66,7 +70,16 @@ class TubeArchiveApp(App[None]):
         self.initial_path = initial_path
         self.config = config or AppConfig()
         self._initial_state: TuiOptionState | None = self._make_initial_state()
-        self._youtube_applied: dict[str, object] = {}
+        self._youtube_applied: dict[str, object] = self._make_youtube_applied()
+
+    def _make_youtube_applied(self) -> dict[str, object]:
+        """config.toml의 YouTube 설정을 초기 공유 상태로 변환한다."""
+        applied: dict[str, object] = {}
+        if self.config.youtube.upload_privacy is not None:
+            applied["upload_privacy"] = self.config.youtube.upload_privacy
+        if self.config.youtube.playlist:
+            applied["upload_playlists"] = list(self.config.youtube.playlist)
+        return applied
 
     def _make_initial_state(self) -> TuiOptionState | None:
         """config에서 초기 TuiOptionState를 생성한다."""
@@ -140,7 +153,7 @@ class TubeArchiveApp(App[None]):
 
         try:
             state = self.query_one(OptionsPane).collect_state()
-        except Exception:
+        except NoMatches:
             self.notify("옵션 패널을 찾을 수 없습니다.", severity="warning", timeout=2)
             return
 
@@ -153,6 +166,23 @@ class TubeArchiveApp(App[None]):
             self.notify(f"프리셋 '{name}' 저장됨", timeout=3)
 
         self.push_screen(SavePresetScreen(), _on_name)
+
+    def action_save_defaults(self) -> None:
+        """현재 옵션 패널 상태를 config.toml 기본값으로 저장한다."""
+        from tubearchive.app.tui.models import save_state_as_defaults
+        from tubearchive.app.tui.widgets.option_panels import OptionsPane
+
+        try:
+            state = self.query_one(OptionsPane).collect_state()
+        except NoMatches:
+            self.notify("옵션 패널을 찾을 수 없습니다.", severity="warning", timeout=2)
+            return
+
+        try:
+            saved_path = save_state_as_defaults(state)
+            self.notify(f"기본값 저장됨: {saved_path}", timeout=4)
+        except Exception as exc:
+            self.notify(f"저장 실패: {exc}", severity="error", timeout=4)
 
     def action_load_preset(self) -> None:
         """저장된 프리셋을 선택해 옵션 패널에 적용한다."""

@@ -7,6 +7,8 @@
     - **HDR → SDR**: BT.2020 → BT.709 색공간 변환
     - **Dip-to-Black**: 클립 시작/끝 페이드 인·아웃
     - **오디오 노이즈 제거**: afftdn 기반 (light/medium/heavy)
+    - **영상 노이즈 제거**: hqdn3d 기반 (light/medium/heavy)
+    - **화이트밸런스**: colortemperature 기반 (ffmpeg 5.0+, Kelvin 직접 지정 / 기기 프리셋)
     - **무음 구간 감지/제거**: silencedetect, silenceremove 필터
     - **라우드니스 정규화**: EBU R128 loudnorm 2-pass
     - **영상 안정화**: vidstab detect + transform
@@ -22,6 +24,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import NamedTuple
+
+from tubearchive.infra.ffmpeg.constants import WB_DEVICE_DEFAULTS, WB_PRESETS  # noqa: F401
 
 # HDR 색공간 식별자 (FFmpeg color_transfer 값)
 HDR_TRANSFER_HLG = "arib-std-b67"
@@ -121,6 +125,15 @@ _VIDSTAB_CROP: dict[StabilizeCrop, str] = {
 }
 
 
+# 영상 노이즈 제거 (hqdn3d) 강도별 파라미터
+# 파라미터 순서: luma_spatial:chroma_spatial:luma_tmp:chroma_tmp
+VIDEO_DENOISE_HQDN3D_LEVELS: dict[str, str] = {
+    "light": "hqdn3d=2:1.5:6:4.5",
+    "medium": "hqdn3d=4:3:9:6.75",
+    "heavy": "hqdn3d=6:4.5:12:9",
+}
+
+
 def create_lut_filter(lut_path: str) -> str:
     """
     LUT(Look-Up Table) 적용 필터 생성.
@@ -153,6 +166,47 @@ def create_lut_filter(lut_path: str) -> str:
     for ch in ("\\", "'", ":", ";"):
         escaped = escaped.replace(ch, f"\\{ch}")
     return f"lut3d=file={escaped}"
+
+
+def create_video_denoise_filter(level: str = "medium") -> str:
+    """영상 노이즈 제거 필터 생성 (hqdn3d).
+
+    Args:
+        level: 강도 (light/medium/heavy)
+
+    Returns:
+        hqdn3d 필터 문자열
+
+    Raises:
+        ValueError: 지원하지 않는 강도
+    """
+    key = level.lower()
+    if key not in VIDEO_DENOISE_HQDN3D_LEVELS:
+        raise ValueError(f"Unsupported video denoise level: {level!r}")
+    return VIDEO_DENOISE_HQDN3D_LEVELS[key]
+
+
+_WB_KELVIN_MIN = 1000
+_WB_KELVIN_MAX = 40_000
+
+
+def create_wb_filter(kelvin: int) -> str:
+    """화이트밸런스 필터 생성 (colortemperature).
+
+    ffmpeg 5.0+ 필요. 미지원 ffmpeg는 transcoder에서 graceful skip 처리.
+
+    Args:
+        kelvin: 색온도 (K, 1000-40000 범위)
+
+    Returns:
+        colortemperature 필터 문자열
+
+    Raises:
+        ValueError: 유효하지 않은 Kelvin 값
+    """
+    if not (_WB_KELVIN_MIN <= kelvin <= _WB_KELVIN_MAX):
+        raise ValueError(f"Kelvin must be {_WB_KELVIN_MIN}-{_WB_KELVIN_MAX}, got: {kelvin}")
+    return f"colortemperature=temperature={kelvin}"
 
 
 def create_hdr_to_sdr_filter(color_transfer: str | None) -> str:
@@ -804,23 +858,47 @@ def _build_portrait_video_filter(
     lut_filter: str = "",
     lut_before_hdr: bool = False,
     watermark_filter: str = "",
+    video_denoise_filter: str = "",
+    wb_filter: str = "",
 ) -> str:
     """세로 영상용 filter_complex 문자열 생성.
 
-    기본: stabilize → HDR → split → blur → overlay → LUT → fade
-    before: stabilize → LUT → HDR → split → blur → overlay → fade
+    기본: stabilize → [hqdn3d] → HDR → [colortemperature] → split → blur+overlay → LUT → fade
+    before: stabilize → [hqdn3d] → LUT → HDR → [colortemperature] → split → blur+overlay → fade
     """
     fg_height = target_height
     fg_width = int(source_width * (fg_height / source_height))
 
     # 입력 체인 구성. filter(None, [...])로 빈 문자열("")을 제거하여
     # 선택적 필터(stabilize, lut, hdr)가 없을 때 쉼표가 남지 않게 한다.
+    # hqdn3d는 항상 HDR 변환 전, colortemperature는 항상 HDR 변환 후
     if lut_before_hdr:
         split_input = ",".join(
-            filter(None, [stabilize_filter, lut_filter, hdr_filter, "split=2[bg][fg]"])
+            filter(
+                None,
+                [
+                    stabilize_filter,
+                    video_denoise_filter,  # hqdn3d: 항상 HDR 전
+                    lut_filter,
+                    hdr_filter,
+                    wb_filter,  # colortemperature: 항상 HDR 후
+                    "split=2[bg][fg]",
+                ],
+            )
         )
     else:
-        split_input = ",".join(filter(None, [stabilize_filter, hdr_filter, "split=2[bg][fg]"]))
+        split_input = ",".join(
+            filter(
+                None,
+                [
+                    stabilize_filter,
+                    video_denoise_filter,  # hqdn3d: 항상 HDR 전
+                    hdr_filter,
+                    wb_filter,  # colortemperature: 항상 HDR 후
+                    "split=2[bg][fg]",
+                ],
+            )
+        )
 
     # 배경: 스케일 → crop → blur
     bg_chain = (
@@ -851,11 +929,13 @@ def _build_landscape_video_filter(
     lut_filter: str = "",
     lut_before_hdr: bool = False,
     watermark_filter: str = "",
+    video_denoise_filter: str = "",
+    wb_filter: str = "",
 ) -> str:
     """가로 영상용 -vf 필터 문자열 생성.
 
-    기본: stabilize → HDR → scale+pad → LUT → fade
-    before: stabilize → LUT → HDR → scale+pad → fade
+    기본: stabilize → [hqdn3d] → HDR → [colortemperature] → scale+pad → LUT → fade
+    before: stabilize → [hqdn3d] → LUT → HDR → [colortemperature] → scale+pad → fade
     """
     scale_pad = (
         f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
@@ -865,8 +945,10 @@ def _build_landscape_video_filter(
     if lut_before_hdr:
         chain = [
             stabilize_filter,
+            video_denoise_filter,  # hqdn3d: 항상 HDR 전
             lut_filter,
             hdr_filter,
+            wb_filter,  # colortemperature: 항상 HDR 후
             scale_pad,
             watermark_filter,
             fade_filters,
@@ -874,7 +956,9 @@ def _build_landscape_video_filter(
     else:
         chain = [
             stabilize_filter,
+            video_denoise_filter,  # hqdn3d: 항상 HDR 전
             hdr_filter,
+            wb_filter,  # colortemperature: 항상 HDR 후
             scale_pad,
             lut_filter,
             watermark_filter,
@@ -901,6 +985,9 @@ def create_combined_filter(
     denoise_level: str = "medium",
     silence_remove: str = "",
     loudnorm_analysis: LoudnormAnalysis | None = None,
+    video_denoise: bool = False,
+    video_denoise_strength: str = "medium",
+    wb_kelvin: int | None = None,
     lut_path: str | None = None,
     lut_before_hdr: bool = False,
     watermark_text: str | None = None,
@@ -943,6 +1030,9 @@ def create_combined_filter(
         loudnorm_analysis: EBU R128 loudnorm 분석 결과 (None이면 미적용)
         lut_path: LUT 파일 경로 (None이면 미적용)
         lut_before_hdr: LUT를 HDR 변환 앞에 적용할지 여부
+        video_denoise: 영상 노이즈 제거(hqdn3d) 활성화 여부
+        video_denoise_strength: 영상 노이즈 제거 강도 (light/medium/heavy)
+        wb_kelvin: 화이트밸런스 색온도 (K). None이면 비활성화.
 
     Returns:
         (video_filter, audio_filter) 튜플
@@ -960,6 +1050,16 @@ def create_combined_filter(
     lut_filter_str = ""
     if lut_path:
         lut_filter_str = create_lut_filter(lut_path)
+
+    # 영상 노이즈 제거 필터 생성
+    video_denoise_filter_str = ""
+    if video_denoise:
+        video_denoise_filter_str = create_video_denoise_filter(video_denoise_strength)
+
+    # 화이트밸런스 필터 생성
+    wb_filter_str = ""
+    if wb_kelvin is not None:
+        wb_filter_str = create_wb_filter(wb_kelvin)
 
     watermark_filter = ""
     if watermark_text:
@@ -991,6 +1091,8 @@ def create_combined_filter(
             lut_filter=lut_filter_str,
             watermark_filter=watermark_filter,
             lut_before_hdr=lut_before_hdr,
+            video_denoise_filter=video_denoise_filter_str,
+            wb_filter=wb_filter_str,
         )
     else:
         video_filter = _build_landscape_video_filter(
@@ -1002,6 +1104,8 @@ def create_combined_filter(
             lut_filter=lut_filter_str,
             watermark_filter=watermark_filter,
             lut_before_hdr=lut_before_hdr,
+            video_denoise_filter=video_denoise_filter_str,
+            wb_filter=wb_filter_str,
         )
 
     audio_filter = create_audio_filter_chain(

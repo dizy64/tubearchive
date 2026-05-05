@@ -283,3 +283,172 @@ def test_watermark_text_persisted_in_preset(tmp_path: Path) -> None:
     items = list_presets(presets_dir=tmp_path)
     restored = load_preset(items[0][1])
     assert restored.watermark_text == "Seoul | 2024.06.15"
+
+
+# ---------------------------------------------------------------------------
+# save_state_as_defaults — TuiOptionState → config.toml 기본값 저장
+# ---------------------------------------------------------------------------
+
+
+def test_save_state_as_defaults_creates_file(tmp_path: Path) -> None:
+    """파일이 없으면 config.toml을 신규 생성한다."""
+    from tubearchive.app.tui.models import save_state_as_defaults
+
+    config_file = tmp_path / "config.toml"
+    state = TuiOptionState(normalize_audio=True, denoise=True, parallel=2)
+    result = save_state_as_defaults(state, path=config_file)
+    assert result == config_file
+    assert config_file.exists()
+
+
+def test_save_state_as_defaults_general_section(tmp_path: Path) -> None:
+    """[general] 섹션 필드가 올바르게 저장된다."""
+    import tomllib
+
+    from tubearchive.app.tui.models import save_state_as_defaults
+
+    config_file = tmp_path / "config.toml"
+    state = TuiOptionState(
+        normalize_audio=True,
+        denoise=True,
+        denoise_level="heavy",
+        parallel=4,
+        group_sequences=False,
+        fade_duration=1.0,
+        trim_silence=True,
+        silence_threshold="-35dB",
+        silence_min_duration=3.0,
+        stabilize=True,
+        stabilize_strength="light",
+        stabilize_crop="expand",
+        subtitle_model="base",
+        subtitle_format="vtt",
+        subtitle_burn=True,
+    )
+    save_state_as_defaults(state, path=config_file)
+
+    with config_file.open("rb") as f:
+        parsed = tomllib.load(f)
+
+    gen = parsed["general"]
+    assert gen["normalize_audio"] is True
+    assert gen["denoise"] is True
+    assert gen["denoise_level"] == "heavy"
+    assert gen["parallel"] == 4
+    assert gen["group_sequences"] is False
+    assert gen["fade_duration"] == pytest.approx(1.0)
+    assert gen["trim_silence"] is True
+    assert gen["silence_threshold"] == "-35dB"
+    assert gen["silence_min_duration"] == pytest.approx(3.0)
+    assert gen["stabilize"] is True
+    assert gen["stabilize_strength"] == "light"
+    assert gen["stabilize_crop"] == "expand"
+    assert gen["subtitle_model"] == "base"
+    assert gen["subtitle_format"] == "vtt"
+    assert gen["subtitle_burn"] is True
+
+
+def test_save_state_as_defaults_bgm_section(tmp_path: Path) -> None:
+    """[bgm] 섹션 필드가 올바르게 저장된다."""
+    import tomllib
+
+    from tubearchive.app.tui.models import save_state_as_defaults
+
+    config_file = tmp_path / "config.toml"
+    state = TuiOptionState(bgm_path="~/Music/bgm.mp3", bgm_volume=0.3, bgm_loop=True)
+    save_state_as_defaults(state, path=config_file)
+
+    with config_file.open("rb") as f:
+        parsed = tomllib.load(f)
+
+    bgm = parsed["bgm"]
+    assert bgm["bgm_path"] == "~/Music/bgm.mp3"
+    assert bgm["bgm_volume"] == pytest.approx(0.3)
+    assert bgm["bgm_loop"] is True
+
+
+def test_save_state_as_defaults_color_grading(tmp_path: Path) -> None:
+    """[color_grading] auto_lut이 올바르게 저장된다."""
+    import tomllib
+
+    from tubearchive.app.tui.models import save_state_as_defaults
+
+    config_file = tmp_path / "config.toml"
+    state = TuiOptionState(auto_lut=True)
+    save_state_as_defaults(state, path=config_file)
+
+    with config_file.open("rb") as f:
+        parsed = tomllib.load(f)
+
+    assert parsed["color_grading"]["auto_lut"] is True
+
+
+def test_save_state_as_defaults_youtube_section(tmp_path: Path) -> None:
+    """[youtube] upload_privacy가 올바르게 저장된다."""
+    import tomllib
+
+    from tubearchive.app.tui.models import save_state_as_defaults
+
+    config_file = tmp_path / "config.toml"
+    state = TuiOptionState(upload_privacy="private")
+    save_state_as_defaults(state, path=config_file)
+
+    with config_file.open("rb") as f:
+        parsed = tomllib.load(f)
+
+    assert parsed["youtube"]["upload_privacy"] == "private"
+
+
+def test_save_state_as_defaults_preserves_existing_keys(tmp_path: Path) -> None:
+    """기존 config.toml의 다른 키(db_path 등)를 보존한다."""
+    import tomllib
+
+    from tubearchive.app.tui.models import save_state_as_defaults
+
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        '[general]\ndb_path = "~/custom.db"\nparallel = 1\n',
+        encoding="utf-8",
+    )
+    state = TuiOptionState(parallel=2)
+    save_state_as_defaults(state, path=config_file)
+
+    with config_file.open("rb") as f:
+        parsed = tomllib.load(f)
+
+    assert parsed["general"]["db_path"] == "~/custom.db"
+    assert parsed["general"]["parallel"] == 2
+
+
+def test_save_state_as_defaults_empty_bgm_path_removes_key(tmp_path: Path) -> None:
+    """bgm_path가 빈 문자열이면 기존 키를 제거한다."""
+    import tomllib
+
+    from tubearchive.app.tui.models import save_state_as_defaults
+
+    config_file = tmp_path / "config.toml"
+    config_file.write_text('[bgm]\nbgm_path = "~/old.mp3"\n', encoding="utf-8")
+    state = TuiOptionState(bgm_path="")
+    save_state_as_defaults(state, path=config_file)
+
+    with config_file.open("rb") as f:
+        parsed = tomllib.load(f)
+
+    assert "bgm_path" not in parsed.get("bgm", {})
+
+
+def test_save_state_as_defaults_empty_output_dir_removes_key(tmp_path: Path) -> None:
+    """output_dir이 빈 문자열이면 기존 키를 제거한다."""
+    import tomllib
+
+    from tubearchive.app.tui.models import save_state_as_defaults
+
+    config_file = tmp_path / "config.toml"
+    config_file.write_text('[general]\noutput_dir = "~/out"\nparallel = 1\n', encoding="utf-8")
+    state = TuiOptionState(output_dir="")
+    save_state_as_defaults(state, path=config_file)
+
+    with config_file.open("rb") as f:
+        parsed = tomllib.load(f)
+
+    assert "output_dir" not in parsed.get("general", {})

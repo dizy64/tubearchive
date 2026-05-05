@@ -539,6 +539,15 @@ class TestApplyConfigToEnv:
             if saved is not None:
                 os.environ["TUBEARCHIVE_YOUTUBE_PLAYLIST"] = saved
 
+    def test_auto_white_balance_injected_to_env(self) -> None:
+        """auto_white_balance=True → 환경변수 주입."""
+        from tubearchive.config import ENV_AUTO_WHITE_BALANCE
+
+        config = AppConfig(color_grading=ColorGradingConfig(auto_white_balance=True))
+        with patch.dict(os.environ, {}, clear=True):
+            apply_config_to_env(config)
+            assert os.environ.get(ENV_AUTO_WHITE_BALANCE) == "true"
+
 
 class TestGenerateDefaultConfig:
     """generate_default_config 테스트."""
@@ -1450,6 +1459,36 @@ device_luts = "not_a_table"
         assert "auto_lut" in result
         assert "device_luts" in result
 
+    def test_loads_color_grading_auto_white_balance(self, tmp_path: Path) -> None:
+        """auto_white_balance 파싱."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[color_grading]\nauto_white_balance = true\n")
+        config = load_config(config_file)
+        assert config.color_grading.auto_white_balance is True
+
+    def test_loads_color_grading_device_wb(self, tmp_path: Path) -> None:
+        """device_wb 파싱."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[color_grading.device_wb]\nnikon = "daylight"\ngopro = "cloudy"\n')
+        config = load_config(config_file)
+        assert config.color_grading.device_wb == {"nikon": "daylight", "gopro": "cloudy"}
+
+    def test_device_wb_invalid_preset_ignored(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """device_wb에 WB_PRESETS 외 값 → 해당 항목 무시 + warning."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            '[color_grading.device_wb]\nnikon = "invalid_preset"\ngopro = "cloudy"\n'
+        )
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            config = load_config(config_file)
+        assert "nikon" not in config.color_grading.device_wb
+        assert config.color_grading.device_wb == {"gopro": "cloudy"}
+        assert "invalid_preset" in caplog.text
+
 
 class TestSaveConfig:
     """save_config() 테스트."""
@@ -1537,3 +1576,49 @@ class TestSaveConfig:
         saved = save_config(config, None)
         assert saved == fake_path
         assert fake_path.exists()
+
+
+class TestGetDefaultVideoDenoiseEnv:
+    """get_default_video_denoise*, get_default_auto_white_balance 테스트."""
+
+    def test_video_denoise_default_false(self) -> None:
+        """미설정 시 False 반환."""
+        from tubearchive.config import get_default_video_denoise
+
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_default_video_denoise() is False
+
+    def test_video_denoise_true_from_env(self) -> None:
+        """TUBEARCHIVE_VIDEO_DENOISE=true → True."""
+        from tubearchive.config import ENV_VIDEO_DENOISE, get_default_video_denoise
+
+        with patch.dict(os.environ, {ENV_VIDEO_DENOISE: "true"}):
+            assert get_default_video_denoise() is True
+
+    def test_video_denoise_level_valid(self) -> None:
+        """TUBEARCHIVE_VIDEO_DENOISE_LEVEL=heavy → 'heavy'."""
+        from tubearchive.config import ENV_VIDEO_DENOISE_LEVEL, get_default_video_denoise_level
+
+        with patch.dict(os.environ, {ENV_VIDEO_DENOISE_LEVEL: "heavy"}):
+            assert get_default_video_denoise_level() == "heavy"
+
+    def test_video_denoise_level_invalid_returns_none(self) -> None:
+        """잘못된 LEVEL → None."""
+        from tubearchive.config import ENV_VIDEO_DENOISE_LEVEL, get_default_video_denoise_level
+
+        with patch.dict(os.environ, {ENV_VIDEO_DENOISE_LEVEL: "ultra"}):
+            assert get_default_video_denoise_level() is None
+
+    def test_auto_white_balance_default_false(self) -> None:
+        """미설정 시 False."""
+        from tubearchive.config import get_default_auto_white_balance
+
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_default_auto_white_balance() is False
+
+    def test_auto_white_balance_true_from_env(self) -> None:
+        """TUBEARCHIVE_AUTO_WHITE_BALANCE=true → True."""
+        from tubearchive.config import ENV_AUTO_WHITE_BALANCE, get_default_auto_white_balance
+
+        with patch.dict(os.environ, {ENV_AUTO_WHITE_BALANCE: "true"}):
+            assert get_default_auto_white_balance() is True
