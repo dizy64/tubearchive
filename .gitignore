@@ -44,6 +44,9 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
+# Design docs (Obsidian에서 관리)
+docs/
+
 # Project-specific
 tubearchive.db
 tubearchive_temp/

@@ -28,6 +28,8 @@ from textual.widgets import (
     Static,
 )
 
+from tubearchive.app.tui.widgets.file_browser import FilteredDirectoryTree
+
 _CHECKING = "인증 상태 확인 중..."
 _AUTHING = "🔐 브라우저에서 Google 계정으로 인증해 주세요..."
 
@@ -118,6 +120,14 @@ class YouTubePane(Widget):
         margin-left: 2;
     }
     /* 직접 업로드 */
+    #yt-tree-header {
+        height: auto;
+        margin-bottom: 1;
+    }
+    #yt-tree-up-btn {
+        width: 8;
+        min-width: 8;
+    }
     #yt-upload-tree {
         height: 8;
         border: solid $surface-lighten-2;
@@ -189,7 +199,9 @@ class YouTubePane(Widget):
                 # 직접 업로드 섹션
                 with Vertical(classes="yt-section"):
                     yield Label("직접 업로드", classes="section-label")
-                    yield DirectoryTree(
+                    with Horizontal(id="yt-tree-header"):
+                        yield Button("..", id="yt-tree-up-btn", variant="default")
+                    yield FilteredDirectoryTree(
                         str(self._upload_start_path()),
                         id="yt-upload-tree",
                     )
@@ -221,13 +233,7 @@ class YouTubePane(Widget):
 
     @staticmethod
     def _upload_start_path() -> Path:
-        """DirectoryTree 시작 경로: CWD → ~/Movies → ~/Videos → ~/ 순으로 폴백."""
-        cwd = Path.cwd()
-        if cwd.is_dir():
-            return cwd
-        for candidate in (Path.home() / "Movies", Path.home() / "Videos", Path.home()):
-            if candidate.exists():
-                return candidate
+        """DirectoryTree 시작 경로: 홈 디렉토리 (어디든 탐색 가능)."""
         return Path.home()
 
     def _restore_privacy_from_app_state(self) -> None:
@@ -406,6 +412,15 @@ class YouTubePane(Widget):
     # 직접 업로드
     # ------------------------------------------------------------------
 
+    def _upload_tree_go_up(self) -> None:
+        """업로드 트리를 한 단계 상위 디렉토리로 이동한다."""
+        with contextlib.suppress(Exception):
+            tree = self.query_one("#yt-upload-tree", FilteredDirectoryTree)
+            current = Path(str(tree.path))
+            parent = current.parent
+            if parent != current:
+                tree.path = parent
+
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         """DirectoryTree에서 파일 선택 시 처리."""
         path = event.path
@@ -507,7 +522,9 @@ class YouTubePane(Widget):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id
-        if btn_id == "yt-auth-btn":
+        if btn_id == "yt-tree-up-btn":
+            self._upload_tree_go_up()
+        elif btn_id == "yt-auth-btn":
             self._do_auth()
         elif btn_id == "yt-console-btn":
             self._open_console()
