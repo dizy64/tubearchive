@@ -518,6 +518,109 @@ def load_preset(path: Path) -> TuiOptionState:
     return state_from_dict(payload["options"])
 
 
+def save_state_as_defaults(state: TuiOptionState, path: Path | None = None) -> Path:
+    """TuiOptionState를 config.toml 기본값으로 저장한다.
+
+    기존 config.toml의 주석/구조를 tomlkit round-trip으로 보존하면서
+    TuiOptionState의 각 필드를 해당 섹션에 기록한다.
+    파일이 없으면 generate_default_config() 템플릿으로 신규 생성한다.
+    임시 파일 → os.replace() atomic write로 부분 쓰기를 방지한다.
+
+    저장 대상 (run-time 전용 플래그 제외):
+    - [general]: parallel, denoise, denoise_level, normalize_audio, group_sequences,
+                 fade_duration, trim_silence, silence_threshold, silence_min_duration,
+                 stabilize, stabilize_strength, stabilize_crop,
+                 subtitle_model, subtitle_format, subtitle_burn, output_dir(비어있으면 제거)
+    - [bgm]: bgm_path(비어있으면 제거), bgm_volume, bgm_loop
+    - [color_grading]: auto_lut
+    - [youtube]: upload_privacy
+    """
+    import contextlib
+    import os
+    import tempfile
+
+    import tomlkit
+
+    from tubearchive.config import generate_default_config, get_default_config_path
+
+    target = path or get_default_config_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    if target.exists():
+        doc = tomlkit.parse(target.read_text(encoding="utf-8"))
+    else:
+        doc = tomlkit.parse(generate_default_config())
+
+    # [general]
+    if "general" not in doc:
+        doc.add("general", tomlkit.table())
+    gen = doc["general"]
+
+    if state.output_dir:
+        gen["output_dir"] = state.output_dir  # type: ignore[index]
+    elif "output_dir" in gen:  # type: ignore[operator]
+        del gen["output_dir"]  # type: ignore[union-attr]
+
+    gen["parallel"] = state.parallel  # type: ignore[index]
+    gen["denoise"] = state.denoise  # type: ignore[index]
+    gen["denoise_level"] = state.denoise_level  # type: ignore[index]
+    gen["normalize_audio"] = state.normalize_audio  # type: ignore[index]
+    gen["group_sequences"] = state.group_sequences  # type: ignore[index]
+    gen["fade_duration"] = state.fade_duration  # type: ignore[index]
+    gen["trim_silence"] = state.trim_silence  # type: ignore[index]
+
+    if state.silence_threshold:
+        gen["silence_threshold"] = state.silence_threshold  # type: ignore[index]
+    elif "silence_threshold" in gen:  # type: ignore[operator]
+        del gen["silence_threshold"]  # type: ignore[union-attr]
+
+    gen["silence_min_duration"] = state.silence_min_duration  # type: ignore[index]
+    gen["stabilize"] = state.stabilize  # type: ignore[index]
+    gen["stabilize_strength"] = state.stabilize_strength  # type: ignore[index]
+    gen["stabilize_crop"] = state.stabilize_crop  # type: ignore[index]
+    gen["subtitle_model"] = state.subtitle_model  # type: ignore[index]
+    gen["subtitle_format"] = state.subtitle_format  # type: ignore[index]
+    gen["subtitle_burn"] = state.subtitle_burn  # type: ignore[index]
+
+    # [bgm]
+    if "bgm" not in doc:
+        doc.add("bgm", tomlkit.table())
+    bgm = doc["bgm"]
+
+    if state.bgm_path:
+        bgm["bgm_path"] = state.bgm_path  # type: ignore[index]
+    elif "bgm_path" in bgm:  # type: ignore[operator]
+        del bgm["bgm_path"]  # type: ignore[union-attr]
+
+    bgm["bgm_volume"] = state.bgm_volume  # type: ignore[index]
+    bgm["bgm_loop"] = state.bgm_loop  # type: ignore[index]
+
+    # [color_grading]
+    if "color_grading" not in doc:
+        doc.add("color_grading", tomlkit.table())
+    cg = doc["color_grading"]
+    cg["auto_lut"] = state.auto_lut  # type: ignore[index]
+
+    # [youtube]
+    if "youtube" not in doc:
+        doc.add("youtube", tomlkit.table())
+    yt = doc["youtube"]
+    yt["upload_privacy"] = state.upload_privacy  # type: ignore[index]
+
+    # atomic write
+    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=".config_", suffix=".toml")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(tomlkit.dumps(doc))
+        Path(tmp_name).replace(target)
+    except Exception:
+        with contextlib.suppress(OSError):
+            Path(tmp_name).unlink()
+        raise
+
+    return target
+
+
 def list_presets(presets_dir: Path | None = None) -> list[tuple[str, Path]]:
     """(이름, 경로) 목록을 최근 저장 순으로 반환한다."""
     root = presets_dir or _PRESETS_DIR

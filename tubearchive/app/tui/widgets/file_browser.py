@@ -71,10 +71,8 @@ class FileBrowserPane(Widget):
         min-height: 8;
     }
     #path-input-row {
-        height: 3;
+        height: auto;
         margin-top: 1;
-        align: left middle;
-        overflow: hidden;
     }
     #path-input {
         width: 1fr;
@@ -84,9 +82,8 @@ class FileBrowserPane(Widget):
         margin-left: 1;
     }
     #selected-header {
-        height: 1;
+        height: auto;
         margin-top: 1;
-        align: left middle;
     }
     #selected-label {
         color: $text-muted;
@@ -129,18 +126,18 @@ class FileBrowserPane(Widget):
             self.target_count = 1
 
     def compose(self) -> ComposeResult:
-        # 트리 루트는 항상 / (상위 탐색 보장)
-        # 마지막 사용 디렉토리는 입력 필드 기본값으로만 사용
-        initial_input = ""
+        # 트리 루트: initial_path 부모 → 마지막 사용 디렉토리 → CWD 순으로 결정
         if self.initial_path:
+            p = self.initial_path
+            tree_root = p.parent if p.is_file() else p
             initial_input = str(self.initial_path)
         else:
             last_dir = _load_last_dir()
-            if last_dir:
-                initial_input = str(last_dir)
+            tree_root = last_dir or Path.cwd()
+            initial_input = str(tree_root)
         with Vertical():
             yield Label("[bold]대상 경로 선택[/]", classes="section-title")
-            yield DirectoryTree(str(Path("/")), id="browser-tree")
+            yield DirectoryTree(str(tree_root), id="browser-tree")
             with Horizontal(id="path-input-row"):
                 yield Input(
                     value=initial_input,

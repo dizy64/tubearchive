@@ -56,6 +56,10 @@ class YouTubePane(Widget):
     DEFAULT_CSS = """
     YouTubePane {
         height: 1fr;
+        overflow: hidden hidden;
+    }
+    #yt-fixed {
+        height: auto;
     }
     #yt-scroll {
         height: 1fr;
@@ -74,7 +78,6 @@ class YouTubePane(Widget):
     }
     #yt-status-bar {
         height: auto;
-        align: left middle;
         margin-bottom: 1;
     }
     #yt-status-text {
@@ -97,7 +100,6 @@ class YouTubePane(Widget):
     }
     #yt-auth-btns {
         height: auto;
-        align: left middle;
     }
     #yt-auth-btn {
         margin-right: 1;
@@ -111,8 +113,7 @@ class YouTubePane(Widget):
         margin-bottom: 1;
     }
     #yt-pl-bar {
-        height: 3;
-        align: left middle;
+        height: auto;
     }
     #yt-pl-count {
         margin-left: 2;
@@ -135,16 +136,14 @@ class YouTubePane(Widget):
         display: none;
     }
     #yt-upload-bar {
-        height: 3;
-        align: left middle;
+        height: auto;
     }
     #yt-upload-btn {
         margin-right: 1;
     }
     /* 하단 액션 바 */
     #yt-action-bar {
-        height: 3;
-        align: left middle;
+        height: auto;
         border-top: solid $accent;
         padding: 0 1;
     }
@@ -154,7 +153,8 @@ class YouTubePane(Widget):
     """
 
     def compose(self) -> ComposeResult:
-        with ScrollableContainer(id="yt-scroll"):
+        # 스크롤 영향 없는 고정 섹션 (RadioSet 포함) — 클릭 좌표 항상 정확
+        with Vertical(id="yt-fixed"):
             # 인증 섹션
             with Vertical(classes="yt-section"):
                 yield Label("인증 상태", classes="section-label")
@@ -171,7 +171,7 @@ class YouTubePane(Widget):
                     )
                     yield Button("새로고침", id="yt-refresh-status-btn", variant="default")
 
-            # 공개 설정 섹션
+            # 공개 설정 섹션 — RadioSet은 스크롤 컨테이너 밖에 위치해야 클릭이 정확함
             with Vertical(classes="yt-section"):
                 yield Label("영상 공개 설정", classes="section-label")
                 with RadioSet(id="yt-privacy-set", disabled=True):
@@ -179,6 +179,8 @@ class YouTubePane(Widget):
                     yield RadioButton("Unlisted (링크 공유)", id="rb-unlisted")
                     yield RadioButton("Private (비공개)", id="rb-private")
 
+        # 스크롤 필요 섹션 (플레이리스트 + 직접 업로드)
+        with ScrollableContainer(id="yt-scroll"):
             # 플레이리스트 섹션
             with Vertical(classes="yt-section"):
                 yield Label("추가할 플레이리스트", classes="section-label")
@@ -221,7 +223,10 @@ class YouTubePane(Widget):
 
     @staticmethod
     def _upload_start_path() -> Path:
-        """DirectoryTree 시작 경로: ~/Movies → ~/Videos → ~/ 순으로 폴백."""
+        """DirectoryTree 시작 경로: CWD → ~/Movies → ~/Videos → ~/ 순으로 폴백."""
+        cwd = Path.cwd()
+        if cwd.is_dir():
+            return cwd
         for candidate in (Path.home() / "Movies", Path.home() / "Videos", Path.home()):
             if candidate.exists():
                 return candidate
