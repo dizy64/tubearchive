@@ -174,7 +174,7 @@ class YouTubePane(Widget):
             # 공개 설정 섹션 — RadioSet은 스크롤 컨테이너 밖에 위치해야 클릭이 정확함
             with Vertical(classes="yt-section"):
                 yield Label("영상 공개 설정", classes="section-label")
-                with RadioSet(id="yt-privacy-set", disabled=True):
+                with RadioSet(id="yt-privacy-set"):
                     yield RadioButton("Public (공개)", id="rb-public")
                     yield RadioButton("Unlisted (링크 공유)", id="rb-unlisted")
                     yield RadioButton("Private (비공개)", id="rb-private")
@@ -220,6 +220,7 @@ class YouTubePane(Widget):
         self._selected_upload_file: Path | None = None
         self._load_auth_status()
         self._restore_privacy_from_app_state()
+        self._apply_pending_privacy()
 
     @staticmethod
     def _upload_start_path() -> Path:
@@ -265,7 +266,6 @@ class YouTubePane(Widget):
         status_widget = self.query_one("#yt-status-text", Static)
         guide_widget = self.query_one("#yt-guide-text", Static)
         setup_steps = self.query_one("#yt-setup-steps", Static)
-        privacy_set = self.query_one("#yt-privacy-set", RadioSet)
         playlist_list = self.query_one("#yt-playlist-list", SelectionList)
         auth_btn = self.query_one("#yt-auth-btn", Button)
         console_btn = self.query_one("#yt-console-btn", Button)
@@ -278,7 +278,6 @@ class YouTubePane(Widget):
             auth_btn.label = "재인증"
             auth_btn.disabled = False
             console_btn.display = False
-            privacy_set.disabled = False
             playlist_list.disabled = False
             self._apply_pending_privacy()
             self._load_playlists()
@@ -301,7 +300,6 @@ class YouTubePane(Widget):
             auth_btn.label = "인증"
             auth_btn.disabled = True
             console_btn.display = True
-            privacy_set.disabled = True
             playlist_list.disabled = True
         else:
             self._is_authenticated = False
@@ -314,7 +312,6 @@ class YouTubePane(Widget):
             auth_btn.label = "인증"
             auth_btn.disabled = False
             console_btn.display = False
-            privacy_set.disabled = True
             playlist_list.disabled = True
 
         self._refresh_upload_btn()

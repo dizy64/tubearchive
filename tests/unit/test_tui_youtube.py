@@ -134,7 +134,8 @@ async def test_pane_shows_unauthenticated_no_secrets() -> None:
             assert "client_secrets.json" in _static_content(app, "yt-guide-text")
             assert "Google Cloud Console" in _static_content(app, "yt-setup-steps")
             assert app.query_one("#yt-console-btn", Button).display
-            assert app.query_one("#yt-privacy-set", RadioSet).disabled
+            # 공개 설정은 인증 여부와 무관하게 항상 활성화
+            assert not app.query_one("#yt-privacy-set", RadioSet).disabled
             assert app.query_one("#yt-playlist-list", SelectionList).disabled
 
 
@@ -150,7 +151,8 @@ async def test_pane_shows_unauthenticated_needs_auth() -> None:
         async with app.run_test(headless=True, size=(120, 40)):
             await app.workers.wait_for_complete()
             assert "인증 필요" in _static_content(app, "yt-status-text")
-            assert app.query_one("#yt-privacy-set", RadioSet).disabled
+            # 공개 설정은 인증 여부와 무관하게 항상 활성화
+            assert not app.query_one("#yt-privacy-set", RadioSet).disabled
             assert app.query_one("#yt-playlist-list", SelectionList).disabled
 
 
