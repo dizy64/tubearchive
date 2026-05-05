@@ -11,6 +11,7 @@ from tubearchive.app.cli.parser import parse_schedule_datetime
 from tubearchive.config import (
     HooksConfig,
     get_default_auto_lut,
+    get_default_auto_white_balance,
     get_default_backup_include_originals,
     get_default_backup_remote,
     get_default_bgm_loop,
@@ -33,6 +34,8 @@ from tubearchive.config import (
     get_default_subtitle_model,
     get_default_template_intro,
     get_default_template_outro,
+    get_default_video_denoise,
+    get_default_video_denoise_level,
     get_default_watch_log_path,
     get_default_watch_paths,
     get_default_watch_poll_interval,
@@ -44,6 +47,7 @@ from tubearchive.domain.media.subtitle import (
     SubtitleFormat,
     SubtitleModel,
 )
+from tubearchive.infra.ffmpeg.constants import WB_PRESETS
 from tubearchive.infra.ffmpeg.effects import LUT_SUPPORTED_EXTENSIONS
 from tubearchive.shared.validators import ValidationError
 
@@ -111,6 +115,11 @@ class ValidatedArgs:
     auto_lut: bool = False
     lut_before_hdr: bool = False
     device_luts: dict[str, str] | None = None
+    video_denoise: bool = False
+    video_denoise_strength: str = "medium"
+    wb_kelvin: int | None = None
+    auto_white_balance: bool = False
+    device_wb: dict[str, str] | None = None
     template_intro: Path | None = None
     template_outro: Path | None = None
     watermark: bool = False
@@ -186,6 +195,7 @@ def _resolve_template_path(template_arg: str | Path | None) -> Path | None:
 def validate_args(
     args: argparse.Namespace,
     device_luts: dict[str, str] | None = None,
+    device_wb: dict[str, str] | None = None,
     hooks: HooksConfig | None = None,
 ) -> ValidatedArgs:
     """CLI 인자를 검증하고 :class:`ValidatedArgs` 로 변환한다.
@@ -469,6 +479,47 @@ def validate_args(
         auto_lut = get_default_auto_lut()
 
     lut_before_hdr: bool = getattr(args, "lut_before_hdr", False)
+
+    # 영상 노이즈 제거 (CLI > 환경변수 > 기본값)
+    # 환경변수에서 level만 지정해도 활성화로 간주 (오디오 denoise와 동일 패턴)
+    video_denoise_flag = bool(getattr(args, "video_denoise", False))
+    video_denoise_level_arg = getattr(args, "video_denoise_level", None)
+    env_video_denoise = get_default_video_denoise()
+    env_video_denoise_level = get_default_video_denoise_level()
+    video_denoise = video_denoise_flag or env_video_denoise or (env_video_denoise_level is not None)
+    resolved_video_denoise_level = video_denoise_level_arg or env_video_denoise_level or "medium"
+    if video_denoise_level_arg is not None:
+        video_denoise = True
+
+    # 화이트밸런스 (CLI > 환경변수 > 기본값)
+    # --wb-preset 지정 시 Kelvin 변환, --wb-kelvin은 직접 사용
+    wb_preset_arg: str | None = getattr(args, "wb_preset", None)
+    wb_kelvin_arg: int | None = getattr(args, "wb_kelvin", None)
+    resolved_wb_kelvin: int | None = None
+    if wb_kelvin_arg is not None:
+        if not (1000 <= wb_kelvin_arg <= 40000):
+            raise ValueError(f"--wb-kelvin must be 1000-40000, got: {wb_kelvin_arg}")
+        resolved_wb_kelvin = wb_kelvin_arg
+    elif wb_preset_arg is not None:
+        if wb_preset_arg not in WB_PRESETS:
+            raise ValueError(
+                f"--wb-preset {wb_preset_arg!r} is not valid. "
+                f"Valid presets: {', '.join(sorted(WB_PRESETS))}"
+            )
+        resolved_wb_kelvin = WB_PRESETS[wb_preset_arg]
+
+    auto_wb_flag = getattr(args, "auto_white_balance", None)
+    no_auto_wb_flag = getattr(args, "no_auto_white_balance", False)
+    # --no-auto-wb이 --auto-wb보다 우선 (명시적 비활성화)
+    if no_auto_wb_flag:
+        if auto_wb_flag:
+            logger.warning("--auto-wb and --no-auto-wb both set; --no-auto-wb wins")
+        auto_white_balance = False
+    elif auto_wb_flag:
+        auto_white_balance = True
+    else:
+        auto_white_balance = get_default_auto_white_balance()
+
     # 템플릿 옵션 (CLI > env/config)
     template_intro_env = get_default_template_intro()
     template_outro_env = get_default_template_outro()
@@ -556,6 +607,11 @@ def validate_args(
         lut_path=lut_path,
         auto_lut=auto_lut,
         lut_before_hdr=lut_before_hdr,
+        video_denoise=video_denoise,
+        video_denoise_strength=resolved_video_denoise_level,
+        wb_kelvin=resolved_wb_kelvin,
+        auto_white_balance=auto_white_balance,
+        device_wb=device_wb if device_wb else None,
         watermark=watermark_enabled,
         watermark_pos=watermark_pos,
         watermark_size=watermark_size,
