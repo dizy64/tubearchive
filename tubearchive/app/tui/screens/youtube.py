@@ -56,7 +56,9 @@ class YouTubePane(Widget):
     DEFAULT_CSS = """
     YouTubePane {
         height: 1fr;
-        overflow: hidden hidden;
+    }
+    #yt-body {
+        height: 1fr;
     }
     #yt-fixed {
         height: auto;
@@ -153,63 +155,64 @@ class YouTubePane(Widget):
     """
 
     def compose(self) -> ComposeResult:
-        # 스크롤 영향 없는 고정 섹션 (RadioSet 포함) — 클릭 좌표 항상 정확
-        with Vertical(id="yt-fixed"):
-            # 인증 섹션
-            with Vertical(classes="yt-section"):
-                yield Label("인증 상태", classes="section-label")
-                with Horizontal(id="yt-status-bar"):
-                    yield Static(_CHECKING, id="yt-status-text")
-                yield Static("", id="yt-guide-text")
-                yield Static("", id="yt-setup-steps")
-                with Horizontal(id="yt-auth-btns"):
-                    yield Button("인증", id="yt-auth-btn", variant="primary")
-                    yield Button(
-                        "Google Cloud Console 열기",
-                        id="yt-console-btn",
-                        variant="warning",
+        with Vertical(id="yt-body"):
+            # 스크롤 영향 없는 고정 섹션 (RadioSet 포함) — 클릭 좌표 항상 정확
+            with Vertical(id="yt-fixed"):
+                # 인증 섹션
+                with Vertical(classes="yt-section"):
+                    yield Label("인증 상태", classes="section-label")
+                    with Horizontal(id="yt-status-bar"):
+                        yield Static(_CHECKING, id="yt-status-text")
+                    yield Static("", id="yt-guide-text")
+                    yield Static("", id="yt-setup-steps")
+                    with Horizontal(id="yt-auth-btns"):
+                        yield Button("인증", id="yt-auth-btn", variant="primary")
+                        yield Button(
+                            "Google Cloud Console 열기",
+                            id="yt-console-btn",
+                            variant="warning",
+                        )
+                        yield Button("새로고침", id="yt-refresh-status-btn", variant="default")
+
+                # 공개 설정 섹션 — RadioSet은 스크롤 컨테이너 밖에 위치해야 클릭이 정확함
+                with Vertical(classes="yt-section"):
+                    yield Label("영상 공개 설정", classes="section-label")
+                    with RadioSet(id="yt-privacy-set"):
+                        yield RadioButton("Public (공개)", id="rb-public")
+                        yield RadioButton("Unlisted (링크 공유)", id="rb-unlisted")
+                        yield RadioButton("Private (비공개)", id="rb-private")
+
+            # 스크롤 필요 섹션 (플레이리스트 + 직접 업로드)
+            with ScrollableContainer(id="yt-scroll"):
+                # 플레이리스트 섹션
+                with Vertical(classes="yt-section"):
+                    yield Label("추가할 플레이리스트", classes="section-label")
+                    yield SelectionList[str](id="yt-playlist-list", disabled=True)
+                    with Horizontal(id="yt-pl-bar"):
+                        yield Button("새로고침", id="yt-refresh-playlists-btn", variant="default")
+                        yield Static("선택됨: 0개", id="yt-pl-count")
+
+                # 직접 업로드 섹션
+                with Vertical(classes="yt-section"):
+                    yield Label("직접 업로드", classes="section-label")
+                    yield DirectoryTree(
+                        str(self._upload_start_path()),
+                        id="yt-upload-tree",
                     )
-                    yield Button("새로고침", id="yt-refresh-status-btn", variant="default")
+                    yield Static("선택된 파일: (없음)", id="yt-upload-file")
+                    yield RichLog(id="yt-upload-log", max_lines=20, highlight=False, markup=True)
+                    with Horizontal(id="yt-upload-bar"):
+                        yield Button(
+                            "업로드 시작",
+                            id="yt-upload-btn",
+                            variant="success",
+                            disabled=True,
+                        )
 
-            # 공개 설정 섹션 — RadioSet은 스크롤 컨테이너 밖에 위치해야 클릭이 정확함
-            with Vertical(classes="yt-section"):
-                yield Label("영상 공개 설정", classes="section-label")
-                with RadioSet(id="yt-privacy-set"):
-                    yield RadioButton("Public (공개)", id="rb-public")
-                    yield RadioButton("Unlisted (링크 공유)", id="rb-unlisted")
-                    yield RadioButton("Private (비공개)", id="rb-private")
-
-        # 스크롤 필요 섹션 (플레이리스트 + 직접 업로드)
-        with ScrollableContainer(id="yt-scroll"):
-            # 플레이리스트 섹션
-            with Vertical(classes="yt-section"):
-                yield Label("추가할 플레이리스트", classes="section-label")
-                yield SelectionList[str](id="yt-playlist-list", disabled=True)
-                with Horizontal(id="yt-pl-bar"):
-                    yield Button("새로고침", id="yt-refresh-playlists-btn", variant="default")
-                    yield Static("선택됨: 0개", id="yt-pl-count")
-
-            # 직접 업로드 섹션
-            with Vertical(classes="yt-section"):
-                yield Label("직접 업로드", classes="section-label")
-                yield DirectoryTree(
-                    str(self._upload_start_path()),
-                    id="yt-upload-tree",
-                )
-                yield Static("선택된 파일: (없음)", id="yt-upload-file")
-                yield RichLog(id="yt-upload-log", max_lines=20, highlight=False, markup=True)
-                with Horizontal(id="yt-upload-bar"):
-                    yield Button(
-                        "업로드 시작",
-                        id="yt-upload-btn",
-                        variant="success",
-                        disabled=True,
-                    )
-
-        # 하단 액션 바
-        with Horizontal(id="yt-action-bar"):
-            yield Button("Apply", id="yt-apply-btn", variant="success")
-            yield Button("Save", id="yt-save-btn", variant="primary")
+            # 하단 액션 바
+            with Horizontal(id="yt-action-bar"):
+                yield Button("Apply", id="yt-apply-btn", variant="success")
+                yield Button("Save", id="yt-save-btn", variant="primary")
 
     # ------------------------------------------------------------------
     # 마운트 / 인증
