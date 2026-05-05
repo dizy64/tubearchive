@@ -41,6 +41,41 @@ from tubearchive.shared.progress import ProgressInfo
 logger = logging.getLogger(__name__)
 
 
+def _resolve_auto_wb(device_model: str, device_wb: dict[str, str]) -> int | None:
+    """기기 모델명 기반으로 WB 프리셋을 자동 매칭하여 Kelvin 값을 반환한다.
+
+    부분 문자열 매칭(대소문자 무시)을 사용하며,
+    다중 매칭 시 가장 긴 키워드(가장 구체적)를 우선한다.
+
+    Args:
+        device_model: FFprobe에서 감지된 기기 모델명
+        device_wb: 기기 키워드 → WB 프리셋 이름 매핑
+
+    Returns:
+        매칭된 WB 프리셋의 Kelvin 값 또는 None
+    """
+    from tubearchive.infra.ffmpeg.constants import WB_PRESETS
+
+    if not device_model or not device_wb:
+        return None
+
+    model_lower = device_model.lower()
+    matches: list[tuple[int, str]] = []
+
+    for keyword, preset in device_wb.items():
+        if not keyword:
+            continue
+        if keyword.lower() in model_lower:
+            matches.append((len(keyword), preset))
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda x: x[0], reverse=True)
+    best_preset = matches[0][1]
+    return WB_PRESETS.get(best_preset)
+
+
 def _resolve_auto_lut(device_model: str, device_luts: dict[str, str]) -> str | None:
     """기기 모델명 기반으로 LUT 파일 경로를 자동 매칭한다.
 
@@ -374,6 +409,11 @@ class Transcoder:
         auto_lut: bool = False,
         lut_before_hdr: bool = False,
         device_luts: dict[str, str] | None = None,
+        video_denoise: bool = False,
+        video_denoise_strength: str = "medium",
+        wb_kelvin: int | None = None,
+        auto_white_balance: bool = False,
+        device_wb: dict[str, str] | None = None,
         metadata: VideoMetadata | None = None,
         watermark_text: str | None = None,
         watermark_position: str = "bottom-right",
@@ -405,6 +445,11 @@ class Transcoder:
             auto_lut: 기기 모델 기반 자동 LUT 매칭 활성화
             lut_before_hdr: LUT 필터를 HDR→SDR 변환 전에 적용
             device_luts: 기기 키워드 → LUT 파일 경로 매핑
+            video_denoise: 영상 노이즈 제거(hqdn3d) 활성화 여부
+            video_denoise_strength: 영상 노이즈 제거 강도 (light/medium/heavy)
+            wb_kelvin: 화이트밸런스 색온도 직접 지정 (K). auto_white_balance보다 우선.
+            auto_white_balance: 기기 모델 기반 자동 WB 매칭 활성화
+            device_wb: 기기 키워드 → WB 프리셋 이름 매핑 (없으면 WB_DEVICE_DEFAULTS 사용)
             metadata: 외부에서 전달된 메타데이터(없으면 감지 실행)
             watermark_text: 워터마크 텍스트
             watermark_position: 워터마크 위치
@@ -523,6 +568,18 @@ class Transcoder:
             if resolved_lut:
                 logger.info(f"Auto-LUT matched: {resolved_lut} for {metadata.device_model}")
 
+        # 5.9 WB 해석 (wb_kelvin 직접 지정 > auto_white_balance 매칭)
+        resolved_wb_kelvin: int | None = wb_kelvin
+        if resolved_wb_kelvin is None and auto_white_balance and metadata.device_model:
+            from tubearchive.infra.ffmpeg.constants import WB_DEVICE_DEFAULTS
+
+            effective_device_wb = device_wb if device_wb else dict(WB_DEVICE_DEFAULTS)
+            resolved_wb_kelvin = _resolve_auto_wb(metadata.device_model, effective_device_wb)
+            if resolved_wb_kelvin:
+                logger.info(
+                    "Auto-WB matched: %dK for %s", resolved_wb_kelvin, metadata.device_model
+                )
+
         def _build_filters(include_watermark: bool) -> tuple[str, str]:
             return create_combined_filter(
                 source_width=metadata.width,
@@ -540,6 +597,9 @@ class Transcoder:
                 denoise_level=denoise_level,
                 silence_remove=silence_remove_filter,
                 loudnorm_analysis=loudnorm_analysis,
+                video_denoise=video_denoise,
+                video_denoise_strength=video_denoise_strength,
+                wb_kelvin=resolved_wb_kelvin,
                 lut_path=resolved_lut,
                 lut_before_hdr=lut_before_hdr,
                 watermark_text=watermark_text if include_watermark else None,
