@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.css.query import NoMatches
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from tubearchive.config import AppConfig
@@ -152,7 +153,7 @@ class TubeArchiveApp(App[None]):
 
         try:
             state = self.query_one(OptionsPane).collect_state()
-        except Exception:
+        except NoMatches:
             self.notify("옵션 패널을 찾을 수 없습니다.", severity="warning", timeout=2)
             return
 
@@ -173,7 +174,7 @@ class TubeArchiveApp(App[None]):
 
         try:
             state = self.query_one(OptionsPane).collect_state()
-        except Exception:
+        except NoMatches:
             self.notify("옵션 패널을 찾을 수 없습니다.", severity="warning", timeout=2)
             return
 

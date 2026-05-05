@@ -199,7 +199,7 @@ class FileBrowserPane(Widget):
                 if Path(node.data.path) == target:  # type: ignore[union-attr]
                     tree.move_cursor(node)
                     return
-            except Exception:  # noqa: S110
+            except (AttributeError, TypeError):
                 pass
 
     # ------------------------------------------------------------------

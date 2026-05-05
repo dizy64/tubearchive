@@ -6,13 +6,18 @@ TUI 위젯 상태를 담는 가변 데이터클래스와 카테고리 정의.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+
+import tomlkit
 
 if TYPE_CHECKING:
     from tubearchive.config import AppConfig
@@ -535,12 +540,6 @@ def save_state_as_defaults(state: TuiOptionState, path: Path | None = None) -> P
     - [color_grading]: auto_lut
     - [youtube]: upload_privacy
     """
-    import contextlib
-    import os
-    import tempfile
-
-    import tomlkit
-
     from tubearchive.config import generate_default_config, get_default_config_path
 
     target = path or get_default_config_path()
