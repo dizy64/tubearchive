@@ -443,11 +443,13 @@ def main() -> None:
             cmd_upload_only(args, hooks=config.hooks)
             return
 
-        # config의 device_luts를 validate_args에 전달하여 초기화 시 주입
+        # config의 device_luts/device_wb를 validate_args에 전달하여 초기화 시 주입
         cfg_device_luts = config.color_grading.device_luts or None
+        cfg_device_wb = config.color_grading.device_wb or None
         validated_args = validate_args(
             args,
             device_luts=cfg_device_luts,
+            device_wb=cfg_device_wb,
             hooks=config.hooks,
         )
 

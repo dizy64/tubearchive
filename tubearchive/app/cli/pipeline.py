@@ -151,6 +151,11 @@ class TranscodeOptions:
     auto_lut: bool = False
     lut_before_hdr: bool = False
     device_luts: dict[str, str] | None = None
+    video_denoise: bool = False
+    video_denoise_strength: str = "medium"
+    wb_kelvin: int | None = None
+    auto_white_balance: bool = False
+    device_wb: dict[str, str] | None = None
     watermark_text: str | None = None
     watermark_pos: str = "bottom-right"
     watermark_size: int = 48
@@ -555,6 +560,11 @@ def _transcode_single(
             auto_lut=opts.auto_lut,
             lut_before_hdr=opts.lut_before_hdr,
             device_luts=opts.device_luts,
+            video_denoise=opts.video_denoise,
+            video_denoise_strength=opts.video_denoise_strength,
+            wb_kelvin=opts.wb_kelvin,
+            auto_white_balance=opts.auto_white_balance,
+            device_wb=opts.device_wb,
             watermark_text=watermark_text,
             watermark_position=opts.watermark_pos,
             watermark_size=opts.watermark_size,
@@ -728,6 +738,11 @@ def _transcode_sequential(
                     auto_lut=opts.auto_lut,
                     lut_before_hdr=opts.lut_before_hdr,
                     device_luts=opts.device_luts,
+                    video_denoise=opts.video_denoise,
+                    video_denoise_strength=opts.video_denoise_strength,
+                    wb_kelvin=opts.wb_kelvin,
+                    auto_white_balance=opts.auto_white_balance,
+                    device_wb=opts.device_wb,
                     watermark_text=watermark_text,
                     watermark_position=opts.watermark_pos,
                     watermark_size=opts.watermark_size,
@@ -1034,6 +1049,11 @@ def run_pipeline(
         auto_lut=validated_args.auto_lut,
         lut_before_hdr=validated_args.lut_before_hdr,
         device_luts=validated_args.device_luts,
+        video_denoise=validated_args.video_denoise,
+        video_denoise_strength=validated_args.video_denoise_strength,
+        wb_kelvin=validated_args.wb_kelvin,
+        auto_white_balance=validated_args.auto_white_balance,
+        device_wb=validated_args.device_wb,
         watermark=validated_args.watermark,
         watermark_text=validated_args.watermark_text or None,
         watermark_pos=validated_args.watermark_pos,

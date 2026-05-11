@@ -22,6 +22,7 @@ from tubearchive.domain.media.subtitle import (
     SubtitleFormat,
     SubtitleModel,
 )
+from tubearchive.infra.ffmpeg.constants import WB_PRESETS
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,21 @@ def create_parser() -> argparse.ArgumentParser:
         choices=["light", "medium", "heavy"],
         default=None,
         help="노이즈 제거 강도 (light/medium/heavy, 기본: medium)",
+    )
+
+    parser.add_argument(
+        "--video-denoise",
+        action="store_true",
+        help="영상 노이즈 제거 활성화 (hqdn3d)",
+    )
+
+    parser.add_argument(
+        "--video-denoise-level",
+        type=str,
+        choices=["light", "medium", "heavy"],
+        default=None,
+        dest="video_denoise_level",
+        help="영상 노이즈 제거 강도 (light/medium/heavy, 기본: medium)",
     )
 
     parser.add_argument(
@@ -535,6 +551,41 @@ def create_parser() -> argparse.ArgumentParser:
         "--lut-before-hdr",
         action="store_true",
         help="LUT를 HDR→SDR 변환 전에 적용 (기본: HDR 변환 후 적용)",
+    )
+
+    # 화이트밸런스 옵션
+    _wb_preset_choices = sorted(WB_PRESETS)
+    parser.add_argument(
+        "--wb-preset",
+        type=str,
+        choices=_wb_preset_choices,
+        default=None,
+        dest="wb_preset",
+        help=f"화이트밸런스 프리셋 ({'/'.join(_wb_preset_choices)})",
+    )
+
+    parser.add_argument(
+        "--wb-kelvin",
+        type=int,
+        default=None,
+        dest="wb_kelvin",
+        metavar="K",
+        help="화이트밸런스 색온도 직접 지정 (1000-40000K). --wb-preset보다 우선.",
+    )
+
+    parser.add_argument(
+        "--auto-wb",
+        action="store_true",
+        default=None,
+        dest="auto_white_balance",
+        help="기기 모델 기반 자동 화이트밸런스 적용 (config.toml [color_grading.device_wb] 참조)",
+    )
+
+    parser.add_argument(
+        "--no-auto-wb",
+        action="store_true",
+        dest="no_auto_white_balance",
+        help="자동 화이트밸런스 비활성화 (환경변수/config 설정 무시)",
     )
 
     parser.add_argument(
