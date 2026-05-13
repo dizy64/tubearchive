@@ -71,6 +71,10 @@ class VideoMetadata:
         color_transfer: 색 전달 함수 (``smpte2084``, ``arib-std-b67`` 등)
         color_primaries: 색 원색 (``bt709``, ``bt2020`` 등)
         has_audio: 오디오 스트림 존재 여부 (기본 ``True``)
+        sar: 픽셀 종횡비(Sample Aspect Ratio, 예: ``"1:1"``). 감지 불가 시 ``None``
+        audio_codec: 첫 오디오 스트림 코덱명 (``"aac"`` 등). 오디오 없으면 ``None``
+        audio_sample_rate: 첫 오디오 스트림 샘플레이트(Hz). 오디오 없으면 ``None``
+        audio_channels: 첫 오디오 스트림 채널 수. 오디오 없으면 ``None``
         location: 위치 정보 문자열 (감지 시 값, 예: "37.500000, 127.000000")
         location_latitude: 위도 값 (있을 경우)
         location_longitude: 경도 값 (있을 경우)
@@ -89,6 +93,10 @@ class VideoMetadata:
     color_transfer: str | None
     color_primaries: str | None
     has_audio: bool = True
+    sar: str | None = None
+    audio_codec: str | None = None
+    audio_sample_rate: int | None = None
+    audio_channels: int | None = None
     location_latitude: float | None = None
     location_longitude: float | None = None
     location: str | None = None

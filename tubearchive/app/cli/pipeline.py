@@ -860,6 +860,191 @@ def _transcode_sequential(
     return results
 
 
+# PROFILE_SDR과 정합한다고 판정할 때 비교하는 기준값.
+# encoder 이름(hevc_videotoolbox)이 아니라 ffprobe codec_name(hevc)을 사용한다.
+_SKIP_TARGET_VIDEO_CODEC = "hevc"
+_SKIP_TARGET_PIXEL_FORMAT = "p010le"
+_SKIP_TARGET_WIDTH = 3840
+_SKIP_TARGET_HEIGHT = 2160
+_SKIP_TARGET_FPS = 30000 / 1001  # 29.97
+_SKIP_TARGET_FPS_TOLERANCE = 0.05
+_SKIP_TARGET_AUDIO_CODEC = "aac"
+_SKIP_TARGET_AUDIO_SAMPLE_RATE = 48000
+
+
+def _can_skip_transcoding(
+    video_files: list[VideoFile],
+    transcode_opts: TranscodeOptions,
+    validated_args: ValidatedArgs,
+    template_intro_file: VideoFile | None,
+    template_outro_file: VideoFile | None,
+) -> tuple[bool, str]:
+    """트랜스코딩을 건너뛰고 stream-copy concat으로 바로 병합할 수 있는지 판정한다.
+
+    조건:
+        1. 어떤 필터/이펙트도 활성화되지 않았다 (denoise, LUT, WB, vidstab, fade 등).
+        2. 인트로/아웃트로 템플릿이 없다.
+        3. 모든 입력 파일이 동질적인 메타데이터(코덱·해상도·fps·SAR·오디오 포맷)를 갖는다.
+        4. 그 메타데이터가 :data:`PROFILE_SDR` 의 출력 사양과 일치한다.
+
+    조건 중 하나라도 실패하면 일반 트랜스코딩 경로를 그대로 사용한다.
+
+    Args:
+        video_files: 병합 대상 영상 파일 목록 (템플릿 제외).
+        transcode_opts: 트랜스코딩 옵션.
+        validated_args: 검증된 CLI 인자.
+        template_intro_file: 인트로 템플릿 (있으면 스킵 불가).
+        template_outro_file: 아웃트로 템플릿 (있으면 스킵 불가).
+
+    Returns:
+        ``(스킵 가능 여부, 사유 문자열)``. 사유는 로깅·디버깅용.
+    """
+    if not video_files:
+        return False, "no input files"
+
+    if template_intro_file is not None or template_outro_file is not None:
+        return False, "template intro/outro present"
+
+    # --- 필터/이펙트 검사 ---
+    if transcode_opts.denoise:
+        return False, "audio denoise enabled"
+    if transcode_opts.video_denoise:
+        return False, "video denoise enabled"
+    if transcode_opts.trim_silence:
+        return False, "trim silence enabled"
+    if transcode_opts.stabilize:
+        return False, "stabilize enabled"
+    if transcode_opts.watermark:
+        return False, "watermark enabled"
+    if transcode_opts.lut_path is not None or transcode_opts.auto_lut:
+        return False, "LUT enabled"
+    if transcode_opts.wb_kelvin is not None or transcode_opts.auto_white_balance:
+        return False, "white balance adjustment enabled"
+    if transcode_opts.fade_map:
+        for fade in transcode_opts.fade_map.values():
+            if fade.fade_in > 0 or fade.fade_out > 0:
+                return False, "dip-to-black fade enabled"
+
+    if validated_args.normalize_audio:
+        # 라우드니스 정규화는 병합 후 단계에서 처리되므로 스킵 자체는 막지 않지만,
+        # 일관성을 위해 의존성을 명시한다. (병합된 결과물에 1회 적용된다)
+        pass
+
+    # --- 메타데이터 균질성 + PROFILE_SDR 정합 검사 ---
+    try:
+        metadatas = [detect_metadata(vf.path) for vf in video_files]
+    except Exception as e:
+        return False, f"metadata probe failed: {e}"
+
+    first = metadatas[0]
+    homogeneous_fields = (
+        "codec",
+        "pixel_format",
+        "width",
+        "height",
+        "sar",
+        "color_space",
+        "color_transfer",
+        "color_primaries",
+        "audio_codec",
+        "audio_sample_rate",
+        "audio_channels",
+        "has_audio",
+        "is_portrait",
+    )
+    for m in metadatas[1:]:
+        for field in homogeneous_fields:
+            if getattr(m, field) != getattr(first, field):
+                return False, f"heterogeneous {field} across inputs"
+        if abs(m.fps - first.fps) > _SKIP_TARGET_FPS_TOLERANCE:
+            return False, "heterogeneous fps across inputs"
+
+    # PROFILE_SDR 정합 검사 (기준 파일 first만 검사하면 충분 — 위에서 균질성 보장)
+    if first.codec != _SKIP_TARGET_VIDEO_CODEC:
+        return False, f"video codec {first.codec!r} ≠ {_SKIP_TARGET_VIDEO_CODEC!r}"
+    if first.pixel_format != _SKIP_TARGET_PIXEL_FORMAT:
+        return False, f"pixel format {first.pixel_format!r} ≠ {_SKIP_TARGET_PIXEL_FORMAT!r}"
+    if first.width != _SKIP_TARGET_WIDTH or first.height != _SKIP_TARGET_HEIGHT:
+        return False, f"resolution {first.width}x{first.height} ≠ 3840x2160"
+    if abs(first.fps - _SKIP_TARGET_FPS) > _SKIP_TARGET_FPS_TOLERANCE:
+        return False, f"fps {first.fps:.3f} ≠ 29.97"
+    if first.is_portrait:
+        return False, "portrait orientation requires layout filter"
+    if first.is_vfr:
+        return False, "variable frame rate"
+    # HDR transfer는 SDR로 변환이 필요하므로 스킵 불가.
+    # color_transfer가 None인 경우는 모호하지만 ffprobe가 bt709 SDR을 종종 None으로 보고하므로 허용.
+    if first.color_transfer not in (None, "bt709"):
+        return False, f"color transfer {first.color_transfer!r} requires conversion"
+    if first.color_space not in (None, "bt709"):
+        return False, f"color space {first.color_space!r} requires conversion"
+    if first.color_primaries not in (None, "bt709"):
+        return False, f"color primaries {first.color_primaries!r} requires conversion"
+    if first.sar not in (None, "1:1"):
+        return False, f"non-square pixels (sar={first.sar!r})"
+    if first.has_audio:
+        if first.audio_codec != _SKIP_TARGET_AUDIO_CODEC:
+            return False, f"audio codec {first.audio_codec!r} ≠ {_SKIP_TARGET_AUDIO_CODEC!r}"
+        if first.audio_sample_rate != _SKIP_TARGET_AUDIO_SAMPLE_RATE:
+            return False, f"sample rate {first.audio_sample_rate} ≠ 48000"
+
+    return True, "all inputs already match PROFILE_SDR with no filters enabled"
+
+
+def _run_skip_transcoding(
+    video_files: list[VideoFile],
+    temp_dir: Path,
+    context: PipelineContext | None = None,
+) -> list[TranscodeResult]:
+    """트랜스코딩을 건너뛰고 원본 파일을 그대로 사용하는 결과를 생성한다.
+
+    각 파일을 DB에 등록하고 즉시 완료(``COMPLETED``) 상태의 transcoding_job을
+    기록하여 다운스트림(DB 통계, Resume 등)이 정상 동작하도록 한다.
+
+    Args:
+        video_files: 입력 영상 파일 목록 (PROFILE_SDR과 이미 정합한다고 검증됨).
+        temp_dir: Transcoder DB 컨텍스트용 임시 디렉토리.
+        context: 파이프라인 진행률 컨텍스트.
+
+    Returns:
+        각 파일의 원본 경로를 ``output_path``로 갖는 :class:`TranscodeResult` 리스트.
+    """
+    from tubearchive.domain.models.job import JobStatus
+
+    results: list[TranscodeResult] = []
+    total = len(video_files)
+    with Transcoder(temp_dir=temp_dir) as transcoder:
+        for i, video_file in enumerate(video_files):
+            _emit_progress(
+                context,
+                FileStartEvent(
+                    filename=video_file.path.name,
+                    file_index=i,
+                    total_files=total,
+                ),
+            )
+            metadata = detect_metadata(video_file.path)
+            video_id = transcoder._register_video(video_file, metadata)
+            job_id = transcoder.resume_mgr.get_or_create_job(video_id)
+            transcoder.job_repo.update_status(job_id, JobStatus.COMPLETED)
+            transcoder.job_repo.mark_completed(job_id, video_file.path)
+            clip_info = _collect_clip_info(video_file, metadata)
+            results.append(
+                TranscodeResult(
+                    output_path=video_file.path,
+                    video_id=video_id,
+                    clip_info=clip_info,
+                    silence_segments=None,
+                )
+            )
+            _emit_progress(
+                context,
+                FileDoneEvent(filename=video_file.path.name, file_index=i, success=True),
+            )
+    logger.info(f"Skipped transcoding for {total} file(s) — using originals for concat")
+    return results
+
+
 def _apply_ordering(
     video_files: list[VideoFile],
     validated_args: ValidatedArgs,
@@ -1154,13 +1339,28 @@ def run_pipeline(
             validated_args.stabilize_crop,
         )
 
+    # 트랜스코딩 스킵 검사: 모든 입력이 이미 PROFILE_SDR과 정합하고
+    # 어떤 필터도 활성화되지 않은 경우, 트랜스코딩 단계를 통째로 건너뛰고
+    # 원본 파일을 그대로 concat demuxer로 stream-copy 병합한다.
+    can_skip, skip_reason = _can_skip_transcoding(
+        main_video_files,
+        transcode_opts,
+        validated_args,
+        template_intro_file,
+        template_outro_file,
+    )
     parallel = validated_args.parallel
-    if parallel > 1:
+    if can_skip:
+        logger.info(f"트랜스코딩 스킵 (stream-copy 모드): {skip_reason}")
+        results = _run_skip_transcoding(video_files, temp_dir, context=context)
+    elif parallel > 1:
+        logger.debug(f"Skip not eligible: {skip_reason}")
         logger.info(f"Starting parallel transcoding (workers: {parallel})...")
         results = _transcode_parallel(
             video_files, temp_dir, parallel, transcode_opts, context=context
         )
     else:
+        logger.debug(f"Skip not eligible: {skip_reason}")
         logger.info("Starting transcoding...")
         results = _transcode_sequential(video_files, temp_dir, transcode_opts, context=context)
 
