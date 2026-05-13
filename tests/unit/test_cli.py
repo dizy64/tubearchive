@@ -2723,7 +2723,6 @@ class TestTranscodeOptions:
         opts = TranscodeOptions()
         assert opts.denoise is False
         assert opts.denoise_level == "medium"
-        assert opts.normalize_audio is False
         assert opts.fade_map is None
         assert opts.fade_duration == 0.5
 
@@ -2735,13 +2734,11 @@ class TestTranscodeOptions:
         opts = TranscodeOptions(
             denoise=True,
             denoise_level="heavy",
-            normalize_audio=True,
             fade_map=fade_map,
             fade_duration=1.0,
         )
         assert opts.denoise is True
         assert opts.denoise_level == "heavy"
-        assert opts.normalize_audio is True
         assert opts.fade_map is not None
         assert opts.fade_duration == 1.0
 

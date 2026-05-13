@@ -123,7 +123,6 @@ class TranscodeOptions:
     Attributes:
         denoise: 오디오 노이즈 제거 여부 (afftdn)
         denoise_level: 노이즈 제거 강도 (``light`` | ``medium`` | ``heavy``)
-        normalize_audio: EBU R128 loudnorm 2-pass 적용 여부
         fade_map: 파일별 페이드 설정 맵 (그룹 경계 기반)
         fade_duration: 기본 페이드 시간 (초)
         trim_silence: 무음 구간 제거 여부
@@ -133,11 +132,15 @@ class TranscodeOptions:
         auto_lut: 기기 모델 기반 자동 LUT 매칭 활성화
         lut_before_hdr: LUT를 HDR→SDR 변환 전에 적용
         device_luts: 기기 키워드 → LUT 파일 경로 매핑
+
+    Note:
+        EBU R128 라우드니스 정규화는 트랜스코딩이 아닌 병합 직후 단계
+        (:func:`_apply_post_merge_loudnorm`)에서 한 번만 수행하므로
+        이 데이터클래스에는 ``normalize_audio`` 필드가 없다.
     """
 
     denoise: bool = False
     denoise_level: str = "medium"
-    normalize_audio: bool = False
     fade_map: dict[Path, FadeConfig] | None = None
     fade_duration: float = 0.5
     watermark: bool = False
@@ -370,6 +373,90 @@ def _apply_bgm_mixing(
     return output_path
 
 
+def _apply_post_merge_loudnorm(
+    video_path: Path,
+    output_path: Path,
+) -> Path:
+    """병합된 영상 전체에 EBU R128 loudnorm 2-pass를 적용한다.
+
+    클립별이 아닌 병합 결과 한 번에 측정·정규화하므로, 클립 간 상대 라우드니스가
+    보존되고 전체 영상의 평균 라우드니스만 :data:`LOUDNORM_TARGET_I` 목표값에 맞춰진다.
+    비디오는 ``-c:v copy``로 복사하고 오디오만 재인코딩한다.
+
+    Args:
+        video_path: 라우드니스 정규화 대상 영상 (병합 결과)
+        output_path: 정규화된 출력 파일 경로
+
+    Returns:
+        정규화된 출력 파일 경로. 오디오 스트림이 없거나 분석이 실패하면
+        ``video_path``를 그대로 ``output_path``로 복사하여 반환한다.
+    """
+    from tubearchive.infra.ffmpeg.effects import (
+        create_loudnorm_analysis_filter,
+        create_loudnorm_filter,
+        parse_loudnorm_stats,
+    )
+    from tubearchive.infra.ffmpeg.executor import FFmpegError, FFmpegExecutor
+
+    if not _has_audio_stream(video_path):
+        logger.info("No audio stream in merged output, skipping loudnorm")
+        shutil.copy2(video_path, output_path)
+        return output_path
+
+    executor = FFmpegExecutor()
+    analysis_filter = create_loudnorm_analysis_filter()
+    analysis_cmd = executor.build_loudness_analysis_command(
+        input_path=video_path,
+        audio_filter=analysis_filter,
+    )
+
+    logger.info("Running post-merge loudnorm analysis pass")
+    try:
+        stderr = executor.run_analysis(analysis_cmd)
+        analysis = parse_loudnorm_stats(stderr)
+    except (FFmpegError, ValueError) as e:
+        logger.warning(f"Post-merge loudnorm analysis failed, skipping normalization: {e}")
+        shutil.copy2(video_path, output_path)
+        return output_path
+
+    logger.info(
+        f"Loudnorm (post-merge): I={analysis.input_i:.1f}dB "
+        f"TP={analysis.input_tp:.1f}dB LRA={analysis.input_lra:.1f}"
+    )
+
+    loudnorm_filter = create_loudnorm_filter(analysis)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(video_path),
+        "-map",
+        "0:v",
+        "-map",
+        "0:a",
+        "-c:v",
+        "copy",
+        "-af",
+        loudnorm_filter,
+        "-c:a",
+        "aac",
+        "-b:a",
+        "320k",
+        "-ar",
+        "48000",
+        str(output_path),
+    ]
+
+    logger.info(f"Applying post-merge loudnorm: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error(f"Post-merge loudnorm failed: {result.stderr}")
+        raise RuntimeError(f"Post-merge loudnorm failed: {result.stderr}")
+
+    logger.info(f"Post-merge loudnorm completed: {output_path}")
+    return output_path
+
+
 def handle_single_file_upload(
     video_file: VideoFile,
     args: ValidatedArgs,
@@ -546,7 +633,6 @@ def _transcode_single(
             metadata=metadata,
             denoise=opts.denoise,
             denoise_level=opts.denoise_level,
-            normalize_audio=opts.normalize_audio,
             fade_duration=opts.fade_duration,
             fade_in_duration=fade_in,
             fade_out_duration=fade_out,
@@ -724,7 +810,6 @@ def _transcode_sequential(
                     metadata=metadata,
                     denoise=opts.denoise,
                     denoise_level=opts.denoise_level,
-                    normalize_audio=opts.normalize_audio,
                     fade_duration=opts.fade_duration,
                     fade_in_duration=fade_in,
                     fade_out_duration=fade_out,
@@ -1036,7 +1121,6 @@ def run_pipeline(
     transcode_opts = TranscodeOptions(
         denoise=validated_args.denoise,
         denoise_level=validated_args.denoise_level,
-        normalize_audio=validated_args.normalize_audio,
         fade_map=fade_map,
         fade_duration=validated_args.fade_duration,
         trim_silence=validated_args.trim_silence,
@@ -1146,6 +1230,20 @@ def run_pipeline(
                 total_size_bytes=final_path.stat().st_size if final_path.exists() else 0,
             )
         )
+
+    # 3.4 라우드니스 정규화 (옵션) — 병합 결과 전체에 1회 적용
+    # 클립별이 아닌 한 번에 측정/정규화하므로 클립 간 상대 라우드니스가 보존된다.
+    # BGM 믹싱은 정규화된 원본 오디오에 BGM 비율을 적용해야 의도대로 동작하므로
+    # 반드시 BGM 단계보다 먼저 수행한다.
+    if validated_args.normalize_audio:
+        logger.info("Applying post-merge loudnorm...")
+        temp_loud_output = temp_dir / f"loudnorm_{final_path.name}"
+        normalized_path = _apply_post_merge_loudnorm(
+            video_path=final_path,
+            output_path=temp_loud_output,
+        )
+        shutil.move(str(normalized_path), str(final_path))
+        logger.info(f"Loudnorm applied: {final_path}")
 
     # 3.5 BGM 믹싱 (옵션)
     if validated_args.bgm_path:
