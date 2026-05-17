@@ -49,16 +49,20 @@ def _profile_sdr_metadata(**overrides: object) -> VideoMetadata:
         "audio_codec": "aac",
         "audio_sample_rate": 48000,
         "audio_channels": 2,
+        "audio_stream_count": 1,
     }
     defaults.update(overrides)
     return VideoMetadata(**defaults)  # type: ignore[arg-type]
 
 
 def _make_validated_args(tmp_path: Path) -> MagicMock:
-    """스킵 판정 함수는 ``normalize_audio`` 한 필드만 읽으므로 mock으로 충분."""
-    args = MagicMock()
-    args.normalize_audio = False
-    return args
+    """``_can_skip_transcoding`` 은 ``validated_args``를 읽지 않으므로 빈 mock으로 충분.
+
+    필터/이펙트 옵션은 ``TranscodeOptions``로 전달되며, ``validated_args`` 시그니처는
+    인터페이스 호환만을 위해 받아둔다. ``args.foo`` 자동-생성 MagicMock에 의존하는
+    분기가 추가되면 그때 명시 필드를 추가하자.
+    """
+    return MagicMock()
 
 
 class TestCanSkipTranscoding:
@@ -170,6 +174,37 @@ class TestCanSkipTranscoding:
 
         assert can_skip is False
         assert "template" in reason
+
+    def test_blocked_by_template_outro(self, tmp_path: Path) -> None:
+        """아웃트로 템플릿이 있으면 스킵 불가 (인트로와 대칭)."""
+        files = [_make_video_file(tmp_path)]
+        outro = _make_video_file(tmp_path, "outro.mp4")
+        opts = TranscodeOptions()
+        args = _make_validated_args(tmp_path)
+
+        with patch(
+            "tubearchive.app.cli.pipeline.detect_metadata",
+            return_value=_profile_sdr_metadata(),
+        ):
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, outro)
+
+        assert can_skip is False
+        assert "template" in reason
+
+    def test_blocked_by_multi_track_audio(self, tmp_path: Path) -> None:
+        """다중 오디오 트랙 입력은 stream-copy concat이 안전하지 않아 스킵 불가."""
+        files = [_make_video_file(tmp_path)]
+        opts = TranscodeOptions()
+        args = _make_validated_args(tmp_path)
+
+        with patch(
+            "tubearchive.app.cli.pipeline.detect_metadata",
+            return_value=_profile_sdr_metadata(audio_stream_count=2),
+        ):
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
+
+        assert can_skip is False
+        assert "multi-track audio" in reason
 
     def test_blocked_by_h264_codec(self, tmp_path: Path) -> None:
         """입력 코덱이 hevc가 아니면 스킵 불가."""
@@ -390,3 +425,45 @@ class TestRunSkipTranscoding:
 
         assert len(results) == 1
         mock_probe.assert_called_once_with(files[0].path)
+
+
+class TestCleanupTempPreservesSourceClips:
+    """``_cleanup_temp`` 가 스킵 모드의 원본 클립을 삭제하지 않는지 검증.
+
+    스킵 경로에서 ``TranscodeResult.output_path``는 원본 입력 파일이라
+    무차별 unlink하면 사용자의 소스가 사라진다. (CodeRabbit P0 리뷰 회귀 테스트)
+    """
+
+    def test_original_files_outside_temp_dir_not_deleted(self, tmp_path: Path) -> None:
+        from tubearchive.app.cli.pipeline import (
+            TranscodeResult,
+            _cleanup_temp,
+        )
+        from tubearchive.domain.models.clip import ClipInfo
+
+        # 원본 입력은 source_dir(임시 디렉토리 외부)에 위치
+        source_dir = tmp_path / "originals"
+        source_dir.mkdir()
+        source_file = source_dir / "clip.mp4"
+        source_file.write_bytes(b"original-data")
+
+        temp_dir = tmp_path / "tmp_pipeline"
+        temp_dir.mkdir()
+
+        # 스킵 모드: output_path == 원본 경로
+        result = TranscodeResult(
+            output_path=source_file,
+            video_id=1,
+            clip_info=ClipInfo(name="clip.mp4", duration=10.0, device=None, shot_time=None),
+            silence_segments=None,
+        )
+
+        final_path = temp_dir / "out.mp4"
+        final_path.write_bytes(b"merged-data")
+
+        _cleanup_temp(temp_dir, [result], final_path)
+
+        # 원본은 그대로, temp_dir은 정리됨
+        assert source_file.exists(), "원본 클립이 삭제되었음 — _cleanup_temp 가드 누락"
+        assert source_file.read_bytes() == b"original-data"
+        assert not temp_dir.exists()

@@ -463,11 +463,12 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
     if sar in ("0:1", "0/1", ""):  # ffprobe가 미정 시 반환하는 값
         sar = None
 
-    # 오디오 스트림: 첫 번째 스트림의 코덱·샘플레이트·채널 수 추출
-    audio_stream = next(
-        (s for s in probe_data.get("streams", []) if s.get("codec_type") == "audio"),
-        None,
-    )
+    # 오디오 스트림: 첫 번째 스트림의 코덱·샘플레이트·채널 수 추출 + 전체 개수.
+    # 다중 오디오 트랙(외부 마이크 + 내장 마이크 등)은 stream-copy concat 호환성에
+    # 영향을 주므로 ``audio_stream_count`` 도 같이 노출한다.
+    audio_streams = [s for s in probe_data.get("streams", []) if s.get("codec_type") == "audio"]
+    audio_stream_count = len(audio_streams)
+    audio_stream = audio_streams[0] if audio_streams else None
     has_audio = audio_stream is not None
     audio_codec: str | None = None
     audio_sample_rate: int | None = None
@@ -508,6 +509,7 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
         audio_codec=audio_codec,
         audio_sample_rate=audio_sample_rate,
         audio_channels=audio_channels,
+        audio_stream_count=audio_stream_count,
     )
 
 

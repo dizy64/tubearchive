@@ -398,10 +398,12 @@ def _apply_post_merge_loudnorm(
     )
     from tubearchive.infra.ffmpeg.executor import FFmpegError, FFmpegExecutor
 
+    # 스킵 경로(오디오 없음, 분석 실패)에서는 수 GB 파일을 굳이 복사하지 않고
+    # 원본 경로를 그대로 반환한다. 호출부에서 반환값과 원본 경로 동일 여부를
+    # 확인하여 ``shutil.move`` 의 ``SameFileError`` 를 회피해야 한다.
     if not _has_audio_stream(video_path):
         logger.info("No audio stream in merged output, skipping loudnorm")
-        shutil.copy2(video_path, output_path)
-        return output_path
+        return video_path
 
     executor = FFmpegExecutor()
     analysis_filter = create_loudnorm_analysis_filter()
@@ -416,8 +418,7 @@ def _apply_post_merge_loudnorm(
         analysis = parse_loudnorm_stats(stderr)
     except (FFmpegError, ValueError) as e:
         logger.warning(f"Post-merge loudnorm analysis failed, skipping normalization: {e}")
-        shutil.copy2(video_path, output_path)
-        return output_path
+        return video_path
 
     logger.info(
         f"Loudnorm (post-merge): I={analysis.input_i:.1f}dB "
@@ -586,6 +587,7 @@ def _transcode_single(
     context: PipelineContext | None = None,
     file_index: int = 0,
     total_count: int = 1,
+    cached_metadata: VideoMetadata | None = None,
 ) -> TranscodeResult:
     """단일 파일을 독립 Transcoder 컨텍스트에서 트랜스코딩한다.
 
@@ -599,6 +601,8 @@ def _transcode_single(
         context: 파이프라인 진행률 컨텍스트 (TUI 연동용, None이면 기존 동작)
         file_index: 파일 인덱스 (0-based)
         total_count: 전체 파일 수
+        cached_metadata: ``_can_skip_transcoding`` 등이 이미 probe한 메타데이터.
+            ``None``이면 ffprobe로 새로 감지한다.
 
     Returns:
         ``TranscodeResult`` (출력 경로, video DB ID, 클립 메타데이터)
@@ -622,7 +626,9 @@ def _transcode_single(
     fade_out = fade_config.fade_out if fade_config else None
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
-        metadata = detect_metadata(video_file.path)
+        metadata = (
+            cached_metadata if cached_metadata is not None else detect_metadata(video_file.path)
+        )
         if opts.watermark:
             watermark_text = opts.watermark_text or _make_watermark_text(video_file, metadata)
         else:
@@ -673,6 +679,7 @@ def _transcode_parallel(
     max_workers: int,
     opts: TranscodeOptions,
     context: PipelineContext | None = None,
+    metadata_cache: dict[Path, VideoMetadata] | None = None,
 ) -> list[TranscodeResult]:
     """``ThreadPoolExecutor`` 를 사용한 병렬 트랜스코딩.
 
@@ -685,6 +692,8 @@ def _transcode_parallel(
         max_workers: 최대 동시 워커 수
         opts: 트랜스코딩 공통 옵션 (denoise, loudnorm, fade 등)
         context: 파이프라인 진행률 컨텍스트 (TUI 연동용, None이면 기존 동작)
+        metadata_cache: ``_can_skip_transcoding`` 등이 사전에 probe한 메타데이터.
+            제공되면 워커가 ffprobe를 재호출하지 않는다.
 
     Returns:
         원본 순서가 유지된 트랜스코딩 결과 리스트
@@ -692,6 +701,7 @@ def _transcode_parallel(
     Raises:
         RuntimeError: 하나 이상의 워커가 실패한 경우
     """
+    cache = metadata_cache or {}
     results: dict[int, TranscodeResult] = {}
     completed_count = 0
     total_count = len(video_files)
@@ -724,6 +734,7 @@ def _transcode_parallel(
                     context,
                     i,
                     total_count,
+                    cache.get(video_file.path),
                 )
             ] = i
 
@@ -750,6 +761,7 @@ def _transcode_sequential(
     temp_dir: Path,
     opts: TranscodeOptions,
     context: PipelineContext | None = None,
+    metadata_cache: dict[Path, VideoMetadata] | None = None,
 ) -> list[TranscodeResult]:
     """영상 파일을 순차적으로 트랜스코딩한다.
 
@@ -761,12 +773,15 @@ def _transcode_sequential(
         temp_dir: 트랜스코딩 결과 저장 임시 디렉토리
         opts: 트랜스코딩 공통 옵션 (오디오·페이드 설정)
         context: 파이프라인 진행률 컨텍스트 (TUI 연동용, None이면 기존 동작)
+        metadata_cache: ``_can_skip_transcoding`` 등이 사전에 probe한 메타데이터.
+            제공되면 ffprobe를 재호출하지 않는다.
 
     Returns:
         트랜스코딩 결과 리스트 (출력 경로, video_id, 클립 정보)
     """
     results: list[TranscodeResult] = []
     progress = MultiProgressBar(total_files=len(video_files))
+    cache = metadata_cache or {}
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
         for i, video_file in enumerate(video_files):
@@ -799,7 +814,7 @@ def _transcode_sequential(
             fade_in = fade_config.fade_in if fade_config else None
             fade_out = fade_config.fade_out if fade_config else None
 
-            metadata = detect_metadata(video_file.path)
+            metadata = cache.get(video_file.path) or detect_metadata(video_file.path)
             if opts.watermark:
                 watermark_text = opts.watermark_text or _make_watermark_text(video_file, metadata)
             else:
@@ -951,52 +966,84 @@ def _can_skip_transcoding(
         "audio_codec",
         "audio_sample_rate",
         "audio_channels",
+        "audio_stream_count",
         "has_audio",
         "is_portrait",
     )
+    # 메타데이터 단계까지 probe가 진행되면, 스킵 자격이 없더라도 일반 트랜스코딩
+    # 경로(_transcode_parallel/sequential)에서 캐시를 재사용할 수 있도록 늘 동봉한다.
     for m in metadatas[1:]:
         for field in homogeneous_fields:
             if getattr(m, field) != getattr(first, field):
-                return False, f"heterogeneous {field} across inputs", {}
+                return False, f"heterogeneous {field} across inputs", metadata_cache
         if abs(m.fps - first.fps) > _SKIP_TARGET_FPS_TOLERANCE:
-            return False, "heterogeneous fps across inputs", {}
+            return False, "heterogeneous fps across inputs", metadata_cache
 
     # PROFILE_SDR 정합 검사 (기준 파일 first만 검사하면 충분 — 위에서 균질성 보장)
     if first.codec != _SKIP_TARGET_VIDEO_CODEC:
-        return False, f"video codec {first.codec!r} ≠ {_SKIP_TARGET_VIDEO_CODEC!r}", {}
+        return (
+            False,
+            f"video codec {first.codec!r} ≠ {_SKIP_TARGET_VIDEO_CODEC!r}",
+            metadata_cache,
+        )
     if first.pixel_format != _SKIP_TARGET_PIXEL_FORMAT:
-        return False, f"pixel format {first.pixel_format!r} ≠ {_SKIP_TARGET_PIXEL_FORMAT!r}", {}
+        return (
+            False,
+            f"pixel format {first.pixel_format!r} ≠ {_SKIP_TARGET_PIXEL_FORMAT!r}",
+            metadata_cache,
+        )
     if first.width != _SKIP_TARGET_WIDTH or first.height != _SKIP_TARGET_HEIGHT:
         return (
             False,
             f"resolution {first.width}x{first.height} ≠ {_SKIP_TARGET_WIDTH}x{_SKIP_TARGET_HEIGHT}",
-            {},
+            metadata_cache,
         )
     if abs(first.fps - _SKIP_TARGET_FPS) > _SKIP_TARGET_FPS_TOLERANCE:
-        return False, f"fps {first.fps:.3f} ≠ 29.97", {}
+        return False, f"fps {first.fps:.3f} ≠ 29.97", metadata_cache
     if first.is_portrait:
-        return False, "portrait orientation requires layout filter", {}
+        return False, "portrait orientation requires layout filter", metadata_cache
     if first.is_vfr:
-        return False, "variable frame rate", {}
+        return False, "variable frame rate", metadata_cache
     # HDR transfer는 SDR로 변환이 필요하므로 스킵 불가.
     # color_transfer가 None인 경우는 모호하지만 ffprobe가 bt709 SDR을 종종 None으로 보고하므로 허용.
     if first.color_transfer not in (None, "bt709"):
-        return False, f"color transfer {first.color_transfer!r} requires conversion", {}
+        return (
+            False,
+            f"color transfer {first.color_transfer!r} requires conversion",
+            metadata_cache,
+        )
     if first.color_space not in (None, "bt709"):
-        return False, f"color space {first.color_space!r} requires conversion", {}
+        return (
+            False,
+            f"color space {first.color_space!r} requires conversion",
+            metadata_cache,
+        )
     if first.color_primaries not in (None, "bt709"):
-        return False, f"color primaries {first.color_primaries!r} requires conversion", {}
+        return (
+            False,
+            f"color primaries {first.color_primaries!r} requires conversion",
+            metadata_cache,
+        )
     if first.sar not in (None, "1:1"):
-        return False, f"non-square pixels (sar={first.sar!r})", {}
+        return False, f"non-square pixels (sar={first.sar!r})", metadata_cache
     if first.has_audio:
         if first.audio_codec != _SKIP_TARGET_AUDIO_CODEC:
             return (
                 False,
                 f"audio codec {first.audio_codec!r} ≠ {_SKIP_TARGET_AUDIO_CODEC!r}",
-                {},
+                metadata_cache,
             )
         if first.audio_sample_rate != _SKIP_TARGET_AUDIO_SAMPLE_RATE:
-            return False, f"sample rate {first.audio_sample_rate} ≠ 48000", {}
+            return False, f"sample rate {first.audio_sample_rate} ≠ 48000", metadata_cache
+    # PROFILE_SDR 출력은 단일 오디오 스트림만 가지므로 다중 오디오 트랙 입력
+    # (외부 마이크 + 내장 마이크 등)은 stream-copy concat이 보장되지 않는다.
+    # 균질성 검사로 모든 파일 간 일치는 이미 확인됐으므로 첫 파일만 확인하면 충분.
+    if first.audio_stream_count > 1:
+        return (
+            False,
+            f"multi-track audio (count={first.audio_stream_count}) not concat-safe",
+            metadata_cache,
+        )
 
     return True, "all inputs already match PROFILE_SDR with no filters enabled", metadata_cache
 
@@ -1135,10 +1182,20 @@ def _cleanup_temp(
     results: list[TranscodeResult],
     final_path: Path,
 ) -> None:
-    """임시 파일 및 폴더를 정리한다."""
+    """임시 파일 및 폴더를 정리한다.
+
+    트랜스코딩 스킵(stream-copy concat) 경로에서는
+    ``TranscodeResult.output_path``가 *원본 입력 파일 경로*를 가리킨다.
+    이를 무차별 unlink하면 사용자의 원본 클립이 삭제되므로,
+    ``temp_dir`` 하위의 파일만 삭제하도록 제한한다.
+    """
     logger.info("Cleaning up temporary files...")
     for r in results:
-        if r.output_path.exists() and r.output_path != final_path:
+        if (
+            r.output_path.exists()
+            and r.output_path != final_path
+            and temp_dir in r.output_path.parents
+        ):
             if _is_file_in_use(r.output_path):
                 logger.warning(f"  Skipping (in use by another process): {r.output_path}")
             else:
@@ -1372,12 +1429,23 @@ def run_pipeline(
         logger.debug(f"Skip not eligible: {skip_reason}")
         logger.info(f"Starting parallel transcoding (workers: {parallel})...")
         results = _transcode_parallel(
-            video_files, temp_dir, parallel, transcode_opts, context=context
+            video_files,
+            temp_dir,
+            parallel,
+            transcode_opts,
+            context=context,
+            metadata_cache=metadata_cache,
         )
     else:
         logger.debug(f"Skip not eligible: {skip_reason}")
         logger.info("Starting transcoding...")
-        results = _transcode_sequential(video_files, temp_dir, transcode_opts, context=context)
+        results = _transcode_sequential(
+            video_files,
+            temp_dir,
+            transcode_opts,
+            context=context,
+            metadata_cache=metadata_cache,
+        )
 
     video_ids = [r.video_id for r in results]
     main_start = template_intro_count
@@ -1457,8 +1525,13 @@ def run_pipeline(
             video_path=final_path,
             output_path=temp_loud_output,
         )
-        shutil.move(str(normalized_path), str(final_path))
-        logger.info(f"Loudnorm applied: {final_path}")
+        # 정규화가 스킵된 경우(오디오 없음·분석 실패) 원본 경로 그대로 반환되므로
+        # ``shutil.move`` 호출 시 ``SameFileError``가 발생한다. 경로가 동일하면 무동작.
+        if normalized_path != final_path:
+            shutil.move(str(normalized_path), str(final_path))
+            logger.info(f"Loudnorm applied: {final_path}")
+        else:
+            logger.info("Loudnorm skipped (no audio or analysis failed); keeping merged output")
 
     # 3.5 BGM 믹싱 (옵션)
     if validated_args.bgm_path:

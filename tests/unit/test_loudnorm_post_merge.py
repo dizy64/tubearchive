@@ -47,7 +47,11 @@ def merged_video(tmp_path: Path) -> Path:
 
 
 def test_skips_when_no_audio_stream(merged_video: Path, tmp_path: Path) -> None:
-    """오디오 스트림이 없으면 분석/2nd pass를 건너뛰고 원본을 복사한다."""
+    """오디오 스트림이 없으면 분석/2nd pass를 건너뛰고 원본 경로를 그대로 반환한다.
+
+    수 GB 파일을 굳이 ``shutil.copy2``로 복제하지 않는다. 호출부는 반환 경로와
+    입력 경로가 동일할 경우 ``shutil.move``를 건너뛰어야 한다.
+    """
     from tubearchive.app.cli.pipeline import _apply_post_merge_loudnorm
 
     output = tmp_path / "normalized.mp4"
@@ -58,13 +62,13 @@ def test_skips_when_no_audio_stream(merged_video: Path, tmp_path: Path) -> None:
     ):
         result = _apply_post_merge_loudnorm(merged_video, output)
 
-    assert result == output
-    assert output.exists()
+    assert result == merged_video, "스킵 시 원본 경로를 그대로 반환해야 함"
+    assert not output.exists(), "스킵 시 출력 파일을 생성하지 않아야 함 (디스크 I/O 절약)"
     mock_run.assert_not_called()
 
 
-def test_analysis_failure_falls_back_to_copy(merged_video: Path, tmp_path: Path) -> None:
-    """1st pass 분석이 실패하면 정규화를 건너뛰고 원본을 복사한다 (graceful)."""
+def test_analysis_failure_falls_back_to_original_path(merged_video: Path, tmp_path: Path) -> None:
+    """1st pass 분석이 실패하면 정규화를 건너뛰고 원본 경로를 그대로 반환한다 (graceful)."""
     from tubearchive.app.cli.pipeline import _apply_post_merge_loudnorm
     from tubearchive.infra.ffmpeg.executor import FFmpegError
 
@@ -81,8 +85,8 @@ def test_analysis_failure_falls_back_to_copy(merged_video: Path, tmp_path: Path)
 
         result = _apply_post_merge_loudnorm(merged_video, output)
 
-    assert result == output
-    assert output.exists()
+    assert result == merged_video
+    assert not output.exists()
     # 2nd pass(ffmpeg run)는 호출되지 않아야 한다
     mock_run.assert_not_called()
 
