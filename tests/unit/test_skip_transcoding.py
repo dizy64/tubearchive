@@ -74,7 +74,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is True
         assert "match PROFILE_SDR" in reason
@@ -89,7 +89,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "denoise" in reason
@@ -104,7 +104,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "LUT" in reason
@@ -119,7 +119,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "stabilize" in reason
@@ -135,7 +135,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "fade" in reason
@@ -151,7 +151,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is True, reason
 
@@ -166,7 +166,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, intro, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, intro, None)
 
         assert can_skip is False
         assert "template" in reason
@@ -181,7 +181,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(codec="h264"),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "h264" in reason
@@ -196,7 +196,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(width=1920, height=1080),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "1920x1080" in reason
@@ -211,7 +211,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(color_transfer="arib-std-b67"),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "color transfer" in reason
@@ -226,7 +226,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(width=2160, height=3840, is_portrait=True),
         ):
-            can_skip, _reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, _reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
 
@@ -240,7 +240,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(is_vfr=True),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "variable frame rate" in reason
@@ -255,7 +255,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(audio_codec="pcm_s16le"),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "audio codec" in reason
@@ -270,7 +270,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(audio_sample_rate=96000),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "sample rate" in reason
@@ -289,7 +289,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             side_effect=lambda *_a, **_k: next(metas),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "heterogeneous codec" in reason
@@ -304,7 +304,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(sar="40:33"),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "non-square pixels" in reason
@@ -319,7 +319,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             return_value=_profile_sdr_metadata(sar=None),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is True, reason
 
@@ -333,7 +333,7 @@ class TestCanSkipTranscoding:
             "tubearchive.app.cli.pipeline.detect_metadata",
             side_effect=RuntimeError("ffprobe gone"),
         ):
-            can_skip, reason = _can_skip_transcoding(files, opts, args, None, None)
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
 
         assert can_skip is False
         assert "probe failed" in reason
@@ -348,21 +348,19 @@ class TestRunSkipTranscoding:
             _make_video_file(tmp_path, "a.mp4"),
             _make_video_file(tmp_path, "b.mp4"),
         ]
+        metadata_cache = {
+            files[0].path: _profile_sdr_metadata(),
+            files[1].path: _profile_sdr_metadata(),
+        }
 
-        with (
-            patch("tubearchive.app.cli.pipeline.Transcoder") as mock_transcoder_cls,
-            patch(
-                "tubearchive.app.cli.pipeline.detect_metadata",
-                return_value=_profile_sdr_metadata(),
-            ),
-        ):
+        with patch("tubearchive.app.cli.pipeline.Transcoder") as mock_transcoder_cls:
             mock_transcoder = MagicMock()
             mock_transcoder.__enter__.return_value = mock_transcoder
-            mock_transcoder._register_video.side_effect = [11, 12]
+            mock_transcoder.register_video.side_effect = [11, 12]
             mock_transcoder.resume_mgr.get_or_create_job.side_effect = [101, 102]
             mock_transcoder_cls.return_value = mock_transcoder
 
-            results = _run_skip_transcoding(files, tmp_path)
+            results = _run_skip_transcoding(files, tmp_path, metadata_cache)
 
         assert [r.output_path for r in results] == [files[0].path, files[1].path]
         assert [r.video_id for r in results] == [11, 12]
@@ -370,3 +368,25 @@ class TestRunSkipTranscoding:
         mark_calls = mock_transcoder.job_repo.mark_completed.call_args_list
         assert mark_calls[0].args == (101, files[0].path)
         assert mark_calls[1].args == (102, files[1].path)
+
+    def test_falls_back_to_probe_when_cache_misses(self, tmp_path: Path) -> None:
+        """캐시에 없는 경로는 ``detect_metadata``로 재-probe해야 한다 (안전 그물)."""
+        files = [_make_video_file(tmp_path, "a.mp4")]
+
+        with (
+            patch("tubearchive.app.cli.pipeline.Transcoder") as mock_transcoder_cls,
+            patch(
+                "tubearchive.app.cli.pipeline.detect_metadata",
+                return_value=_profile_sdr_metadata(),
+            ) as mock_probe,
+        ):
+            mock_transcoder = MagicMock()
+            mock_transcoder.__enter__.return_value = mock_transcoder
+            mock_transcoder.register_video.return_value = 1
+            mock_transcoder.resume_mgr.get_or_create_job.return_value = 10
+            mock_transcoder_cls.return_value = mock_transcoder
+
+            results = _run_skip_transcoding(files, tmp_path, metadata_cache={})
+
+        assert len(results) == 1
+        mock_probe.assert_called_once_with(files[0].path)

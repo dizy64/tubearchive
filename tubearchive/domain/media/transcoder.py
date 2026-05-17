@@ -167,8 +167,12 @@ class Transcoder:
 
     # ---------- 내부 헬퍼 ----------
 
-    def _register_video(self, video_file: VideoFile, metadata: VideoMetadata) -> int:
-        """영상을 DB에 등록하고 video_id를 반환한다 (이미 존재하면 기존 ID)."""
+    def register_video(self, video_file: VideoFile, metadata: VideoMetadata) -> int:
+        """영상을 DB에 등록하고 video_id를 반환한다 (이미 존재하면 기존 ID).
+
+        트랜스코딩 단계뿐 아니라 스킵 경로(``_run_skip_transcoding``)에서도
+        호출되므로 public API로 노출한다.
+        """
         existing = self.video_repo.get_by_path(video_file.path)
         if existing:
             return int(existing["id"])
@@ -436,7 +440,7 @@ class Transcoder:
         # 1. 메타데이터 감지 및 DB 등록
         metadata = detect_metadata(video_file.path) if metadata is None else metadata
         logger.info(f"Detected: {metadata.device_model}, {metadata.width}x{metadata.height}")
-        video_id = self._register_video(video_file, metadata)
+        video_id = self.register_video(video_file, metadata)
 
         # 2. 이미 처리된 결과가 있으면 스킵
         existing = self._find_existing_result(video_id, video_file.path)
