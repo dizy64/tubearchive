@@ -44,8 +44,18 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# Design docs (Obsidian에서 관리)
-docs/
+# Internal docs
+docs/plans/
+docs/planning/
+docs/proposals/
+docs/drafts/
+docs/notes/
+docs/**/*plan*.md
+docs/**/*planning*.md
+docs/**/*proposal*.md
+docs/**/*draft*.md
+docs/**/*기획*.md
+docs/**/*계획*.md
 
 # Project-specific
 tubearchive.db
