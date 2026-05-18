@@ -223,5 +223,5 @@ class OptionsPane(Widget):
                 self.query_one(f"#{wid}", Select).value = str(value)
         elif opt.widget in ("input", "input_float", "input_int"):
             with contextlib.suppress(Exception):
-                raw = "" if value in (0, 0.0, "") else str(value)
+                raw = "" if value is None or value == "" else str(value)
                 self.query_one(f"#{wid}", Input).value = raw

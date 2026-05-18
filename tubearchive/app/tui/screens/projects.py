@@ -66,5 +66,5 @@ class ProjectsPane(Static):
                 )
         except Exception as exc:
             table.clear()
-            db_path = get_default_db_path()
+            db_path = str(get_default_db_path())
             table.add_row("ERR", f"[red]{db_path}: {exc}[/]", "-", "-", "-", "-", "-")

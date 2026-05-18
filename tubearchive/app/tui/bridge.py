@@ -39,6 +39,17 @@ def build_validated_args(
     template_intro = _to_path_or_none(state.template_intro)
     template_outro = _to_path_or_none(state.template_outro)
     archive_originals = _to_path_or_none(state.archive_originals)
+    _validate_external_audio_options(
+        external_audio_path=external_audio_path,
+        external_audio_dir=external_audio_dir,
+        external_audio_scope=state.external_audio_scope,
+        sync_audio_clap=state.sync_audio_clap,
+        external_audio_drift_correction=state.external_audio_drift_correction,
+        external_audio_mode=state.external_audio_mode,
+        camera_audio_volume=state.camera_audio_volume,
+        external_audio_min_confidence=state.external_audio_min_confidence,
+        external_audio_match_window=state.external_audio_match_window,
+    )
 
     timelapse_speed: int | None = None
     if state.timelapse_speed.strip():
@@ -148,3 +159,42 @@ def _to_path_or_none(value: str) -> Path | None:
     if not stripped:
         return None
     return Path(stripped).expanduser()
+
+
+def _validate_external_audio_options(
+    *,
+    external_audio_path: Path | None,
+    external_audio_dir: Path | None,
+    external_audio_scope: str,
+    sync_audio_clap: bool,
+    external_audio_drift_correction: bool,
+    external_audio_mode: str,
+    camera_audio_volume: float,
+    external_audio_min_confidence: float,
+    external_audio_match_window: float,
+) -> None:
+    """TUI에서 조합 가능한 외부 오디오 옵션을 CLI 검증 규칙과 맞춘다."""
+    if external_audio_scope not in {"single", "long"}:
+        raise ValueError("외부 오디오 범위는 single 또는 long이어야 합니다.")
+    if external_audio_scope == "long" and external_audio_path is None:
+        raise ValueError("긴 녹음 범위는 외부 오디오 파일이 필요합니다.")
+    if external_audio_scope == "long" and external_audio_dir is not None:
+        raise ValueError("긴 녹음 범위는 외부 오디오 후보 디렉토리와 함께 사용할 수 없습니다.")
+    if sync_audio_clap and external_audio_path is None and external_audio_dir is None:
+        raise ValueError("박수/피크 자동 싱크는 외부 오디오 파일 또는 후보 디렉토리가 필요합니다.")
+    if (
+        external_audio_drift_correction
+        and external_audio_path is None
+        and external_audio_dir is None
+    ):
+        raise ValueError("장시간 Drift 보정은 외부 오디오 파일 또는 후보 디렉토리가 필요합니다.")
+    if external_audio_drift_correction and not sync_audio_clap:
+        raise ValueError("장시간 Drift 보정은 박수/피크 자동 싱크가 필요합니다.")
+    if external_audio_mode not in {"replace", "mix"}:
+        raise ValueError("외부 오디오 합성 방식은 replace 또는 mix여야 합니다.")
+    if not (0.0 <= camera_audio_volume <= 1.0):
+        raise ValueError("카메라 오디오 볼륨은 0.0 이상 1.0 이하여야 합니다.")
+    if not (0.0 < external_audio_min_confidence <= 1.0):
+        raise ValueError("자동 싱크 최소 신뢰도는 0.0 초과 1.0 이하여야 합니다.")
+    if external_audio_match_window <= 0:
+        raise ValueError("외부 오디오 후보 매칭 시간 창은 0보다 커야 합니다.")

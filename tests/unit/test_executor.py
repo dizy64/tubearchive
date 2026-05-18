@@ -71,6 +71,18 @@ class TestFFmpegExecutor:
         """FFmpegExecutor 인스턴스."""
         return FFmpegExecutor()
 
+    def test_ffprobe_path_replaces_only_binary_name(self) -> None:
+        """ffprobe 경로 추론은 상위 디렉토리의 ffmpeg 문자열을 건드리지 않는다."""
+        executor = FFmpegExecutor(ffmpeg_path="/opt/ffmpeg-tools/bin/ffmpeg")
+
+        assert executor.ffprobe_path == "/opt/ffmpeg-tools/bin/ffprobe"
+
+    def test_ffprobe_path_falls_back_when_binary_name_is_custom(self) -> None:
+        """커스텀 ffmpeg 래퍼명은 PATH의 ffprobe를 사용한다."""
+        executor = FFmpegExecutor(ffmpeg_path="/opt/bin/video-encoder")
+
+        assert executor.ffprobe_path == "ffprobe"
+
     def test_build_transcode_command(self, executor: FFmpegExecutor) -> None:
         """트랜스코딩 명령어 빌드."""
         from pathlib import Path

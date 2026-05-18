@@ -22,6 +22,8 @@ SUPPORTED_EXTERNAL_AUDIO_EXTENSIONS = {
     ".wave",
 }
 DEFAULT_EXTERNAL_AUDIO_MATCH_WINDOW_SECONDS = 300.0
+AUDIO_EXTRACTION_TIMEOUT_SECONDS = 300.0
+AUDIO_PROBE_TIMEOUT_SECONDS = 30.0
 
 
 class AudioSyncError(ValueError):
@@ -235,7 +237,18 @@ def extract_mono_pcm_samples(
         "s16le",
         "pipe:1",
     ]
-    result = subprocess.run(cmd, capture_output=True, check=False)
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            check=False,
+            timeout=AUDIO_EXTRACTION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AudioSyncError(
+            "Timed out extracting audio samples from "
+            f"{media_path} after {AUDIO_EXTRACTION_TIMEOUT_SECONDS:.0f}s"
+        ) from exc
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="replace").strip()
         raise AudioSyncError(f"Failed to extract audio samples from {media_path}: {stderr}")
@@ -437,7 +450,18 @@ def probe_media_duration(path: Path, *, ffprobe_path: str = "ffprobe") -> float:
         "default=noprint_wrappers=1:nokey=1",
         str(path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=AUDIO_PROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AudioSyncError(
+            f"Timed out probing media duration for {path} after {AUDIO_PROBE_TIMEOUT_SECONDS:.0f}s"
+        ) from exc
     if result.returncode != 0:
         stderr = result.stderr.strip()
         raise AudioSyncError(f"Failed to probe media duration for {path}: {stderr}")

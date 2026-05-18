@@ -109,6 +109,14 @@ class FFmpegExecutor:
         """초기화."""
         self.ffmpeg_path = ffmpeg_path
 
+    @property
+    def ffprobe_path(self) -> str:
+        """ffmpeg 실행 파일명 기준으로 대응되는 ffprobe 경로를 반환한다."""
+        ffmpeg = Path(self.ffmpeg_path)
+        if "ffmpeg" not in ffmpeg.name:
+            return "ffprobe"
+        return str(ffmpeg.with_name(ffmpeg.name.replace("ffmpeg", "ffprobe", 1)))
+
     def build_transcode_command(
         self,
         input_path: Path,

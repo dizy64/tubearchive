@@ -209,7 +209,6 @@ async def test_pipeline_audio_browser_long_selection_updates_options(tmp_path: P
     from tubearchive.app.tui.widgets.option_panels import OptionsPane
 
     audio_path = tmp_path / "long.wav"
-    audio_path.touch()
     app = TubeArchiveApp(initial_path=tmp_path)
 
     async with app.run_test(headless=True, size=(120, 40)):
@@ -238,7 +237,6 @@ async def test_pipeline_audio_browser_directory_selection_updates_options(tmp_pa
     from tubearchive.app.tui.widgets.option_panels import OptionsPane
 
     old_audio_path = tmp_path / "old.wav"
-    old_audio_path.touch()
     app = TubeArchiveApp(initial_path=tmp_path)
 
     async with app.run_test(headless=True, size=(120, 40)):
@@ -255,6 +253,23 @@ async def test_pipeline_audio_browser_directory_selection_updates_options(tmp_pa
         assert state.external_audio_path == ""
         assert state.external_audio_dir == str(tmp_path.resolve())
         assert state.external_audio_scope == "single"
+
+
+@pytest.mark.asyncio
+async def test_options_pane_preserves_zero_float_value() -> None:
+    """input_float 필드에 0.0을 설정해도 빈 문자열로 손실하지 않는다."""
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.option_panels import OptionsPane
+
+    app = TubeArchiveApp()
+
+    async with app.run_test(headless=True, size=(120, 40)):
+        options = app.query_one(OptionsPane)
+        options.set_field_value("camera_audio_volume", 0.0)
+
+        state = options.collect_state()
+
+    assert state.camera_audio_volume == 0.0
 
 
 # ---------------------------------------------------------------------------

@@ -777,6 +777,26 @@ class TestValidateArgs:
         with pytest.raises(ValueError, match="--external-audio"):
             validate_args(args)
 
+    def test_external_audio_drift_correction_requires_clap_sync(self, tmp_path: Path) -> None:
+        """drift 보정은 두 clap 기준점을 쓰므로 clap sync 활성화가 필요하다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        external_audio = tmp_path / "mic.wav"
+        external_audio.touch()
+
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                "--external-audio",
+                str(external_audio),
+                "--external-audio-drift-correction",
+                str(video_file),
+            ]
+        )
+
+        with pytest.raises(ValueError, match="--sync-audio-clap"):
+            validate_args(args)
+
     def test_camera_audio_volume_requires_valid_range(self, tmp_path: Path) -> None:
         """카메라 오디오 믹스 볼륨은 0.0~1.0 범위여야 한다."""
         video_file = tmp_path / "video.mp4"

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -13,7 +15,9 @@ from tubearchive.domain.media.audio_sync import (
     estimate_clap_sync_offset,
     estimate_clap_sync_with_drift,
     estimate_external_audio_segment,
+    extract_mono_pcm_samples,
     find_transient_candidates,
+    probe_media_duration,
     select_external_audio_candidate,
 )
 
@@ -140,6 +144,42 @@ def test_select_external_audio_candidate_chooses_best_match(
 
     assert selected.path == best
     assert selected.score > 0.8
+
+
+def test_extract_mono_pcm_samples_times_out() -> None:
+    """FFmpeg 샘플 추출이 멈추면 명확한 AudioSyncError로 실패한다."""
+    with (
+        patch(
+            "tubearchive.domain.media.audio_sync.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=300),
+        ),
+        pytest.raises(AudioSyncError, match="Timed out extracting audio samples"),
+    ):
+        extract_mono_pcm_samples(Path("clip.mov"))
+
+
+def test_probe_media_duration_times_out() -> None:
+    """ffprobe 길이 조회가 멈추면 명확한 AudioSyncError로 실패한다."""
+    with (
+        patch(
+            "tubearchive.domain.media.audio_sync.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=30),
+        ),
+        pytest.raises(AudioSyncError, match="Timed out probing media duration"),
+    ):
+        probe_media_duration(Path("external.wav"))
+
+
+def test_probe_media_duration_passes_timeout_to_subprocess() -> None:
+    """ffprobe 호출에는 짧은 timeout을 반드시 전달한다."""
+    mock_result = MagicMock(returncode=0, stdout="12.5\n", stderr="")
+    with patch(
+        "tubearchive.domain.media.audio_sync.subprocess.run",
+        return_value=mock_result,
+    ) as mock_run:
+        assert probe_media_duration(Path("external.wav")) == 12.5
+
+    assert mock_run.call_args.kwargs["timeout"] == 30.0
 
 
 def test_estimate_external_audio_segment_finds_matching_region() -> None:

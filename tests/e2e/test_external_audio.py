@@ -10,6 +10,7 @@
 import os
 import shutil
 import subprocess
+from array import array
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,10 @@ from .conftest import (
 )
 
 pytestmark = [
-    pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed"),
+    pytest.mark.skipif(
+        shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+        reason="ffmpeg/ffprobe not installed",
+    ),
     pytest.mark.e2e_shard2,
 ]
 
@@ -69,6 +73,51 @@ def create_pulse_audio(path: Path, *, duration: float, pulses: tuple[float, ...]
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg failed: {result.stderr}")
     return path
+
+
+def estimate_audio_frequency(
+    path: Path,
+    *,
+    sample_rate: int = 8000,
+    duration: float = 0.75,
+) -> float:
+    """출력 오디오의 대략적 주파수를 zero-crossing으로 추정한다."""
+    cmd = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-i",
+        str(path),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-t",
+        str(duration),
+        "-f",
+        "s16le",
+        "pipe:1",
+    ]
+    result = subprocess.run(cmd, capture_output=True, timeout=15)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {result.stderr.decode(errors='replace')}")
+
+    samples = array("h")
+    samples.frombytes(result.stdout)
+    if not samples:
+        raise RuntimeError("no audio samples extracted")
+
+    previous = 0
+    crossings = 0
+    for sample in samples:
+        sign = 1 if sample > 0 else -1 if sample < 0 else previous
+        if previous and sign != previous:
+            crossings += 1
+        previous = sign
+
+    analyzed_duration = len(samples) / sample_rate
+    return crossings / (2 * analyzed_duration)
 
 
 def create_pulse_video(path: Path, *, duration: float, pulses: tuple[float, ...]) -> Path:
@@ -168,6 +217,7 @@ class TestExternalAudio:
         assert result_path.stat().st_size > 0
         assert get_audio_stream_count(result_path) >= 1
         assert abs(get_video_duration(result_path) - 2.0) < 1.0
+        assert estimate_audio_frequency(result_path) > 700.0
 
     def test_external_audio_shorter_than_video_preserves_video_duration(
         self,

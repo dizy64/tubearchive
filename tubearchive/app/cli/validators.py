@@ -327,6 +327,8 @@ def validate_args(
         raise ValueError(
             "--external-audio-drift-correction requires --external-audio or --external-audio-dir"
         )
+    if external_audio_drift_correction and not sync_audio_clap:
+        raise ValueError("--external-audio-drift-correction requires --sync-audio-clap")
 
     external_audio_offset = float(getattr(args, "external_audio_offset", 0.0) or 0.0)
     external_audio_mode = str(getattr(args, "external_audio_mode", "replace") or "replace")

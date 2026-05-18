@@ -549,7 +549,7 @@ class Transcoder:
                     external_audio_dir,
                     video_creation_time=video_file.creation_time,
                     video_duration_seconds=metadata.duration_seconds,
-                    ffprobe_path=self.executor.ffmpeg_path.replace("ffmpeg", "ffprobe"),
+                    ffprobe_path=self.executor.ffprobe_path,
                     match_window_seconds=external_audio_match_window,
                 )
                 resolved_external_audio_path = selected_audio.path
