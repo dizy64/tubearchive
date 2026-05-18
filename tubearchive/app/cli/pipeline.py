@@ -1065,7 +1065,7 @@ def _can_skip_transcoding(
     if first.pixel_format not in _SKIP_TARGET_PIXEL_FORMATS:
         return (
             False,
-            f"pixel format {first.pixel_format!r} not in {_SKIP_TARGET_PIXEL_FORMATS}",
+            f"pixel format {first.pixel_format!r} not in {sorted(_SKIP_TARGET_PIXEL_FORMATS)}",
             metadata_cache,
         )
     if first.width != _SKIP_TARGET_WIDTH or first.height != _SKIP_TARGET_HEIGHT:
