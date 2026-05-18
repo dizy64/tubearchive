@@ -31,6 +31,10 @@ from tubearchive.app.cli.context import (
 )
 from tubearchive.app.cli.validators import ValidatedArgs
 from tubearchive.config import HooksConfig
+from tubearchive.domain.media.audio_sync import (
+    ExternalAudioSegment,
+    calculate_external_audio_segments,
+)
 from tubearchive.domain.media.backup import BackupExecutor, BackupResult
 from tubearchive.domain.media.detector import detect_metadata
 from tubearchive.domain.media.grouper import (
@@ -124,6 +128,17 @@ class TranscodeOptions:
         denoise: 오디오 노이즈 제거 여부 (afftdn)
         denoise_level: 노이즈 제거 강도 (``light`` | ``medium`` | ``heavy``)
         normalize_audio: EBU R128 loudnorm 2-pass 적용 여부
+        external_audio_path: 영상 내장 오디오 대신 사용할 외부 오디오 파일
+        external_audio_dir: 영상과 자동 매칭할 외부 오디오 후보 디렉토리
+        external_audio_scope: 외부 오디오 적용 범위 (single/long)
+        external_audio_segments: 긴 외부 녹음의 클립별 구간 맵
+        sync_audio_clap: 박수/피크 기반 자동 싱크 여부
+        external_audio_drift_correction: 장시간 drift 보정 여부
+        external_audio_offset: 외부 오디오에 적용할 수동 offset(초)
+        external_audio_mode: 외부 오디오 적용 방식 (replace/mix)
+        camera_audio_volume: mix 모드에서 카메라 내장 오디오 볼륨
+        external_audio_min_confidence: 자동 싱크 최소 신뢰도
+        external_audio_match_window: 후보 선택 시 파일 시각 매칭 창(초)
         fade_map: 파일별 페이드 설정 맵 (그룹 경계 기반)
         fade_duration: 기본 페이드 시간 (초)
         trim_silence: 무음 구간 제거 여부
@@ -138,6 +153,17 @@ class TranscodeOptions:
     denoise: bool = False
     denoise_level: str = "medium"
     normalize_audio: bool = False
+    external_audio_path: Path | None = None
+    external_audio_dir: Path | None = None
+    external_audio_scope: str = "single"
+    external_audio_segments: dict[Path, ExternalAudioSegment] | None = None
+    sync_audio_clap: bool = False
+    external_audio_drift_correction: bool = False
+    external_audio_offset: float = 0.0
+    external_audio_mode: str = "replace"
+    camera_audio_volume: float = 0.1
+    external_audio_min_confidence: float = 0.6
+    external_audio_match_window: float = 300.0
     fade_map: dict[Path, FadeConfig] | None = None
     fade_duration: float = 0.5
     watermark: bool = False
@@ -533,6 +559,13 @@ def _transcode_single(
     fade_config = opts.fade_map.get(video_file.path) if opts.fade_map else None
     fade_in = fade_config.fade_in if fade_config else None
     fade_out = fade_config.fade_out if fade_config else None
+    external_segment = (
+        opts.external_audio_segments.get(video_file.path) if opts.external_audio_segments else None
+    )
+    external_audio_path = external_segment.path if external_segment else opts.external_audio_path
+    external_audio_start = external_segment.start_seconds if external_segment else None
+    external_audio_duration = external_segment.duration_seconds if external_segment else None
+    sync_audio_clap = opts.sync_audio_clap and external_segment is None
 
     with Transcoder(temp_dir=temp_dir) as transcoder:
         metadata = detect_metadata(video_file.path)
@@ -547,6 +580,17 @@ def _transcode_single(
             denoise=opts.denoise,
             denoise_level=opts.denoise_level,
             normalize_audio=opts.normalize_audio,
+            external_audio_path=external_audio_path,
+            external_audio_dir=opts.external_audio_dir,
+            sync_audio_clap=sync_audio_clap,
+            external_audio_drift_correction=opts.external_audio_drift_correction,
+            external_audio_offset=opts.external_audio_offset,
+            external_audio_mode=opts.external_audio_mode,
+            camera_audio_volume=opts.camera_audio_volume,
+            external_audio_min_confidence=opts.external_audio_min_confidence,
+            external_audio_match_window=opts.external_audio_match_window,
+            external_audio_start=external_audio_start,
+            external_audio_duration=external_audio_duration,
             fade_duration=opts.fade_duration,
             fade_in_duration=fade_in,
             fade_out_duration=fade_out,
@@ -712,6 +756,19 @@ def _transcode_sequential(
             fade_config = opts.fade_map.get(video_file.path) if opts.fade_map else None
             fade_in = fade_config.fade_in if fade_config else None
             fade_out = fade_config.fade_out if fade_config else None
+            external_segment = (
+                opts.external_audio_segments.get(video_file.path)
+                if opts.external_audio_segments
+                else None
+            )
+            external_audio_path = (
+                external_segment.path if external_segment else opts.external_audio_path
+            )
+            external_audio_start = external_segment.start_seconds if external_segment else None
+            external_audio_duration = (
+                external_segment.duration_seconds if external_segment else None
+            )
+            sync_audio_clap = opts.sync_audio_clap and external_segment is None
 
             metadata = detect_metadata(video_file.path)
             if opts.watermark:
@@ -725,6 +782,17 @@ def _transcode_sequential(
                     denoise=opts.denoise,
                     denoise_level=opts.denoise_level,
                     normalize_audio=opts.normalize_audio,
+                    external_audio_path=external_audio_path,
+                    external_audio_dir=opts.external_audio_dir,
+                    sync_audio_clap=sync_audio_clap,
+                    external_audio_drift_correction=opts.external_audio_drift_correction,
+                    external_audio_offset=opts.external_audio_offset,
+                    external_audio_mode=opts.external_audio_mode,
+                    camera_audio_volume=opts.camera_audio_volume,
+                    external_audio_min_confidence=opts.external_audio_min_confidence,
+                    external_audio_match_window=opts.external_audio_match_window,
+                    external_audio_start=external_audio_start,
+                    external_audio_duration=external_audio_duration,
                     fade_duration=opts.fade_duration,
                     fade_in_duration=fade_in,
                     fade_out_duration=fade_out,
@@ -813,6 +881,40 @@ def _apply_ordering(
             raise ValueError("No files remaining after reorder")
 
     return video_files
+
+
+def _analyze_long_external_audio(
+    video_files: list[VideoFile],
+    external_audio_path: Path,
+    min_confidence: float,
+) -> dict[Path, ExternalAudioSegment]:
+    """긴 외부 녹음에서 각 영상 클립에 대응하는 외부 오디오 구간을 찾는다."""
+    reference_durations: dict[Path, float] = {}
+    for video_file in video_files:
+        metadata = detect_metadata(video_file.path)
+        if not metadata.has_audio:
+            raise ValueError(
+                f"Long external audio matching requires camera audio: {video_file.path}"
+            )
+        reference_durations[video_file.path] = metadata.duration_seconds
+
+    logger.info("Analyzing long external audio: %s", external_audio_path)
+    segments = calculate_external_audio_segments(
+        [video_file.path for video_file in video_files],
+        external_audio_path,
+        reference_durations=reference_durations,
+        min_confidence=min_confidence,
+    )
+    for video_file in video_files:
+        segment = segments[video_file.path]
+        logger.info(
+            "External audio segment: %s -> start=%.3fs duration=%.3fs confidence=%.2f",
+            video_file.path.name,
+            segment.start_seconds,
+            segment.duration_seconds,
+            segment.confidence,
+        )
+    return segments
 
 
 def _resolve_output_path(validated_args: ValidatedArgs) -> Path:
@@ -944,6 +1046,14 @@ def run_pipeline(
 
     video_files = _apply_ordering(video_files, validated_args)
 
+    has_external_audio = validated_args.external_audio_path or validated_args.external_audio_dir
+    if (
+        has_external_audio
+        and validated_args.external_audio_scope != "long"
+        and len(video_files) != 1
+    ):
+        raise ValueError("external audio currently supports exactly one input video")
+
     # --detect-silence: 분석만 수행 후 종료
     if validated_args.detect_silence:
         _detect_silence_only(video_files, validated_args)
@@ -953,6 +1063,8 @@ def run_pipeline(
     if (
         len(video_files) == 1
         and validated_args.upload
+        and validated_args.external_audio_path is None
+        and validated_args.external_audio_dir is None
         and validated_args.template_intro is None
         and validated_args.template_outro is None
     ):
@@ -1001,6 +1113,14 @@ def run_pipeline(
         default_fade=validated_args.fade_duration,
     )
 
+    external_audio_segments: dict[Path, ExternalAudioSegment] | None = None
+    if validated_args.external_audio_scope == "long" and validated_args.external_audio_path:
+        external_audio_segments = _analyze_long_external_audio(
+            main_video_files,
+            validated_args.external_audio_path,
+            validated_args.external_audio_min_confidence,
+        )
+
     video_files = list(main_video_files)
     if template_intro_file is not None:
         video_files.insert(0, template_intro_file)
@@ -1037,6 +1157,21 @@ def run_pipeline(
         denoise=validated_args.denoise,
         denoise_level=validated_args.denoise_level,
         normalize_audio=validated_args.normalize_audio,
+        external_audio_path=(
+            None
+            if validated_args.external_audio_scope == "long"
+            else validated_args.external_audio_path
+        ),
+        external_audio_dir=validated_args.external_audio_dir,
+        external_audio_scope=validated_args.external_audio_scope,
+        external_audio_segments=external_audio_segments,
+        sync_audio_clap=validated_args.sync_audio_clap,
+        external_audio_drift_correction=validated_args.external_audio_drift_correction,
+        external_audio_offset=validated_args.external_audio_offset,
+        external_audio_mode=validated_args.external_audio_mode,
+        camera_audio_volume=validated_args.camera_audio_volume,
+        external_audio_min_confidence=validated_args.external_audio_min_confidence,
+        external_audio_match_window=validated_args.external_audio_match_window,
         fade_map=fade_map,
         fade_duration=validated_args.fade_duration,
         trim_silence=validated_args.trim_silence,
@@ -1862,6 +1997,17 @@ def _cmd_dry_run(validated_args: ValidatedArgs) -> None:
     print(f"Denoise enabled: {validated_args.denoise}")
     print(f"Denoise level: {validated_args.denoise_level}")
     print(f"Normalize audio: {validated_args.normalize_audio}")
+    if validated_args.external_audio_path or validated_args.external_audio_dir:
+        print(f"External audio: {validated_args.external_audio_path}")
+        print(f"  candidate dir: {validated_args.external_audio_dir}")
+        print(f"  scope: {validated_args.external_audio_scope}")
+        print(f"  mode: {validated_args.external_audio_mode}")
+        print(f"  camera volume: {validated_args.camera_audio_volume}")
+        print(f"  clap sync: {validated_args.sync_audio_clap}")
+        print(f"  drift correction: {validated_args.external_audio_drift_correction}")
+        print(f"  offset: {validated_args.external_audio_offset}s")
+        print(f"  min confidence: {validated_args.external_audio_min_confidence}")
+        print(f"  match window: {validated_args.external_audio_match_window}s")
     print(f"Group sequences: {validated_args.group_sequences}")
     fade_display = (
         "disabled" if validated_args.fade_duration == 0.0 else f"{validated_args.fade_duration}s"

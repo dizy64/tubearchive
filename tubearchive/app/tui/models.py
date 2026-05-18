@@ -46,6 +46,16 @@ class TuiOptionState:
     normalize_audio: bool = False
     denoise: bool = False
     denoise_level: str = "medium"
+    external_audio_path: str = ""
+    external_audio_dir: str = ""
+    external_audio_scope: str = "single"
+    sync_audio_clap: bool = False
+    external_audio_drift_correction: bool = False
+    external_audio_offset: float = 0.0
+    external_audio_mode: str = "replace"
+    camera_audio_volume: float = 0.1
+    external_audio_min_confidence: float = 0.6
+    external_audio_match_window: float = 300.0
 
     # BGM
     bgm_path: str = ""
@@ -172,6 +182,7 @@ CATEGORY_DEFS: tuple[CategoryDef, ...] = (
     ),
     CategoryDef(
         title="Audio",
+        collapsed=False,
         options=(
             OptionDef("normalize_audio", "EBU R128 Loudnorm", "switch"),
             OptionDef("denoise", "오디오 노이즈 제거", "switch"),
@@ -180,6 +191,46 @@ CATEGORY_DEFS: tuple[CategoryDef, ...] = (
                 "노이즈 제거 강도",
                 "select",
                 choices=(("Light", "light"), ("Medium", "medium"), ("Heavy", "heavy")),
+            ),
+            OptionDef(
+                "external_audio_path",
+                "외부 오디오 파일",
+                "input",
+                hint="예: ~/Audio/take.wav",
+            ),
+            OptionDef(
+                "external_audio_dir",
+                "외부 오디오 후보 디렉토리",
+                "input",
+                hint="예: ~/Audio",
+            ),
+            OptionDef(
+                "external_audio_scope",
+                "외부 오디오 범위",
+                "select",
+                choices=(("단일 클립", "single"), ("긴 녹음", "long")),
+            ),
+            OptionDef("sync_audio_clap", "박수/피크 자동 싱크", "switch"),
+            OptionDef("external_audio_drift_correction", "장시간 Drift 보정", "switch"),
+            OptionDef("external_audio_offset", "수동 Offset (초)", "input_float", hint="0.0"),
+            OptionDef(
+                "external_audio_mode",
+                "외부 오디오 합성 방식",
+                "select",
+                choices=(("교체", "replace"), ("믹스", "mix")),
+            ),
+            OptionDef("camera_audio_volume", "카메라 오디오 볼륨", "input_float", hint="0.1"),
+            OptionDef(
+                "external_audio_min_confidence",
+                "자동 싱크 최소 신뢰도",
+                "input_float",
+                hint="0.6",
+            ),
+            OptionDef(
+                "external_audio_match_window",
+                "후보 시각 매칭 창(초)",
+                "input_float",
+                hint="300",
             ),
         ),
     ),

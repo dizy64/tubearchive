@@ -794,6 +794,18 @@ class TestGetDefaultDbPath:
             result = get_default_db_path()
             assert result == db_file
 
+    def test_env_path_expands_user_home(self, tmp_path: Path) -> None:
+        """~가 포함된 DB 경로는 SQLite가 열 수 있도록 홈 경로로 확장."""
+        home = tmp_path / "home"
+        home.mkdir()
+        with patch.dict(
+            "os.environ",
+            {"TUBEARCHIVE_DB_PATH": "~/.tubearchive/custom.db", "HOME": str(home)},
+        ):
+            result = get_default_db_path()
+
+        assert result == home / ".tubearchive" / "custom.db"
+
     def test_env_path_existing_dir(self, tmp_path: Path) -> None:
         """기존 디렉토리 경로이면 디렉토리/tubearchive.db 반환."""
         with patch.dict("os.environ", {"TUBEARCHIVE_DB_PATH": str(tmp_path)}):

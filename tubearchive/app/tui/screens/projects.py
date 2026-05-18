@@ -11,6 +11,7 @@ from textual.widgets import DataTable, Label, Static
 
 from tubearchive.app.queries.catalog import format_duration
 from tubearchive.infra.db import database_session
+from tubearchive.infra.db.schema import get_default_db_path
 from tubearchive.shared.progress import format_size
 
 
@@ -65,4 +66,5 @@ class ProjectsPane(Static):
                 )
         except Exception as exc:
             table.clear()
-            table.add_row("ERR", f"[red]{exc}[/]", "-", "-", "-", "-", "-")
+            db_path = get_default_db_path()
+            table.add_row("ERR", f"[red]{db_path}: {exc}[/]", "-", "-", "-", "-", "-")

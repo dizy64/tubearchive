@@ -75,6 +75,35 @@ def test_build_audio_flags() -> None:
     assert result.denoise_level == "heavy"
 
 
+def test_build_external_audio_options() -> None:
+    """TUI 외부 오디오 옵션이 ValidatedArgs로 전달된다."""
+    targets = [Path("/tmp/test")]
+    state = TuiOptionState(
+        external_audio_path="/tmp/mic.wav",
+        external_audio_dir="/tmp/audio",
+        external_audio_scope="long",
+        sync_audio_clap=True,
+        external_audio_drift_correction=True,
+        external_audio_offset=0.12,
+        external_audio_mode="mix",
+        camera_audio_volume=0.2,
+        external_audio_min_confidence=0.7,
+        external_audio_match_window=600.0,
+    )
+    result = build_validated_args(targets, state)
+
+    assert result.external_audio_path == Path("/tmp/mic.wav")
+    assert result.external_audio_dir == Path("/tmp/audio")
+    assert result.external_audio_scope == "long"
+    assert result.sync_audio_clap is True
+    assert result.external_audio_drift_correction is True
+    assert result.external_audio_offset == 0.12
+    assert result.external_audio_mode == "mix"
+    assert result.camera_audio_volume == 0.2
+    assert result.external_audio_min_confidence == 0.7
+    assert result.external_audio_match_window == 600.0
+
+
 def test_build_bgm_options() -> None:
     """BGM 옵션이 Path로 변환되는지 확인한다."""
     targets = [Path("/tmp/test")]

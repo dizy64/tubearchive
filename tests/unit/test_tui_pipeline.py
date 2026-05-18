@@ -184,6 +184,79 @@ async def test_pipeline_uses_file_progress_panel() -> None:
         assert panel is not None
 
 
+@pytest.mark.asyncio
+async def test_pipeline_uses_audio_browser_panel() -> None:
+    """외부 오디오 선택 패널은 OptionsPane의 Audio 섹션 안에 배치된다."""
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.audio_browser import AudioBrowserPane
+    from tubearchive.app.tui.widgets.option_panels import OptionsPane
+
+    app = TubeArchiveApp()
+    async with app.run_test(headless=True, size=(120, 40)):
+        pane = app.query_one(PipelinePane)
+        options = pane.query_one(OptionsPane)
+        panel = options.query_one(AudioBrowserPane)
+        assert panel is not None
+
+
+@pytest.mark.asyncio
+async def test_pipeline_audio_browser_long_selection_updates_options(tmp_path: Path) -> None:
+    """긴 외부 녹음 선택은 경로와 scope=long을 옵션 패널에 반영한다."""
+    from textual.widgets import Label
+
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.audio_browser import AudioBrowserPane
+    from tubearchive.app.tui.widgets.option_panels import OptionsPane
+
+    audio_path = tmp_path / "long.wav"
+    audio_path.touch()
+    app = TubeArchiveApp(initial_path=tmp_path)
+
+    async with app.run_test(headless=True, size=(120, 40)):
+        pane = app.query_one(PipelinePane)
+        options = pane.query_one(OptionsPane)
+        options.set_field_value("sync_audio_clap", True)
+
+        pane.on_audio_browser_pane_audio_selected(
+            AudioBrowserPane.AudioSelected(audio_path.resolve(), "long"),
+        )
+
+        state = options.collect_state()
+        status = pane.query_one("#pipeline-status", Label)
+        assert state.external_audio_path == str(audio_path.resolve())
+        assert state.external_audio_dir == ""
+        assert state.external_audio_scope == "long"
+        assert state.sync_audio_clap is False
+        assert "긴 외부 녹음 적용" in str(status.render())
+
+
+@pytest.mark.asyncio
+async def test_pipeline_audio_browser_directory_selection_updates_options(tmp_path: Path) -> None:
+    """후보 폴더 선택은 external_audio_dir에 반영하고 파일 경로를 비운다."""
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.audio_browser import AudioBrowserPane
+    from tubearchive.app.tui.widgets.option_panels import OptionsPane
+
+    old_audio_path = tmp_path / "old.wav"
+    old_audio_path.touch()
+    app = TubeArchiveApp(initial_path=tmp_path)
+
+    async with app.run_test(headless=True, size=(120, 40)):
+        pane = app.query_one(PipelinePane)
+        options = pane.query_one(OptionsPane)
+        options.set_field_value("external_audio_path", str(old_audio_path))
+        options.set_field_value("external_audio_scope", "long")
+
+        pane.on_audio_browser_pane_audio_selected(
+            AudioBrowserPane.AudioSelected(tmp_path.resolve(), "dir"),
+        )
+
+        state = options.collect_state()
+        assert state.external_audio_path == ""
+        assert state.external_audio_dir == str(tmp_path.resolve())
+        assert state.external_audio_scope == "single"
+
+
 # ---------------------------------------------------------------------------
 # Notifier 조건부 생성 경로 테스트
 # ---------------------------------------------------------------------------

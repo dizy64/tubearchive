@@ -32,6 +32,8 @@ def build_validated_args(
         raise ValueError("처리할 파일이나 디렉토리를 선택하세요.")
 
     output_dir = _to_path_or_none(state.output_dir)
+    external_audio_path = _to_path_or_none(state.external_audio_path)
+    external_audio_dir = _to_path_or_none(state.external_audio_dir)
     bgm_path = _to_path_or_none(state.bgm_path)
     lut_path = _to_path_or_none(state.lut_path)
     template_intro = _to_path_or_none(state.template_intro)
@@ -66,6 +68,16 @@ def build_validated_args(
         normalize_audio=state.normalize_audio,
         denoise=state.denoise,
         denoise_level=state.denoise_level,
+        external_audio_path=external_audio_path,
+        external_audio_dir=external_audio_dir,
+        external_audio_scope=state.external_audio_scope,
+        sync_audio_clap=state.sync_audio_clap,
+        external_audio_drift_correction=state.external_audio_drift_correction,
+        external_audio_offset=state.external_audio_offset,
+        external_audio_mode=state.external_audio_mode,
+        camera_audio_volume=state.camera_audio_volume,
+        external_audio_min_confidence=state.external_audio_min_confidence,
+        external_audio_match_window=state.external_audio_match_window,
         # BGM
         bgm_path=bgm_path,
         bgm_volume=state.bgm_volume,

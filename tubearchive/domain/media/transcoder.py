@@ -16,6 +16,12 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
+from tubearchive.domain.media.audio_sync import (
+    AudioSyncError,
+    calculate_clap_sync_drift,
+    calculate_clap_sync_offset,
+    select_external_audio_candidate,
+)
 from tubearchive.domain.media.detector import detect_metadata
 from tubearchive.domain.models.job import JobStatus
 from tubearchive.domain.models.video import VideoFile, VideoMetadata
@@ -206,6 +212,13 @@ class Transcoder:
         video_filter: str,
         audio_filter: str,
         seek_start: float | None,
+        external_audio_path: Path | None,
+        external_audio_offset: float,
+        external_audio_mode: str,
+        camera_audio_volume: float,
+        external_audio_tempo: float,
+        external_audio_start: float | None,
+        external_audio_duration: float | None,
     ) -> list[str]:
         """세로/가로 영상에 맞는 FFmpeg 커맨드를 생성한다.
 
@@ -235,6 +248,13 @@ class Transcoder:
                 audio_filter=audio_filter,
                 seek_start=seek_start,
                 has_audio=metadata.has_audio,
+                external_audio_path=external_audio_path,
+                external_audio_offset=external_audio_offset,
+                external_audio_mode=external_audio_mode,
+                camera_audio_volume=camera_audio_volume,
+                external_audio_tempo=external_audio_tempo,
+                external_audio_start=external_audio_start,
+                external_audio_duration=external_audio_duration,
             )
         return self.executor.build_transcode_command(
             input_path=video_file.path,
@@ -244,6 +264,13 @@ class Transcoder:
             audio_filter=audio_filter,
             seek_start=seek_start,
             has_audio=metadata.has_audio,
+            external_audio_path=external_audio_path,
+            external_audio_offset=external_audio_offset,
+            external_audio_mode=external_audio_mode,
+            camera_audio_volume=camera_audio_volume,
+            external_audio_tempo=external_audio_tempo,
+            external_audio_start=external_audio_start,
+            external_audio_duration=external_audio_duration,
         )
 
     def _run_transcode(
@@ -282,7 +309,7 @@ class Transcoder:
 
     def _run_loudnorm_analysis(
         self,
-        video_file: VideoFile,
+        media_path: Path,
         pre_filter: str = "",
     ) -> LoudnormAnalysis:
         """EBU R128 loudnorm 1st pass — 오디오 라우드니스 분석.
@@ -292,7 +319,7 @@ class Transcoder:
         이 결과는 2nd pass에서 정규화 파라미터로 사용된다.
 
         Args:
-            video_file: 분석 대상 영상 파일.
+            media_path: 분석 대상 미디어 파일.
             pre_filter: loudnorm 앞에 적용할 오디오 필터 (예: denoise 필터).
                 2nd pass의 실제 입력과 측정 환경을 일치시키기 위해 사용한다.
 
@@ -302,7 +329,7 @@ class Transcoder:
         analysis_filter = create_loudnorm_analysis_filter()
         full_filter = f"{pre_filter},{analysis_filter}" if pre_filter else analysis_filter
         cmd = self.executor.build_loudness_analysis_command(
-            input_path=video_file.path,
+            input_path=media_path,
             audio_filter=full_filter,
         )
         logger.info("Running loudnorm analysis pass")
@@ -311,7 +338,7 @@ class Transcoder:
 
     def _run_silence_analysis(
         self,
-        video_file: VideoFile,
+        media_path: Path,
         threshold: str = "-30dB",
         min_duration: float = 2.0,
     ) -> list[SilenceSegment]:
@@ -320,7 +347,7 @@ class Transcoder:
         FFmpeg의 ``silencedetect`` 필터를 사용하여 오디오 트랙의 무음 구간을 감지한다.
 
         Args:
-            video_file: 분석 대상 영상 파일.
+            media_path: 분석 대상 미디어 파일.
             threshold: 무음 기준 데시벨 (예: "-30dB")
             min_duration: 최소 무음 길이 (초)
 
@@ -334,7 +361,7 @@ class Transcoder:
 
         detect_filter = create_silence_detect_filter(threshold, min_duration)
         cmd = self.executor.build_silence_detection_command(
-            input_path=video_file.path,
+            input_path=media_path,
             audio_filter=detect_filter,
         )
         logger.info("Running silence detection pass")
@@ -414,6 +441,17 @@ class Transcoder:
         wb_kelvin: int | None = None,
         auto_white_balance: bool = False,
         device_wb: dict[str, str] | None = None,
+        external_audio_path: Path | None = None,
+        external_audio_dir: Path | None = None,
+        sync_audio_clap: bool = False,
+        external_audio_drift_correction: bool = False,
+        external_audio_offset: float = 0.0,
+        external_audio_mode: str = "replace",
+        camera_audio_volume: float = 0.1,
+        external_audio_min_confidence: float = 0.6,
+        external_audio_match_window: float = 300.0,
+        external_audio_start: float | None = None,
+        external_audio_duration: float | None = None,
         metadata: VideoMetadata | None = None,
         watermark_text: str | None = None,
         watermark_position: str = "bottom-right",
@@ -450,6 +488,17 @@ class Transcoder:
             wb_kelvin: 화이트밸런스 색온도 직접 지정 (K). auto_white_balance보다 우선.
             auto_white_balance: 기기 모델 기반 자동 WB 매칭 활성화
             device_wb: 기기 키워드 → WB 프리셋 이름 매핑 (없으면 WB_DEVICE_DEFAULTS 사용)
+            external_audio_path: 영상 내장 오디오 대신 사용할 외부 오디오 파일
+            external_audio_dir: 영상과 매칭할 외부 오디오 후보 디렉토리
+            sync_audio_clap: 내장 오디오와 외부 오디오의 박수/피크로 자동 싱크
+            external_audio_drift_correction: 두 개 이상 clap으로 장시간 drift 보정
+            external_audio_offset: 외부 오디오에 적용할 수동 offset(초)
+            external_audio_mode: 외부 오디오 적용 방식 (replace/mix)
+            camera_audio_volume: mix 모드에서 카메라 내장 오디오 볼륨
+            external_audio_min_confidence: 자동 싱크 최소 신뢰도
+            external_audio_match_window: 디렉토리 후보 선택 시 촬영 시각 매칭 창(초)
+            external_audio_start: 긴 외부 녹음에서 사용할 시작 시점(초)
+            external_audio_duration: 긴 외부 녹음에서 사용할 길이(초)
             metadata: 외부에서 전달된 메타데이터(없으면 감지 실행)
             watermark_text: 워터마크 텍스트
             watermark_position: 워터마크 위치
@@ -491,15 +540,131 @@ class Transcoder:
         self.job_repo.update_status(job_id, JobStatus.PROCESSING)
         self.resume_mgr.set_temp_file(job_id, output_path)
 
+        resolved_external_audio_path = external_audio_path
+        resolved_external_audio_offset = external_audio_offset
+        resolved_external_audio_tempo = 1.0
+        if resolved_external_audio_path is None and external_audio_dir is not None:
+            try:
+                selected_audio = select_external_audio_candidate(
+                    external_audio_dir,
+                    video_creation_time=video_file.creation_time,
+                    video_duration_seconds=metadata.duration_seconds,
+                    ffprobe_path=self.executor.ffmpeg_path.replace("ffmpeg", "ffprobe"),
+                    match_window_seconds=external_audio_match_window,
+                )
+                resolved_external_audio_path = selected_audio.path
+                logger.info(
+                    "Selected external audio: %s "
+                    "(score=%.2f duration_delta=%.2fs mtime_delta=%.2fs)",
+                    selected_audio.path,
+                    selected_audio.score,
+                    selected_audio.duration_delta_seconds,
+                    selected_audio.mtime_delta_seconds,
+                )
+            except AudioSyncError as e:
+                self.job_repo.mark_failed(job_id, str(e))
+                raise
+        if resolved_external_audio_path is not None:
+            logger.info("Using external audio: %s", resolved_external_audio_path)
+            if sync_audio_clap:
+                try:
+                    if external_audio_drift_correction:
+                        try:
+                            drift_result = calculate_clap_sync_drift(
+                                video_file.path,
+                                resolved_external_audio_path,
+                                ffmpeg_path=self.executor.ffmpeg_path,
+                            )
+                            if drift_result.confidence < external_audio_min_confidence:
+                                raise AudioSyncError(
+                                    "Clap sync confidence too low: "
+                                    f"{drift_result.confidence:.2f} "
+                                    f"(min={external_audio_min_confidence:.2f})"
+                                )
+                            resolved_external_audio_offset += drift_result.offset_seconds
+                            resolved_external_audio_tempo = drift_result.tempo_ratio
+                            logger.info(
+                                "Clap sync drift: offset=%.3fs tempo=%.6f "
+                                "confidence=%.2f (video=%.3fs/%.3fs external=%.3fs/%.3fs)",
+                                drift_result.offset_seconds,
+                                drift_result.tempo_ratio,
+                                drift_result.confidence,
+                                drift_result.reference_start_time_seconds,
+                                drift_result.reference_end_time_seconds,
+                                drift_result.external_start_time_seconds,
+                                drift_result.external_end_time_seconds,
+                            )
+                        except AudioSyncError as drift_error:
+                            logger.warning(
+                                "Drift correction failed, falling back to single clap sync: %s",
+                                drift_error,
+                            )
+                            sync_result = calculate_clap_sync_offset(
+                                video_file.path,
+                                resolved_external_audio_path,
+                                ffmpeg_path=self.executor.ffmpeg_path,
+                            )
+                            if sync_result.confidence < external_audio_min_confidence:
+                                raise AudioSyncError(
+                                    "Clap sync confidence too low: "
+                                    f"{sync_result.confidence:.2f} "
+                                    f"(min={external_audio_min_confidence:.2f})"
+                                ) from drift_error
+                            resolved_external_audio_offset += sync_result.offset_seconds
+                            logger.info(
+                                "Clap sync: offset=%.3fs confidence=%.2f "
+                                "(video=%.3fs external=%.3fs)",
+                                sync_result.offset_seconds,
+                                sync_result.confidence,
+                                sync_result.reference_time_seconds,
+                                sync_result.external_time_seconds,
+                            )
+                    else:
+                        sync_result = calculate_clap_sync_offset(
+                            video_file.path,
+                            resolved_external_audio_path,
+                            ffmpeg_path=self.executor.ffmpeg_path,
+                        )
+                        if sync_result.confidence < external_audio_min_confidence:
+                            raise AudioSyncError(
+                                "Clap sync confidence too low: "
+                                f"{sync_result.confidence:.2f} "
+                                f"(min={external_audio_min_confidence:.2f})"
+                            )
+                        resolved_external_audio_offset += sync_result.offset_seconds
+                        logger.info(
+                            "Clap sync: offset=%.3fs confidence=%.2f (video=%.3fs external=%.3fs)",
+                            sync_result.offset_seconds,
+                            sync_result.confidence,
+                            sync_result.reference_time_seconds,
+                            sync_result.external_time_seconds,
+                        )
+                except AudioSyncError as e:
+                    self.job_repo.mark_failed(job_id, str(e))
+                    raise
+            logger.info(
+                "External audio report: source=%s mode=%s offset=%.3fs tempo=%.6f",
+                resolved_external_audio_path,
+                external_audio_mode,
+                resolved_external_audio_offset,
+                resolved_external_audio_tempo,
+            )
+
+        audio_analysis_path = resolved_external_audio_path or video_file.path
+        has_processing_audio = metadata.has_audio or resolved_external_audio_path is not None
+
         # 5. loudnorm 분석 (활성화된 경우, 트랜스코딩 전에 실행)
         # 오디오 스트림이 없는 영상에서는 오디오 분석을 스킵한다.
         # denoise가 함께 활성화된 경우, 1st pass도 denoise를 거친 오디오를 측정해야
         # 2nd pass와 측정 환경이 일치하여 loudnorm 특성 불일치를 방지한다.
         loudnorm_analysis: LoudnormAnalysis | None = None
-        if normalize_audio and metadata.has_audio:
+        if normalize_audio and has_processing_audio:
             try:
                 pre_filter = create_denoise_audio_filter(denoise_level) if denoise else ""
-                loudnorm_analysis = self._run_loudnorm_analysis(video_file, pre_filter=pre_filter)
+                loudnorm_analysis = self._run_loudnorm_analysis(
+                    audio_analysis_path,
+                    pre_filter=pre_filter,
+                )
                 logger.info(
                     f"Loudnorm: I={loudnorm_analysis.input_i:.1f}dB "
                     f"TP={loudnorm_analysis.input_tp:.1f}dB "
@@ -507,18 +672,18 @@ class Transcoder:
                 )
             except (FFmpegError, ValueError) as e:
                 logger.warning(f"Loudnorm analysis failed, skipping normalization: {e}")
-        elif normalize_audio and not metadata.has_audio:
+        elif normalize_audio and not has_processing_audio:
             logger.info("No audio stream, skipping loudnorm analysis")
 
         # 5.5 무음 구간 분석 (활성화된 경우)
         silence_segments: list[SilenceSegment] | None = None
         silence_remove_filter = ""
-        if trim_silence and not metadata.has_audio:
+        if trim_silence and not has_processing_audio:
             logger.info("No audio stream, skipping silence analysis")
         elif trim_silence:
             try:
                 silence_segments = self._run_silence_analysis(
-                    video_file,
+                    audio_analysis_path,
                     threshold=silence_threshold,
                     min_duration=silence_min_duration,
                 )
@@ -638,6 +803,13 @@ class Transcoder:
                 video_filter,
                 audio_filter,
                 seek_start,
+                resolved_external_audio_path,
+                resolved_external_audio_offset,
+                external_audio_mode,
+                camera_audio_volume,
+                resolved_external_audio_tempo,
+                external_audio_start,
+                external_audio_duration,
             )
             self._run_transcode(cmd, metadata.duration_seconds, job_id, progress_info_callback)
             self.job_repo.mark_completed(job_id, output_path)
@@ -656,6 +828,13 @@ class Transcoder:
                 video_filter,
                 audio_filter,
                 seek_start,
+                resolved_external_audio_path,
+                resolved_external_audio_offset,
+                external_audio_mode,
+                camera_audio_volume,
+                resolved_external_audio_tempo,
+                external_audio_start,
+                external_audio_duration,
             )
             self._run_transcode(cmd, metadata.duration_seconds, job_id, progress_info_callback)
             self.job_repo.mark_completed(job_id, output_path)
@@ -692,6 +871,13 @@ class Transcoder:
                     video_filter,
                     audio_filter,
                     seek_start,
+                    resolved_external_audio_path,
+                    resolved_external_audio_offset,
+                    external_audio_mode,
+                    camera_audio_volume,
+                    resolved_external_audio_tempo,
+                    external_audio_start,
+                    external_audio_duration,
                 )
                 self._run_transcode(cmd, metadata.duration_seconds, job_id, progress_info_callback)
                 self.job_repo.mark_completed(job_id, output_path)

@@ -73,6 +73,16 @@ class ValidatedArgs:
     denoise: bool = False
     denoise_level: str = "medium"
     normalize_audio: bool = False
+    external_audio_path: Path | None = None
+    external_audio_dir: Path | None = None
+    external_audio_scope: str = "single"
+    sync_audio_clap: bool = False
+    external_audio_drift_correction: bool = False
+    external_audio_offset: float = 0.0
+    external_audio_mode: str = "replace"
+    camera_audio_volume: float = 0.1
+    external_audio_min_confidence: float = 0.6
+    external_audio_match_window: float = 300.0
     group_sequences: bool = True
     fade_duration: float = 0.5
     upload: bool = False
@@ -280,6 +290,71 @@ def validate_args(
 
     # normalize_audio 설정 (CLI 인자 > 환경 변수 > 기본값)
     normalize_audio = bool(getattr(args, "normalize_audio", False)) or get_default_normalize_audio()
+
+    # 외부 마이크 오디오 치환/싱크 옵션
+    external_audio_arg = getattr(args, "external_audio", None)
+    external_audio_path: Path | None = None
+    if external_audio_arg:
+        external_audio_path = Path(external_audio_arg).expanduser()
+        if not external_audio_path.is_file():
+            raise FileNotFoundError(f"External audio file not found: {external_audio_arg}")
+
+    external_audio_dir_arg = getattr(args, "external_audio_dir", None)
+    external_audio_dir: Path | None = None
+    if external_audio_dir_arg:
+        external_audio_dir = Path(external_audio_dir_arg).expanduser()
+        if not external_audio_dir.is_dir():
+            raise FileNotFoundError(f"External audio directory not found: {external_audio_dir_arg}")
+
+    external_audio_scope = str(getattr(args, "external_audio_scope", "single") or "single")
+    if external_audio_scope not in {"single", "long"}:
+        raise ValueError("--external-audio-scope must be one of: single, long")
+    if external_audio_scope == "long" and external_audio_path is None:
+        raise ValueError("--external-audio-scope long requires --external-audio")
+    if external_audio_scope == "long" and external_audio_dir is not None:
+        raise ValueError("--external-audio-scope long does not support --external-audio-dir")
+
+    sync_audio_clap = bool(getattr(args, "sync_audio_clap", False))
+    if sync_audio_clap and external_audio_path is None and external_audio_dir is None:
+        raise ValueError("--sync-audio-clap requires --external-audio or --external-audio-dir")
+
+    external_audio_drift_correction = bool(getattr(args, "external_audio_drift_correction", False))
+    if (
+        external_audio_drift_correction
+        and external_audio_path is None
+        and external_audio_dir is None
+    ):
+        raise ValueError(
+            "--external-audio-drift-correction requires --external-audio or --external-audio-dir"
+        )
+
+    external_audio_offset = float(getattr(args, "external_audio_offset", 0.0) or 0.0)
+    external_audio_mode = str(getattr(args, "external_audio_mode", "replace") or "replace")
+    if external_audio_mode not in {"replace", "mix"}:
+        raise ValueError("--external-audio-mode must be one of: replace, mix")
+
+    camera_audio_volume = float(getattr(args, "camera_audio_volume", 0.1) or 0.0)
+    if not (0.0 <= camera_audio_volume <= 1.0):
+        raise ValueError(
+            f"--camera-audio-volume must be in range [0.0, 1.0], got: {camera_audio_volume}"
+        )
+
+    external_audio_min_confidence = float(
+        getattr(args, "external_audio_min_confidence", 0.6) or 0.6
+    )
+    if not (0.0 < external_audio_min_confidence <= 1.0):
+        raise ValueError(
+            "--external-audio-min-confidence must be in range (0.0, 1.0], "
+            f"got: {external_audio_min_confidence}"
+        )
+
+    external_audio_match_window = float(
+        getattr(args, "external_audio_match_window", 300.0) or 300.0
+    )
+    if external_audio_match_window <= 0:
+        raise ValueError(
+            f"--external-audio-match-window must be > 0, got: {external_audio_match_window}"
+        )
 
     # 그룹핑 설정 (CLI 인자 > 환경 변수 > 기본값)
     group_flag = bool(getattr(args, "group", False))
@@ -566,6 +641,16 @@ def validate_args(
         denoise=denoise_flag,
         denoise_level=resolved_denoise_level,
         normalize_audio=normalize_audio,
+        external_audio_path=external_audio_path,
+        external_audio_dir=external_audio_dir,
+        external_audio_scope=external_audio_scope,
+        sync_audio_clap=sync_audio_clap,
+        external_audio_drift_correction=external_audio_drift_correction,
+        external_audio_offset=external_audio_offset,
+        external_audio_mode=external_audio_mode,
+        camera_audio_volume=camera_audio_volume,
+        external_audio_min_confidence=external_audio_min_confidence,
+        external_audio_match_window=external_audio_match_window,
         group_sequences=group_sequences,
         fade_duration=fade_duration,
         upload=upload,
