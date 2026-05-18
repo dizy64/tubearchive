@@ -1,11 +1,42 @@
-# TubeArchive CLI (Project Komorebi)
+<p align="center">
+  <img src="assets/readme/tubearchive-logo.svg" alt="TubeArchive logo" width="760">
+</p>
+
+<h1 align="center">TubeArchive</h1>
+
+<p align="center">
+  한국어 | <a href="README.en.md">English</a> | <a href="README.ja.md">日本語</a>
+</p>
 
 [![CI](https://github.com/dizy64/tubearchive/actions/workflows/ci.yml/badge.svg)](https://github.com/dizy64/tubearchive/actions/workflows/ci.yml)
 
-다양한 기기(Nikon, GoPro, DJI, iPhone)의 4K 영상을 HEVC 10-bit로 표준화하여 병합하는 CLI 도구.
+**TubeArchive**는 Nikon, GoPro, DJI, iPhone 등 여러 기기의 4K 영상을 macOS에서 HEVC 10-bit로 표준화하고, 병합·보정·YouTube 업로드까지 이어주는 영상 아카이브 도구입니다.
+
+CLI로 반복 작업을 자동화하고, TUI 대시보드로 파일 선택·옵션 조정·작업 현황 확인을 한 화면에서 처리할 수 있습니다.
+
+```bash
+# 인터랙티브 대시보드
+tubearchive tui ~/Videos/Trip2026/
+
+# CLI 자동 병합
+tubearchive ~/Videos/Trip2026/ --normalize-audio --thumbnail
+```
+
+## TUI 미리보기
+
+<p align="center">
+  <img src="assets/readme/tui-pipeline.svg" alt="TubeArchive TUI Pipeline tab screenshot">
+</p>
+
+<p align="center">
+  <img src="assets/readme/tui-stats.svg" alt="TubeArchive TUI Stats tab screenshot">
+</p>
+
+TUI는 파일 브라우저, 외부 오디오 선택, 인코딩 옵션, 프리셋, 프로젝트/통계/이력/YouTube 탭을 제공합니다. 터미널 안에서 실행되므로 별도 서버 없이 `tubearchive tui`만으로 사용할 수 있습니다.
 
 ## 주요 기능
 
+- **인터랙티브 TUI**: 파일 선택, 옵션 조정, 프리셋, 진행률, 프로젝트/통계/이력 조회
 - **스마트 파일 스캔**: 3가지 케이스 지원 (현재 디렉토리 / 특정 파일 / 디렉토리)
 - **세로 영상 자동 레이아웃**: 블러 배경 + 중앙 전경
 - **Resume 기능**: SQLite 기반 상태 추적, 중단된 작업 자동 재개
@@ -146,6 +177,9 @@ uv tool uninstall tubearchive
 
 전역 설치 후:
 ```bash
+# TUI 대시보드 실행
+tubearchive tui ~/Videos/Trip2026/
+
 # Case 1: 현재 디렉토리의 모든 영상 병합
 tubearchive
 
@@ -161,6 +195,32 @@ tubearchive ~/Videos/Trip2024/
 cd /path/to/tubearchive
 uv run tubearchive ~/Videos/Trip2024/
 ```
+
+### TUI 대시보드
+
+```bash
+# 현재 디렉토리를 기준으로 TUI 실행
+tubearchive tui
+
+# 특정 촬영 폴더를 열어서 시작
+tubearchive tui ~/Videos/Trip2026/
+
+# 개발 환경에서 실행
+uv run tubearchive tui ~/Videos/Trip2026/
+```
+
+키보드 단축키:
+
+| 키 | 동작 |
+|----|------|
+| `1` | Pipeline 탭 |
+| `2` | Projects 탭 |
+| `3` | Stats 탭 |
+| `4` | History 탭 |
+| `5` | YouTube 탭 |
+| `r` | 현재 탭 새로고침 |
+| `t` | 테마 전환 |
+| `q` | 종료 |
 
 ### 다른 경로에서 실행
 

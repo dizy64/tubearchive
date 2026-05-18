@@ -49,6 +49,16 @@ uv run tubearchive --dry-run ~/Videos/
 - 검증은 외부 판단이 아닌 테스트/스크립트 결과를 기준으로 한다.
 - 빠른 피드백을 위해 기능 변경 시 우선 관련 unit 테스트로 실패를 조기에 잡는다.
 
+### 문서 관리
+
+- `README.md`는 첫인상, 핵심 기능, 빠른 시작, 주요 문서 링크 중심으로 유지한다.
+- 다국어 README는 `README.en.md`, `README.ja.md`처럼 루트에 두고, 상단 언어 링크를 서로 갱신한다.
+- 사용자 가이드, CLI 레퍼런스, 기여 가이드처럼 공개 가능한 문서는 `docs/` 아래에 둔다.
+- 내부 플랜/기획/초안/메모는 공개 문서와 섞지 않고 `docs/plans/`, `docs/planning/`, `docs/proposals/`, `docs/drafts/`, `docs/notes/`에 둔다.
+- `.gitignore`는 공개 `docs/` 전체를 무시하지 않고, 내부 문서 디렉토리와 `*plan*.md`, `*proposal*.md`, `*draft*.md`, `*기획*.md`, `*계획*.md` 같은 플랜/기획 파일만 제외한다.
+- README에서 참조하는 이미지/스크린샷은 추적 가능한 경로(예: `assets/readme/`)에 저장하고, 링크 검증으로 누락을 확인한다.
+- 문서만 바꾸는 작업은 단위 테스트 대신 `git diff --check`, README 링크/자산 존재 검증을 최소 게이트로 삼는다.
+
 ### 실행 예시
 
 ```bash
