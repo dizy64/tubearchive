@@ -221,6 +221,38 @@ class TestCanSkipTranscoding:
         assert can_skip is False
         assert "h264" in reason
 
+    def test_yuv420p10le_is_accepted_as_skip_eligible(self, tmp_path: Path) -> None:
+        """hevc_videotoolbox는 p010le 요청 시 ffprobe가 yuv420p10le로 보고한다.
+
+        두 이름은 모두 10-bit 4:2:0이므로 스킵 판정에서 양쪽을 수용해야 한다.
+        """
+        files = [_make_video_file(tmp_path)]
+        opts = TranscodeOptions()
+        args = _make_validated_args(tmp_path)
+
+        with patch(
+            "tubearchive.app.cli.pipeline.detect_metadata",
+            return_value=_profile_sdr_metadata(pixel_format="yuv420p10le"),
+        ):
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
+
+        assert can_skip is True, f"yuv420p10le should be accepted: {reason}"
+
+    def test_blocked_by_wrong_pixel_format(self, tmp_path: Path) -> None:
+        """yuv420p(8-bit)처럼 다른 픽셀 포맷이면 스킵 불가."""
+        files = [_make_video_file(tmp_path)]
+        opts = TranscodeOptions()
+        args = _make_validated_args(tmp_path)
+
+        with patch(
+            "tubearchive.app.cli.pipeline.detect_metadata",
+            return_value=_profile_sdr_metadata(pixel_format="yuv420p"),
+        ):
+            can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
+
+        assert can_skip is False
+        assert "yuv420p" in reason
+
     def test_blocked_by_resolution(self, tmp_path: Path) -> None:
         """4K가 아니면 스킵 불가 (PROFILE_SDR 기본 출력 해상도와 다름)."""
         files = [_make_video_file(tmp_path)]
