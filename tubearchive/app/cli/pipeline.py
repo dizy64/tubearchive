@@ -946,7 +946,9 @@ def _transcode_sequential(
 # PROFILE_SDR과 정합한다고 판정할 때 비교하는 기준값.
 # encoder 이름(hevc_videotoolbox)이 아니라 ffprobe codec_name(hevc)을 사용한다.
 _SKIP_TARGET_VIDEO_CODEC = "hevc"
-_SKIP_TARGET_PIXEL_FORMAT = "p010le"
+# hevc_videotoolbox 인코더는 -pix_fmt p010le를 요청해도
+# ffprobe가 yuv420p10le로 보고하는 경우가 있다 (두 이름 모두 10-bit 4:2:0).
+_SKIP_TARGET_PIXEL_FORMATS = frozenset({"p010le", "yuv420p10le"})
 _SKIP_TARGET_WIDTH = 3840
 _SKIP_TARGET_HEIGHT = 2160
 _SKIP_TARGET_FPS = 30000 / 1001  # 29.97
@@ -1060,10 +1062,10 @@ def _can_skip_transcoding(
             f"video codec {first.codec!r} ≠ {_SKIP_TARGET_VIDEO_CODEC!r}",
             metadata_cache,
         )
-    if first.pixel_format != _SKIP_TARGET_PIXEL_FORMAT:
+    if first.pixel_format not in _SKIP_TARGET_PIXEL_FORMATS:
         return (
             False,
-            f"pixel format {first.pixel_format!r} ≠ {_SKIP_TARGET_PIXEL_FORMAT!r}",
+            f"pixel format {first.pixel_format!r} not in {sorted(_SKIP_TARGET_PIXEL_FORMATS)}",
             metadata_cache,
         )
     if first.width != _SKIP_TARGET_WIDTH or first.height != _SKIP_TARGET_HEIGHT:
