@@ -906,7 +906,7 @@ class TestPrintProjectList:
     """print_project_list 출력 테스트."""
 
     @pytest.fixture
-    def db_conn_with_project(self, tmp_path: Path) -> sqlite3.Connection:
+    def db_conn_with_project(self, tmp_path: Path) -> Generator[sqlite3.Connection]:
         """프로젝트 데이터가 포함된 DB."""
         conn = init_database(tmp_path / "test.db")
         repo = ProjectRepository(conn)
@@ -922,7 +922,8 @@ class TestPrintProjectList:
         )
         repo.add_merge_job(project_id, mj_id)
         conn.commit()
-        return conn
+        yield conn
+        conn.close()
 
     def test_json_with_projects(self, db_conn_with_project: sqlite3.Connection) -> None:
         """JSON 형식 출력 검증."""
@@ -968,7 +969,7 @@ class TestPrintProjectDetail:
     """print_project_detail 출력 테스트."""
 
     @pytest.fixture
-    def db_with_detail(self, tmp_path: Path) -> tuple[sqlite3.Connection, int]:
+    def db_with_detail(self, tmp_path: Path) -> Generator[tuple[sqlite3.Connection, int]]:
         """상세 조회용 DB."""
         conn = init_database(tmp_path / "test.db")
         repo = ProjectRepository(conn)
@@ -985,7 +986,8 @@ class TestPrintProjectDetail:
         )
         repo.add_merge_job(project_id, mj_id)
         conn.commit()
-        return conn, project_id
+        yield conn, project_id
+        conn.close()
 
     def test_json_with_merge_jobs(self, db_with_detail: tuple[sqlite3.Connection, int]) -> None:
         """JSON 상세 출력 구조 검증."""

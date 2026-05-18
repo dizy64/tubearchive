@@ -246,6 +246,84 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--external-audio",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="영상 내장 오디오 대신 사용할 외부 오디오 파일",
+    )
+
+    parser.add_argument(
+        "--external-audio-dir",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help="영상과 길이/시각이 가장 가까운 외부 오디오 파일을 자동 선택할 디렉토리",
+    )
+
+    parser.add_argument(
+        "--external-audio-scope",
+        choices=["single", "long"],
+        default="single",
+        help=(
+            "외부 오디오 적용 범위 "
+            "(single: 영상 1개, long: 긴 녹음에서 클립별 구간 자동 매칭; 카메라 오디오 필요)"
+        ),
+    )
+
+    parser.add_argument(
+        "--sync-audio-clap",
+        action="store_true",
+        help="영상 내장 오디오와 외부 오디오의 박수/피크를 찾아 자동 싱크",
+    )
+
+    parser.add_argument(
+        "--external-audio-drift-correction",
+        action="store_true",
+        help="두 개 이상 공통 clap 피크로 외부 오디오 장시간 drift를 tempo 보정",
+    )
+
+    parser.add_argument(
+        "--external-audio-offset",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="외부 오디오에 적용할 수동 offset(초). clap sync 결과에 추가 적용",
+    )
+
+    parser.add_argument(
+        "--external-audio-mode",
+        type=str,
+        choices=["replace", "mix"],
+        default="replace",
+        help="외부 오디오 적용 방식 (replace: 교체, mix: 카메라 오디오와 믹스)",
+    )
+
+    parser.add_argument(
+        "--camera-audio-volume",
+        type=float,
+        default=0.1,
+        metavar="0.0-1.0",
+        help="mix 모드에서 카메라 내장 오디오 볼륨 (기본: 0.1)",
+    )
+
+    parser.add_argument(
+        "--external-audio-min-confidence",
+        type=float,
+        default=0.6,
+        metavar="0.0-1.0",
+        help="clap sync/long segment 자동 보정 최소 신뢰도 (기본: 0.6)",
+    )
+
+    parser.add_argument(
+        "--external-audio-match-window",
+        type=float,
+        default=300.0,
+        metavar="SECONDS",
+        help="--external-audio-dir 후보 선택 시 파일 시각 매칭 창(초, 기본: 300)",
+    )
+
+    parser.add_argument(
         "--bgm",
         type=str,
         default=None,

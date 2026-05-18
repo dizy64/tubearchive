@@ -109,6 +109,14 @@ class FFmpegExecutor:
         """초기화."""
         self.ffmpeg_path = ffmpeg_path
 
+    @property
+    def ffprobe_path(self) -> str:
+        """ffmpeg 실행 파일명 기준으로 대응되는 ffprobe 경로를 반환한다."""
+        ffmpeg = Path(self.ffmpeg_path)
+        if "ffmpeg" not in ffmpeg.name:
+            return "ffprobe"
+        return str(ffmpeg.with_name(ffmpeg.name.replace("ffmpeg", "ffprobe", 1)))
+
     def build_transcode_command(
         self,
         input_path: Path,
@@ -120,6 +128,13 @@ class FFmpegExecutor:
         overwrite: bool = True,
         seek_start: float | None = None,
         has_audio: bool = True,
+        external_audio_path: Path | None = None,
+        external_audio_offset: float = 0.0,
+        external_audio_mode: str = "replace",
+        camera_audio_volume: float = 0.1,
+        external_audio_tempo: float = 1.0,
+        external_audio_start: float | None = None,
+        external_audio_duration: float | None = None,
     ) -> list[str]:
         """
         트랜스코딩 FFmpeg 명령어 빌드.
@@ -136,6 +151,13 @@ class FFmpegExecutor:
             has_audio: 입력 파일에 오디오 스트림 존재 여부.
                 False이면 anullsrc로 무음 오디오를 생성하여
                 concat 병합 호환성을 유지한다.
+            external_audio_path: 영상 내장 오디오 대신 사용할 외부 오디오 파일.
+            external_audio_offset: 외부 오디오 입력에 적용할 시간 offset(초).
+            external_audio_mode: 외부 오디오 적용 방식 ("replace" 또는 "mix").
+            camera_audio_volume: mix 모드에서 카메라 내장 오디오 볼륨.
+            external_audio_tempo: drift 보정용 외부 오디오 atempo 비율.
+            external_audio_start: 긴 외부 녹음에서 사용할 시작 시점(초).
+            external_audio_duration: 긴 외부 녹음에서 사용할 길이(초).
 
         Returns:
             FFmpeg 명령어 리스트
@@ -156,9 +178,18 @@ class FFmpegExecutor:
         # 입력 파일
         cmd.extend(["-i", str(input_path)])
 
+        if external_audio_path is not None:
+            if external_audio_start is not None:
+                cmd.extend(["-ss", f"{external_audio_start:g}"])
+            if external_audio_duration is not None:
+                cmd.extend(["-t", f"{external_audio_duration:g}"])
+            if external_audio_offset:
+                cmd.extend(["-itsoffset", f"{external_audio_offset:g}"])
+            cmd.extend(["-i", str(external_audio_path)])
+
         # 오디오 스트림이 없으면 lavfi 무음 입력 추가 (concat 호환성)
         # 입력 인덱스: 0=원본 비디오, 1=anullsrc 무음
-        if not has_audio and (filter_complex or video_filter):
+        if external_audio_path is None and not has_audio and (filter_complex or video_filter):
             cmd.extend(
                 [
                     "-f",
@@ -168,11 +199,47 @@ class FFmpegExecutor:
                 ]
             )
 
+        if external_audio_mode not in {"replace", "mix"}:
+            raise ValueError(f"Unsupported external audio mode: {external_audio_mode}")
+        if not (0.5 <= external_audio_tempo <= 2.0):
+            raise ValueError(
+                f"external_audio_tempo must be in range [0.5, 2.0]: {external_audio_tempo}"
+            )
+
         # 오디오 매핑 소스: 입력에 오디오 있으면 0:a:0, 없으면 1:a:0 (anullsrc)
-        audio_map = "0:a:0" if has_audio else "1:a:0"
+        if external_audio_path is not None:
+            audio_map = "1:a:0"
+        else:
+            audio_map = "0:a:0" if has_audio else "1:a:0"
 
         # 필터 및 스트림 매핑
-        if filter_complex:
+        if external_audio_path is not None and external_audio_mode == "mix" and has_audio:
+            base_video_filter = filter_complex or video_filter or "null"
+            mixed_audio_chain = (
+                "[camera_a][external_a]amix=inputs=2:duration=first:"
+                "dropout_transition=0:weights=1 1"
+            )
+            if audio_filter:
+                mixed_audio_chain = f"{mixed_audio_chain},{audio_filter}"
+            external_audio_chain = (
+                f"atempo={external_audio_tempo:g}" if external_audio_tempo != 1.0 else "anull"
+            )
+            mix_audio_filter = (
+                f"[0:a:0]volume={camera_audio_volume:g}[camera_a];"
+                f"[1:a:0]{external_audio_chain}[external_a];"
+                f"{mixed_audio_chain}[a_out]"
+            )
+            if filter_complex:
+                cmd.extend(["-filter_complex", f"{base_video_filter};{mix_audio_filter}"])
+                cmd.extend(["-map", "[v_out]", "-map", "[a_out]"])
+            else:
+                if "[v_out]" in base_video_filter:
+                    video_graph = base_video_filter
+                else:
+                    video_graph = f"[0:v]{base_video_filter}[v_out]"
+                cmd.extend(["-filter_complex", f"{video_graph};{mix_audio_filter}"])
+                cmd.extend(["-map", "[v_out]", "-map", "[a_out]"])
+        elif filter_complex:
             cmd.extend(["-filter_complex", filter_complex])
             cmd.extend(["-map", "[v_out]", "-map", audio_map])
         elif video_filter:
@@ -182,8 +249,22 @@ class FFmpegExecutor:
             cmd.extend(["-vf", video_filter])
 
         # 오디오 필터는 실제 오디오가 있을 때만 적용 (무음에는 불필요)
-        if audio_filter and has_audio:
-            cmd.extend(["-af", audio_filter])
+        effective_audio_filter = audio_filter
+        if external_audio_path is not None and external_audio_mode != "mix":
+            external_filters: list[str] = []
+            if external_audio_tempo != 1.0:
+                external_filters.append(f"atempo={external_audio_tempo:g}")
+            if audio_filter:
+                external_filters.append(audio_filter)
+            external_filters.append("apad")
+            effective_audio_filter = ",".join(external_filters)
+
+        if (
+            effective_audio_filter
+            and (has_audio or external_audio_path is not None)
+            and external_audio_mode != "mix"
+        ):
+            cmd.extend(["-af", effective_audio_filter])
 
         # 인코딩 프로파일 적용
         cmd.extend(profile.to_ffmpeg_args())
@@ -192,7 +273,7 @@ class FFmpegExecutor:
         cmd.extend(["-avoid_negative_ts", "make_zero"])
 
         # anullsrc는 무한 길이이므로 비디오 종료 시 같이 종료
-        if not has_audio and (filter_complex or video_filter):
+        if (external_audio_path is not None or not has_audio) and (filter_complex or video_filter):
             cmd.append("-shortest")
 
         # 출력 파일

@@ -71,6 +71,18 @@ class TestFFmpegExecutor:
         """FFmpegExecutor 인스턴스."""
         return FFmpegExecutor()
 
+    def test_ffprobe_path_replaces_only_binary_name(self) -> None:
+        """ffprobe 경로 추론은 상위 디렉토리의 ffmpeg 문자열을 건드리지 않는다."""
+        executor = FFmpegExecutor(ffmpeg_path="/opt/ffmpeg-tools/bin/ffmpeg")
+
+        assert executor.ffprobe_path == "/opt/ffmpeg-tools/bin/ffprobe"
+
+    def test_ffprobe_path_falls_back_when_binary_name_is_custom(self) -> None:
+        """커스텀 ffmpeg 래퍼명은 PATH의 ffprobe를 사용한다."""
+        executor = FFmpegExecutor(ffmpeg_path="/opt/bin/video-encoder")
+
+        assert executor.ffprobe_path == "ffprobe"
+
     def test_build_transcode_command(self, executor: FFmpegExecutor) -> None:
         """트랜스코딩 명령어 빌드."""
         from pathlib import Path
@@ -111,6 +123,94 @@ class TestFFmpegExecutor:
 
         assert "-filter_complex" in cmd
         assert "-map" in cmd
+
+    def test_build_command_with_external_audio_maps_second_input(
+        self, executor: FFmpegExecutor
+    ) -> None:
+        """외부 오디오 지정 시 두 번째 입력의 오디오를 매핑한다."""
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+            audio_filter="afade=t=in:st=0:d=0.5",
+            external_audio_path=Path("/input/mic.wav"),
+            external_audio_offset=0.42,
+        )
+
+        assert cmd.count("-i") == 2
+        assert "/input/video.mp4" in cmd
+        assert "/input/mic.wav" in cmd
+        assert "-itsoffset" in cmd
+        assert cmd[cmd.index("-itsoffset") + 1] == "0.42"
+        assert "1:a:0" in cmd
+        assert "-af" in cmd
+        assert "-shortest" in cmd
+
+    def test_build_command_with_external_audio_mix_uses_amix(
+        self, executor: FFmpegExecutor
+    ) -> None:
+        """mix 모드는 외부 오디오와 카메라 오디오를 amix로 합성한다."""
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+            external_audio_path=Path("/input/mic.wav"),
+            external_audio_mode="mix",
+            camera_audio_volume=0.12,
+        )
+
+        assert "-filter_complex" in cmd
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        assert "[0:a:0]volume=0.12" in filter_complex
+        assert "[1:a:0]anull" in filter_complex
+        assert "amix=inputs=2" in filter_complex
+        assert "duration=first" in filter_complex
+        assert "[a_out]" in cmd
+
+    def test_build_command_with_external_audio_tempo_uses_atempo_and_apad(
+        self, executor: FFmpegExecutor
+    ) -> None:
+        """드리프트 보정 시 외부 오디오에 atempo를 적용하고 짧은 오디오는 패딩한다."""
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+            external_audio_path=Path("/input/mic.wav"),
+            external_audio_tempo=1.002,
+        )
+
+        assert "-af" in cmd
+        audio_filter = cmd[cmd.index("-af") + 1]
+        assert "atempo=1.002" in audio_filter
+        assert "apad" in audio_filter
+        assert "-shortest" in cmd
+
+    def test_build_command_with_external_audio_segment_trims_second_input(
+        self, executor: FFmpegExecutor
+    ) -> None:
+        """긴 외부 녹음 구간 사용 시 두 번째 입력에 -ss/-t를 적용한다."""
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+            external_audio_path=Path("/input/recorder.wav"),
+            external_audio_start=12.5,
+            external_audio_duration=3.0,
+        )
+
+        external_input_index = cmd.index("/input/recorder.wav")
+        assert cmd[external_input_index - 5 : external_input_index + 1] == [
+            "-ss",
+            "12.5",
+            "-t",
+            "3",
+            "-i",
+            "/input/recorder.wav",
+        ]
 
     def test_build_command_overwrite(self, executor: FFmpegExecutor) -> None:
         """덮어쓰기 옵션."""

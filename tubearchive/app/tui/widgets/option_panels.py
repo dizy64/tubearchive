@@ -1,7 +1,7 @@
 """옵션 패널 위젯.
 
 카테고리별 Collapsible 섹션으로 구성된다.
-General 섹션은 기본 펼침, 나머지는 기본 접힘이므로
+General/Audio 섹션은 기본 펼침, 나머지는 기본 접힘이므로
 미설정 옵션이 마치 적용되는 것처럼 보이는 혼란을 방지한다.
 ``collect_state()``로 현재 위젯 값을 수집하고,
 ``apply_state()``로 외부에서 상태를 주입할 수 있다.
@@ -10,6 +10,7 @@ General 섹션은 기본 펼침, 나머지는 기본 접힘이므로
 from __future__ import annotations
 
 import contextlib
+from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
@@ -22,6 +23,7 @@ from tubearchive.app.tui.models import (
     OptionDef,
     TuiOptionState,
 )
+from tubearchive.app.tui.widgets.audio_browser import AudioBrowserPane
 
 _OPT_PREFIX = "opt-"
 
@@ -91,7 +93,7 @@ class OptionsPane(Widget):
     """전체 옵션 패널.
 
     카테고리별 Collapsible 섹션으로 구성된다.
-    General은 기본 펼침, 나머지는 기본 접힘.
+    General/Audio는 기본 펼침, 나머지는 기본 접힘.
 
     ``collect_state()`` 로 현재 위젯 값을 수집하여 ``TuiOptionState`` 를 반환한다.
     ``apply_state()`` 로 외부에서 상태를 주입할 수 있다.
@@ -133,9 +135,14 @@ class OptionsPane(Widget):
     }
     """
 
-    def __init__(self, initial_state: TuiOptionState | None = None) -> None:
+    def __init__(
+        self,
+        initial_state: TuiOptionState | None = None,
+        initial_path: Path | None = None,
+    ) -> None:
         super().__init__()
         self._initial = initial_state or TuiOptionState()
+        self._initial_path = initial_path
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -147,6 +154,8 @@ class OptionsPane(Widget):
             with ScrollableContainer(id="options-scroll"):
                 for category in CATEGORY_DEFS:
                     with Collapsible(title=category.title, collapsed=category.collapsed):
+                        if category.title == "Audio":
+                            yield AudioBrowserPane(initial_path=self._initial_path)
                         for opt in category.options:
                             yield _OptionRow(opt, self._initial)
 
@@ -189,15 +198,30 @@ class OptionsPane(Widget):
         """위젯 값을 state로 업데이트한다 (프리셋 불러오기 등에 사용)."""
         for category in CATEGORY_DEFS:
             for opt in category.options:
-                wid = _field_id(opt.field)
-                val = getattr(state, opt.field)
-                if opt.widget == "switch":
-                    with contextlib.suppress(Exception):
-                        self.query_one(f"#{wid}", Switch).value = bool(val)
-                elif opt.widget == "select":
-                    with contextlib.suppress(Exception):
-                        self.query_one(f"#{wid}", Select).value = str(val)
-                elif opt.widget in ("input", "input_float", "input_int"):
-                    with contextlib.suppress(Exception):
-                        raw = "" if val in (0, 0.0, "") else str(val)
-                        self.query_one(f"#{wid}", Input).value = raw
+                self.set_field_value(opt.field, getattr(state, opt.field))
+
+    def set_field_value(self, field: str, value: object) -> None:
+        """단일 옵션 필드 위젯 값을 업데이트한다."""
+        opt = next(
+            (
+                candidate
+                for category in CATEGORY_DEFS
+                for candidate in category.options
+                if candidate.field == field
+            ),
+            None,
+        )
+        if opt is None:
+            return
+
+        wid = _field_id(field)
+        if opt.widget == "switch":
+            with contextlib.suppress(Exception):
+                self.query_one(f"#{wid}", Switch).value = bool(value)
+        elif opt.widget == "select":
+            with contextlib.suppress(Exception):
+                self.query_one(f"#{wid}", Select).value = str(value)
+        elif opt.widget in ("input", "input_float", "input_int"):
+            with contextlib.suppress(Exception):
+                raw = "" if value is None or value == "" else str(value)
+                self.query_one(f"#{wid}", Input).value = raw

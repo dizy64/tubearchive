@@ -136,6 +136,43 @@ class TestCreateParser:
 
         assert args.denoise_level == "heavy"
 
+    def test_parses_external_audio_options(self) -> None:
+        """외부 마이크 오디오 및 clap sync 옵션."""
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                "--external-audio",
+                "/path/to/mic.wav",
+                "--external-audio-dir",
+                "/path/to/audio",
+                "--external-audio-scope",
+                "long",
+                "--sync-audio-clap",
+                "--external-audio-drift-correction",
+                "--external-audio-offset",
+                "0.12",
+                "--external-audio-min-confidence",
+                "0.7",
+                "--external-audio-match-window",
+                "600",
+                "--external-audio-mode",
+                "mix",
+                "--camera-audio-volume",
+                "0.12",
+            ]
+        )
+
+        assert args.external_audio == "/path/to/mic.wav"
+        assert args.external_audio_dir == "/path/to/audio"
+        assert args.external_audio_scope == "long"
+        assert args.sync_audio_clap is True
+        assert args.external_audio_drift_correction is True
+        assert args.external_audio_offset == 0.12
+        assert args.external_audio_min_confidence == 0.7
+        assert args.external_audio_match_window == 600
+        assert args.external_audio_mode == "mix"
+        assert args.camera_audio_volume == 0.12
+
     def test_parses_group_flags(self) -> None:
         """--group/--no-group 플래그."""
         parser = create_parser()
@@ -644,6 +681,144 @@ class TestValidateArgs:
 
         assert result.group_sequences is True
         assert result.fade_duration == 0.5
+
+    def test_validates_external_audio_options(self, tmp_path: Path) -> None:
+        """외부 오디오 파일과 clap sync 옵션 검증."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        external_audio = tmp_path / "mic.wav"
+        external_audio.touch()
+
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                "--external-audio",
+                str(external_audio),
+                "--sync-audio-clap",
+                "--external-audio-offset",
+                "0.12",
+                "--external-audio-min-confidence",
+                "0.7",
+                "--external-audio-mode",
+                "mix",
+                "--camera-audio-volume",
+                "0.12",
+                str(video_file),
+            ]
+        )
+
+        result = validate_args(args)
+
+        assert result.external_audio_path == external_audio
+        assert result.sync_audio_clap is True
+        assert result.external_audio_offset == 0.12
+        assert result.external_audio_min_confidence == 0.7
+        assert result.external_audio_mode == "mix"
+        assert result.camera_audio_volume == 0.12
+
+    def test_validates_external_audio_dir_options(self, tmp_path: Path) -> None:
+        """외부 오디오 디렉토리 자동 선택 옵션 검증."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                "--external-audio-dir",
+                str(audio_dir),
+                "--sync-audio-clap",
+                "--external-audio-drift-correction",
+                "--external-audio-match-window",
+                "600",
+                str(video_file),
+            ]
+        )
+
+        result = validate_args(args)
+
+        assert result.external_audio_dir == audio_dir
+        assert result.sync_audio_clap is True
+        assert result.external_audio_drift_correction is True
+        assert result.external_audio_match_window == 600
+
+    def test_validates_external_audio_long_scope(self, tmp_path: Path) -> None:
+        """긴 외부 오디오 scope는 단일 파일 외부 녹음을 요구한다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        external_audio = tmp_path / "recorder.wav"
+        external_audio.touch()
+
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                "--external-audio",
+                str(external_audio),
+                "--external-audio-scope",
+                "long",
+                str(video_file),
+            ]
+        )
+
+        result = validate_args(args)
+
+        assert result.external_audio_path == external_audio
+        assert result.external_audio_scope == "long"
+
+    def test_sync_audio_clap_requires_external_audio(self, tmp_path: Path) -> None:
+        """clap sync는 외부 오디오 파일 없이 사용할 수 없다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+
+        parser = create_parser()
+        args = parser.parse_args(["--sync-audio-clap", str(video_file)])
+
+        with pytest.raises(ValueError, match="--external-audio"):
+            validate_args(args)
+
+    def test_external_audio_drift_correction_requires_clap_sync(self, tmp_path: Path) -> None:
+        """drift 보정은 두 clap 기준점을 쓰므로 clap sync 활성화가 필요하다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        external_audio = tmp_path / "mic.wav"
+        external_audio.touch()
+
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                "--external-audio",
+                str(external_audio),
+                "--external-audio-drift-correction",
+                str(video_file),
+            ]
+        )
+
+        with pytest.raises(ValueError, match="--sync-audio-clap"):
+            validate_args(args)
+
+    def test_camera_audio_volume_requires_valid_range(self, tmp_path: Path) -> None:
+        """카메라 오디오 믹스 볼륨은 0.0~1.0 범위여야 한다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        external_audio = tmp_path / "mic.wav"
+        external_audio.touch()
+
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                "--external-audio",
+                str(external_audio),
+                "--external-audio-mode",
+                "mix",
+                "--camera-audio-volume",
+                "1.2",
+                str(video_file),
+            ]
+        )
+
+        with pytest.raises(ValueError, match="--camera-audio-volume"):
+            validate_args(args)
 
     def test_no_fade_sets_duration_to_zero(self, tmp_path: Path) -> None:
         """--no-fade 지정 시 fade_duration이 0.0으로 설정."""

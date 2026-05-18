@@ -15,6 +15,7 @@
 - **Dip-to-Black 효과**: 0.5초 Fade In/Out 자동 적용 (그룹 경계에서만)
 - **오디오 라우드니스 정규화**: EBU R128 loudnorm 2-pass 자동 보정
 - **오디오 노이즈 제거**: FFmpeg afftdn 기반 바람소리/배경 소음 저감
+- **외부 마이크 오디오 치환**: 박수/피크 기반 자동 싱크 후 외부 음원 사용
 - **무음 구간 감지/제거**: 시작/끝 무음 자동 감지 및 트리밍
 - **영상 안정화**: vidstab 2-pass 기반 손떨림 보정 (light/medium/heavy)
 - **BGM 믹싱**: 배경음악 자동 믹싱, 볼륨 조절, 루프 재생
@@ -207,7 +208,107 @@ tubearchive --normalize-audio ~/Videos/
 
 # 오디오 노이즈 제거 (바람소리/배경 소음 저감)
 tubearchive --denoise --denoise-level medium ~/Videos/
+
+# 외부 마이크 오디오를 영상 오디오 대신 사용
+tubearchive --external-audio ~/Audio/mic.wav video.mp4
+
+# 디렉토리에서 영상 길이/촬영 시각에 가장 가까운 외부 오디오 자동 선택
+tubearchive --external-audio-dir ~/Audio/Takes video.mp4
+
+# 외부 마이크를 메인으로 쓰되 카메라 내장 오디오를 낮게 섞기
+tubearchive --external-audio ~/Audio/mic.wav --external-audio-mode mix --camera-audio-volume 0.1 video.mp4
+
+# 박수/클랩 같은 공통 피크를 찾아 외부 오디오 자동 싱크
+tubearchive --external-audio ~/Audio/mic.wav --sync-audio-clap video.mp4
+
+# 긴 외부 녹음 하나를 여러 영상 클립에 자동 구간 매칭
+tubearchive --external-audio ~/Audio/recorder.wav --external-audio-scope long ~/Videos/day1/
+
+# 시작/끝 기준음 2개 이상으로 장시간 drift 보정
+tubearchive --external-audio ~/Audio/mic.wav --sync-audio-clap --external-audio-drift-correction video.mp4
+
+# 자동 싱크 결과에 수동 offset을 추가 보정
+tubearchive --external-audio ~/Audio/mic.wav --sync-audio-clap --external-audio-offset 0.12 video.mp4
 ```
+
+> `--external-audio-scope long`은 긴 외부 녹음 1개를 여러 영상 클립에 자동 구간 매칭합니다. 각 영상에는 매칭 기준이 되는 카메라 내장 오디오가 필요합니다.
+
+TUI에서는 Pipeline 탭 오른쪽의 **외부 오디오 선택** 패널에서 오디오 파일이나 후보 폴더를 바로 적용할 수 있습니다.
+
+| TUI 버튼 | 적용 옵션 | 용도 |
+|----------|-----------|------|
+| 단일 파일 | `--external-audio ... --external-audio-scope single` | 영상 1개에 외부 오디오 파일 1개를 적용합니다. |
+| 긴 녹음 | `--external-audio ... --external-audio-scope long` | 긴 외부 녹음 1개에서 여러 영상 클립의 구간을 자동으로 찾아 적용합니다. |
+| 후보 폴더 | `--external-audio-dir ...` | 폴더 안의 오디오 파일 중 길이/시각이 가까운 후보를 자동 선택합니다. |
+
+Audio 옵션 섹션에서 `replace`/`mix`, 카메라 오디오 볼륨, clap sync, drift 보정, 수동 offset, 최소 신뢰도, 후보 매칭 창을 조정할 수 있습니다.
+
+#### 외부 마이크 오디오 싱크 가이드
+
+전용 보이스레코더로 녹음한 외부 음원은 영상 내장 오디오와 함께 녹음된 공통 소리를 기준으로 싱크합니다.
+
+##### 적용 범위 선택
+
+| 상황 | 권장 옵션 | 설명 |
+|------|-----------|------|
+| 영상 1개와 외부 오디오 1개 | `--external-audio ... --external-audio-scope single` | 기본값입니다. 외부 오디오 전체를 해당 영상에 적용합니다. |
+| 영상 1개와 외부 오디오 후보 폴더 | `--external-audio-dir ...` | 후보 폴더에서 영상 길이와 파일 시각이 가까운 파일을 자동 선택합니다. |
+| 여러 영상 클립과 긴 외부 녹음 1개 | `--external-audio ... --external-audio-scope long` | 긴 외부 녹음에서 각 영상 클립에 대응하는 구간을 찾아 잘라 씁니다. |
+
+`long` 모드는 아래 순서로 동작합니다.
+
+1. 영상 클립을 촬영 시간/정렬 규칙에 따라 최종 순서로 정렬합니다.
+2. 각 영상 클립의 카메라 내장 오디오를 저해상도 energy envelope로 분석합니다.
+3. 긴 외부 녹음의 envelope에서 각 클립과 가장 비슷한 구간을 순서대로 찾습니다.
+4. 트랜스코딩 시 외부 오디오 입력에 `-ss <시작초> -t <클립길이>`를 적용해 해당 구간만 사용합니다.
+
+이 방식은 “음역대가 비슷한 파일”을 고르는 것이 아니라, 시간축의 소리 변화 패턴이 실제로 맞는 구간을 찾습니다.
+
+##### 주요 옵션
+
+- `--external-audio-mode replace`: 영상 내장 오디오를 외부 오디오로 완전 교체합니다. 기본값입니다.
+- `--external-audio-dir`: 디렉토리 안의 지원 오디오 파일 중 영상 길이와 파일 시각이 가장 가까운 후보를 자동 선택합니다.
+- `--external-audio-scope single`: 외부 오디오 파일 1개를 영상 1개에 적용합니다. 기본값입니다.
+- `--external-audio-scope long`: 긴 외부 녹음에서 각 영상 클립과 맞는 구간을 사전 분석 후 자동으로 잘라 적용합니다.
+- `--external-audio-mode mix`: 외부 오디오를 메인으로 사용하고 카메라 내장 오디오를 낮은 볼륨으로 섞습니다.
+- `--camera-audio-volume`: `mix` 모드에서 카메라 내장 오디오 볼륨을 지정합니다. 권장 시작값은 `0.08`~`0.12`입니다.
+- `--sync-audio-clap`: 양쪽 오디오에서 박수/딱 소리 같은 공통 피크를 찾아 자동 offset을 계산합니다.
+- `--external-audio-drift-correction`: 두 개 이상의 공통 피크가 있으면 외부 오디오 `atempo` 비율을 추정해 장시간 drift를 보정합니다.
+- `--external-audio-offset`: 자동 싱크 결과에 수동 보정값을 추가합니다. 양수는 외부 오디오를 늦추고, 음수는 앞당깁니다.
+- `--external-audio-match-window`: `--external-audio-dir` 후보 선택 시 파일 시각을 비교할 시간 창입니다. 기본값은 `300`초입니다.
+
+##### 합성 방식
+
+| 모드 | 결과 | 권장 상황 |
+|------|------|-----------|
+| `replace` | 출력 영상의 오디오를 외부 오디오로 교체 | 전용 보이스레코더 음질을 최종 오디오로 쓸 때 |
+| `mix` | 외부 오디오에 카메라 내장 오디오를 낮은 볼륨으로 섞음 | 현장감이나 싱크 검증용 카메라 오디오를 조금 남기고 싶을 때 |
+
+`mix`에서 카메라 오디오가 너무 크게 들리면 `--camera-audio-volume 0.05`처럼 낮추고, 카메라 오디오가 필요 없으면 기본 `replace`를 사용하세요.
+
+촬영 팁:
+
+- 녹화 시작 직후 박수 1회 또는 보이스레코더의 카메라 싱크용 톤처럼 명확한 기준음을 넣으면 자동 싱크 성공률이 높습니다.
+- 장시간 촬영은 시작/끝에 기준음을 한 번씩 넣어야 drift 보정을 사용할 수 있습니다.
+- 여러 클립에 긴 외부 녹음 하나를 쓸 때는 각 클립 시작부에 짧은 기준음을 남기면 구간 매칭 신뢰도가 올라갑니다.
+- 전용 보이스레코더는 영상 작업 기준으로 WAV 48kHz, 가능하면 32-bit float로 녹음하는 것을 권장합니다.
+- 자동 싱크 실패 시 먼저 `--external-audio-offset`으로 수동 보정하고, 디렉토리 자동 매칭은 길이/시각이 가까운 파일명 구조와 함께 사용합니다.
+
+##### 실패 조건과 대응
+
+| 증상 | 원인 | 대응 |
+|------|------|------|
+| `long` 모드에서 매칭 실패 | 카메라 내장 오디오가 없거나 무음에 가까움 | 해당 클립은 외부 녹음 자동 구간 매칭이 불가능합니다. 카메라 오디오가 있는 원본을 사용하세요. |
+| 잘못된 외부 구간이 선택됨 | 비슷한 박수/소리 패턴이 여러 번 반복됨 | 클립 시작부마다 서로 구분되는 기준음을 넣거나 `--external-audio-min-confidence`를 높입니다. |
+| 긴 촬영 후반부 싱크가 조금 밀림 | 카메라와 외부 레코더의 클럭 차이 | 단일 긴 클립에는 `--external-audio-drift-correction`을 사용하고, 여러 클립은 클립별 구간 매칭으로 누적 drift를 줄입니다. |
+| 출력이 너무 일찍 끝남 | 외부 오디오가 영상보다 짧음 | `replace` 경로는 짧은 외부 오디오를 패딩해 영상 길이를 보존합니다. 계속 재현되면 원본 길이를 `ffprobe`로 확인하세요. |
+
+권장 검증 절차:
+
+1. 먼저 `--dry-run`으로 정렬 순서와 옵션을 확인합니다.
+2. 짧은 샘플 폴더로 `--external-audio-scope long`을 실행합니다.
+3. 결과 영상 초반/클립 경계/후반부를 들어보고 싱크가 유지되는지 확인합니다.
+4. 매칭이 흔들리면 각 클립 시작부에 기준음을 추가한 촬영 방식으로 재시도합니다.
 
 ### 무음 구간 감지/제거
 

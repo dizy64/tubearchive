@@ -82,6 +82,150 @@ class TestTranscoderMetadataReuse:
 
         mock_detect.assert_not_called()
 
+    def test_external_audio_clap_sync_passes_offset_to_ffmpeg(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """clap sync 결과와 수동 offset을 합산해 외부 오디오 입력에 적용한다."""
+        from tubearchive.domain.media.audio_sync import AudioSyncOffset
+
+        external_audio = tmp_path / "mic.wav"
+        external_audio.touch()
+        mock_metadata.has_audio = True
+        with (
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch("tubearchive.domain.media.transcoder.create_combined_filter") as mock_filter,
+            patch(
+                "tubearchive.domain.media.transcoder.calculate_clap_sync_offset",
+                return_value=AudioSyncOffset(
+                    offset_seconds=0.5,
+                    confidence=0.9,
+                    reference_time_seconds=2.0,
+                    external_time_seconds=1.5,
+                ),
+            ),
+        ):
+            mock_filter.return_value = ("scale=3840:2160", "afade=t=in:st=0:d=0.5")
+            mock_transcoder.executor.run.return_value = None
+            mock_transcoder.executor.build_transcode_command.return_value = ["ffmpeg"]
+
+            mock_transcoder.transcode_video(
+                video_file,
+                external_audio_path=external_audio,
+                sync_audio_clap=True,
+                external_audio_offset=0.1,
+                external_audio_mode="mix",
+                camera_audio_volume=0.12,
+            )
+
+        build_call = mock_transcoder.executor.build_transcode_command.call_args
+        assert build_call is not None
+        assert build_call.kwargs["external_audio_path"] == external_audio
+        assert build_call.kwargs["external_audio_offset"] == pytest.approx(0.6)
+        assert build_call.kwargs["external_audio_mode"] == "mix"
+        assert build_call.kwargs["camera_audio_volume"] == 0.12
+
+    def test_external_audio_dir_selects_candidate_and_applies_drift(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """외부 오디오 디렉토리에서 후보를 고르고 drift tempo를 FFmpeg에 전달한다."""
+        from tubearchive.domain.media.audio_sync import AudioSyncDrift, ExternalAudioCandidate
+
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        external_audio = audio_dir / "take.wav"
+        external_audio.touch()
+        mock_metadata.has_audio = True
+        from datetime import datetime
+
+        video_file.creation_time = datetime(2026, 1, 1, 12, 0, 0)
+        with (
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch("tubearchive.domain.media.transcoder.create_combined_filter") as mock_filter,
+            patch(
+                "tubearchive.domain.media.transcoder.select_external_audio_candidate",
+                return_value=ExternalAudioCandidate(
+                    path=external_audio,
+                    score=0.92,
+                    duration_seconds=mock_metadata.duration_seconds,
+                    duration_delta_seconds=0.1,
+                    mtime_delta_seconds=3.0,
+                ),
+            ),
+            patch(
+                "tubearchive.domain.media.transcoder.calculate_clap_sync_drift",
+                return_value=AudioSyncDrift(
+                    offset_seconds=0.25,
+                    tempo_ratio=1.001,
+                    confidence=0.9,
+                    reference_start_time_seconds=1.0,
+                    external_start_time_seconds=0.75,
+                    reference_end_time_seconds=9.0,
+                    external_end_time_seconds=8.758,
+                ),
+            ),
+        ):
+            mock_filter.return_value = ("scale=3840:2160", "")
+            mock_transcoder.executor.run.return_value = None
+            mock_transcoder.executor.build_transcode_command.return_value = ["ffmpeg"]
+
+            mock_transcoder.transcode_video(
+                video_file,
+                external_audio_dir=audio_dir,
+                sync_audio_clap=True,
+                external_audio_drift_correction=True,
+            )
+
+        build_call = mock_transcoder.executor.build_transcode_command.call_args
+        assert build_call is not None
+        assert build_call.kwargs["external_audio_path"] == external_audio
+        assert build_call.kwargs["external_audio_offset"] == pytest.approx(0.25)
+        assert build_call.kwargs["external_audio_tempo"] == pytest.approx(1.001)
+
+    def test_external_audio_segment_passes_start_and_duration_to_ffmpeg(
+        self,
+        mock_transcoder: MagicMock,
+        mock_metadata: MagicMock,
+        video_file: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """긴 외부 녹음의 클립별 구간 시작/길이를 FFmpeg 빌더에 전달한다."""
+        external_audio = tmp_path / "recorder.wav"
+        external_audio.touch()
+        mock_metadata.has_audio = True
+        with (
+            patch(
+                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
+            ),
+            patch("tubearchive.domain.media.transcoder.create_combined_filter") as mock_filter,
+        ):
+            mock_filter.return_value = ("scale=3840:2160", "")
+            mock_transcoder.executor.run.return_value = None
+            mock_transcoder.executor.build_transcode_command.return_value = ["ffmpeg"]
+
+            mock_transcoder.transcode_video(
+                video_file,
+                external_audio_path=external_audio,
+                external_audio_start=12.5,
+                external_audio_duration=3.0,
+            )
+
+        build_call = mock_transcoder.executor.build_transcode_command.call_args
+        assert build_call is not None
+        assert build_call.kwargs["external_audio_start"] == pytest.approx(12.5)
+        assert build_call.kwargs["external_audio_duration"] == pytest.approx(3.0)
+
 
 class TestTranscoderVidstab:
     """Transcoder의 vidstab 2-pass 통합 테스트."""

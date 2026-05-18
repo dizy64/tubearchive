@@ -112,6 +112,32 @@ async def test_projects_pane_empty_db() -> None:
 
 
 @pytest.mark.asyncio
+async def test_projects_pane_db_error_shows_path(tmp_path: Path) -> None:
+    """Projects Pane DB 오류 행에 실제 DB 경로를 포함한다."""
+    from textual.widgets import DataTable
+
+    db_path = tmp_path / "missing-parent" / "db.sqlite"
+
+    with (
+        patch("tubearchive.app.tui.screens.projects.database_session") as mock_session,
+        patch(
+            "tubearchive.app.tui.screens.projects.get_default_db_path",
+            return_value=db_path,
+        ),
+    ):
+        mock_session.side_effect = OSError("unable to open database file")
+        app = TubeArchiveApp()
+        async with app.run_test(headless=True, size=(120, 40)):
+            await app.run_action("switch_tab('projects')")
+            pane = app.query_one(ProjectsPane)
+            table = pane.query_one("#projects-table", DataTable)
+
+        assert table.get_cell_at((0, 0)) == "ERR"
+        assert str(db_path) in str(table.get_cell_at((0, 1)))
+        assert "unable to open database file" in str(table.get_cell_at((0, 1)))
+
+
+@pytest.mark.asyncio
 async def test_history_pane_empty_db() -> None:
     """History Pane이 빈 DB에서 오류 없이 표시되는지 확인한다."""
     from textual.widgets import DataTable

@@ -36,7 +36,7 @@ def get_default_db_path() -> Path:
     """
     env_path = os.environ.get(ENV_DB_PATH)
     if env_path:
-        path = Path(env_path)
+        path = Path(env_path).expanduser()
         # 디렉토리인 경우 파일명 자동 추가
         if path.is_dir():
             return path / "tubearchive.db"

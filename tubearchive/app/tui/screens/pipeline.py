@@ -21,6 +21,7 @@ from textual.widgets import Button, Label
 from tubearchive.app.cli.context import PipelineContext
 from tubearchive.app.cli.pipeline import run_pipeline
 from tubearchive.app.tui.models import TuiOptionState
+from tubearchive.app.tui.widgets.audio_browser import AudioBrowserPane
 from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
 from tubearchive.app.tui.widgets.file_progress_panel import FileProgressPanel
 from tubearchive.app.tui.widgets.option_panels import OptionsPane
@@ -111,6 +112,11 @@ class PipelinePane(Widget):
     #pipeline-status {
         color: $text-muted;
     }
+    #pipeline-right {
+        width: 1fr;
+        height: 1fr;
+        overflow: hidden;
+    }
     """
 
     def __init__(
@@ -127,7 +133,11 @@ class PipelinePane(Widget):
         with Vertical():
             with Horizontal(id="pipeline-body"):
                 yield FileBrowserPane(initial_path=self.initial_path)
-                yield OptionsPane(initial_state=self._initial_state)
+                with Vertical(id="pipeline-right"):
+                    yield OptionsPane(
+                        initial_state=self._initial_state,
+                        initial_path=self.initial_path,
+                    )
             yield FileProgressPanel(id="pipeline-progress")
             with Horizontal(id="pipeline-footer"):
                 yield Button("실행", id="run-button", variant="primary", disabled=True)
@@ -162,6 +172,31 @@ class PipelinePane(Widget):
             app.action_load_preset()
         elif event.action == "preset-save-defaults":
             app.action_save_defaults()
+
+    def on_audio_browser_pane_audio_selected(
+        self,
+        event: AudioBrowserPane.AudioSelected,
+    ) -> None:
+        """AudioBrowserPane 선택값을 옵션 패널에 반영한다."""
+        options = self.query_one(OptionsPane)
+        if event.target == "single":
+            options.set_field_value("external_audio_path", str(event.path))
+            options.set_field_value("external_audio_dir", "")
+            options.set_field_value("external_audio_scope", "single")
+            message = f"외부 오디오 파일 적용: {event.path.name}"
+        elif event.target == "long":
+            options.set_field_value("external_audio_path", str(event.path))
+            options.set_field_value("external_audio_dir", "")
+            options.set_field_value("external_audio_scope", "long")
+            options.set_field_value("sync_audio_clap", False)
+            message = f"긴 외부 녹음 적용: {event.path.name}"
+        else:
+            options.set_field_value("external_audio_path", "")
+            options.set_field_value("external_audio_dir", str(event.path))
+            options.set_field_value("external_audio_scope", "single")
+            message = f"외부 오디오 후보 폴더 적용: {event.path}"
+
+        self.query_one("#pipeline-status", Label).update(message)
 
     # ------------------------------------------------------------------
     # 버튼 이벤트
