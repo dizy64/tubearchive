@@ -458,8 +458,35 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
     elif location_raw:
         location = location_raw
 
-    # 오디오 스트림 존재 여부
-    has_audio = any(s.get("codec_type") == "audio" for s in probe_data.get("streams", []))
+    # SAR(Sample Aspect Ratio) — concat 호환성 판정에 필요
+    sar = video_stream.get("sample_aspect_ratio")
+    if sar in ("0:1", "0/1", ""):  # ffprobe가 미정 시 반환하는 값
+        sar = None
+
+    # 오디오 스트림: 첫 번째 스트림의 코덱·샘플레이트·채널 수 추출 + 전체 개수.
+    # 다중 오디오 트랙(외부 마이크 + 내장 마이크 등)은 stream-copy concat 호환성에
+    # 영향을 주므로 ``audio_stream_count`` 도 같이 노출한다.
+    audio_streams = [s for s in probe_data.get("streams", []) if s.get("codec_type") == "audio"]
+    audio_stream_count = len(audio_streams)
+    audio_stream = audio_streams[0] if audio_streams else None
+    has_audio = audio_stream is not None
+    audio_codec: str | None = None
+    audio_sample_rate: int | None = None
+    audio_channels: int | None = None
+    if audio_stream is not None:
+        audio_codec = audio_stream.get("codec_name")
+        sample_rate_raw = audio_stream.get("sample_rate")
+        if sample_rate_raw is not None:
+            try:
+                audio_sample_rate = int(sample_rate_raw)
+            except (TypeError, ValueError):
+                audio_sample_rate = None
+        channels_raw = audio_stream.get("channels")
+        if channels_raw is not None:
+            try:
+                audio_channels = int(channels_raw)
+            except (TypeError, ValueError):
+                audio_channels = None
 
     return VideoMetadata(
         width=width,
@@ -478,6 +505,11 @@ def detect_metadata(video_path: Path) -> VideoMetadata:
         color_primaries=color_primaries,
         location=location,
         has_audio=has_audio,
+        sar=sar,
+        audio_codec=audio_codec,
+        audio_sample_rate=audio_sample_rate,
+        audio_channels=audio_channels,
+        audio_stream_count=audio_stream_count,
     )
 
 
