@@ -1,4 +1,8 @@
-"""트랜스코더 loudnorm 통합 테스트."""
+"""트랜스코더 통합 테스트.
+
+라우드니스 정규화(loudnorm)는 트랜스코딩이 아닌 병합 직후 단계에서 적용된다.
+관련 테스트는 :mod:`tests.unit.test_loudnorm_post_merge` 에 있다.
+"""
 
 from __future__ import annotations
 
@@ -10,8 +14,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-class TestTranscoderLoudnorm:
-    """Transcoder의 loudnorm 2-pass 통합 테스트."""
+class TestTranscoderMetadataReuse:
+    """Transcoder의 메타데이터 재사용 동작 테스트."""
 
     @pytest.fixture
     def mock_transcoder(self, tmp_path: Path) -> Generator[MagicMock]:
@@ -29,12 +33,10 @@ class TestTranscoderLoudnorm:
             t = Transcoder(db_path=tmp_path / "test.db", temp_dir=tmp_path)
             t.executor = MagicMock()
 
-            # resume_mgr mocks
             mock_resume = mock_resume_cls.return_value
             mock_resume.is_video_processed.return_value = False
             mock_resume.get_or_create_job.return_value = 1
 
-            # job_repo mocks
             mock_job_repo = mock_job_repo_cls.return_value
             mock_job = MagicMock()
             mock_job.status = MagicMock()
@@ -42,7 +44,6 @@ class TestTranscoderLoudnorm:
             mock_job.progress_percent = 0
             mock_job_repo.get_by_id.return_value = mock_job
 
-            # video_repo mock
             t.video_repo.get_by_path.return_value = None
             t.video_repo.insert.return_value = 1
 
@@ -50,7 +51,6 @@ class TestTranscoderLoudnorm:
 
     @pytest.fixture
     def mock_metadata(self) -> MagicMock:
-        """메타데이터 mock."""
         meta = MagicMock()
         meta.width = 3840
         meta.height = 2160
@@ -62,47 +62,11 @@ class TestTranscoderLoudnorm:
 
     @pytest.fixture
     def video_file(self, tmp_path: Path) -> MagicMock:
-        """VideoFile mock."""
         from tubearchive.domain.models.video import VideoFile
 
         vf = MagicMock(spec=VideoFile)
         vf.path = tmp_path / "test_video.mp4"
         return vf
-
-    @pytest.fixture
-    def loudnorm_stderr(self) -> str:
-        """FFmpeg loudnorm 분석 stderr 출력 예시."""
-        return """
-[Parsed_loudnorm_0 @ 0x7f9b4] Summary:
-{
-\t"input_i" : "-24.50",
-\t"input_tp" : "-3.20",
-\t"input_lra" : "8.10",
-\t"input_thresh" : "-35.00",
-\t"output_i" : "-14.00",
-\t"output_tp" : "-1.50",
-\t"output_lra" : "7.00",
-\t"output_thresh" : "-24.50",
-\t"normalization_type" : "dynamic",
-\t"target_offset" : "0.50"
-}
-"""
-
-    def test_transcode_without_normalize_skips_analysis(
-        self,
-        mock_transcoder: MagicMock,
-        mock_metadata: MagicMock,
-        video_file: MagicMock,
-    ) -> None:
-        """normalize_audio=False이면 분석 패스를 실행하지 않는다."""
-        with patch(
-            "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
-        ):
-            mock_transcoder.executor.run.return_value = None
-            with contextlib.suppress(Exception):
-                mock_transcoder.transcode_video(video_file, normalize_audio=False)
-
-        mock_transcoder.executor.build_loudness_analysis_command.assert_not_called()
 
     def test_transcode_with_metadata_does_not_redetect(
         self,
@@ -117,134 +81,6 @@ class TestTranscoderLoudnorm:
                 mock_transcoder.transcode_video(video_file, metadata=mock_metadata)
 
         mock_detect.assert_not_called()
-
-    def test_transcode_with_normalize_runs_analysis(
-        self,
-        mock_transcoder: MagicMock,
-        mock_metadata: MagicMock,
-        video_file: MagicMock,
-        loudnorm_stderr: str,
-    ) -> None:
-        """normalize_audio=True이면 loudness 분석 패스를 실행한다."""
-        with patch(
-            "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
-        ):
-            mock_transcoder.executor.run.return_value = None
-            mock_transcoder.executor.run_analysis.return_value = loudnorm_stderr
-            mock_transcoder.executor.build_loudness_analysis_command.return_value = [
-                "ffmpeg",
-                "-i",
-                "test.mp4",
-                "-af",
-                "loudnorm",
-                "-vn",
-                "-f",
-                "null",
-                "-",
-            ]
-            with contextlib.suppress(Exception):
-                mock_transcoder.transcode_video(video_file, normalize_audio=True)
-
-        mock_transcoder.executor.build_loudness_analysis_command.assert_called_once()
-        mock_transcoder.executor.run_analysis.assert_called_once()
-
-    def test_normalize_passes_analysis_to_combined_filter(
-        self,
-        mock_transcoder: MagicMock,
-        mock_metadata: MagicMock,
-        video_file: MagicMock,
-        loudnorm_stderr: str,
-    ) -> None:
-        """normalize_audio=True이면 분석 결과를 create_combined_filter에 전달한다."""
-        with (
-            patch(
-                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
-            ),
-            patch("tubearchive.domain.media.transcoder.create_combined_filter") as mock_filter,
-        ):
-            mock_filter.return_value = ("scale=3840:2160", "afade=t=in:st=0:d=0.5")
-            mock_transcoder.executor.run.return_value = None
-            mock_transcoder.executor.run_analysis.return_value = loudnorm_stderr
-            mock_transcoder.executor.build_loudness_analysis_command.return_value = ["ffmpeg"]
-            with contextlib.suppress(Exception):
-                mock_transcoder.transcode_video(video_file, normalize_audio=True)
-
-        call_kwargs = mock_filter.call_args
-        assert call_kwargs is not None
-        loudnorm_arg = call_kwargs.kwargs.get("loudnorm_analysis")
-        assert loudnorm_arg is not None
-        assert loudnorm_arg.input_i == pytest.approx(-24.5)
-
-    def test_denoise_with_normalize_passes_denoise_as_pre_filter(
-        self,
-        mock_transcoder: MagicMock,
-        mock_metadata: MagicMock,
-        video_file: MagicMock,
-        loudnorm_stderr: str,
-    ) -> None:
-        """denoise + normalize_audio 동시 사용 시 loudnorm 1st pass에 denoise 필터가 포함된다.
-
-        loudnorm 1st pass는 2nd pass의 실제 입력(denoise 처리 후)과 동일한 오디오를
-        측정해야 측정값과 입력이 일치한다. 불일치 시 오디오 손실이 발생한다 (issue #66).
-        """
-        mock_metadata.has_audio = True
-        with (
-            patch(
-                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
-            ),
-            patch("tubearchive.domain.media.transcoder.create_combined_filter") as mock_filter,
-        ):
-            mock_filter.return_value = ("scale=3840:2160", "afade=t=in:st=0:d=0.5")
-            mock_transcoder.executor.run.return_value = None
-            mock_transcoder.executor.run_analysis.return_value = loudnorm_stderr
-            mock_transcoder.executor.build_loudness_analysis_command.return_value = ["ffmpeg"]
-            with contextlib.suppress(Exception):
-                mock_transcoder.transcode_video(
-                    video_file,
-                    normalize_audio=True,
-                    denoise=True,
-                    denoise_level="medium",
-                )
-
-        build_call = mock_transcoder.executor.build_loudness_analysis_command.call_args
-        assert build_call is not None
-        audio_filter = build_call.kwargs.get("audio_filter") or build_call.args[1]
-        # denoise 필터(afftdn)가 loudnorm 분석 필터 앞에 포함되어야 한다
-        assert "afftdn" in audio_filter
-        assert "loudnorm" in audio_filter
-        assert audio_filter.index("afftdn") < audio_filter.index("loudnorm")
-
-    def test_normalize_only_no_denoise_pre_filter(
-        self,
-        mock_transcoder: MagicMock,
-        mock_metadata: MagicMock,
-        video_file: MagicMock,
-        loudnorm_stderr: str,
-    ) -> None:
-        """denoise=False이면 loudnorm 1st pass에 afftdn이 포함되지 않는다."""
-        mock_metadata.has_audio = True
-        with (
-            patch(
-                "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
-            ),
-            patch("tubearchive.domain.media.transcoder.create_combined_filter") as mock_filter,
-        ):
-            mock_filter.return_value = ("scale=3840:2160", "afade=t=in:st=0:d=0.5")
-            mock_transcoder.executor.run.return_value = None
-            mock_transcoder.executor.run_analysis.return_value = loudnorm_stderr
-            mock_transcoder.executor.build_loudness_analysis_command.return_value = ["ffmpeg"]
-            with contextlib.suppress(Exception):
-                mock_transcoder.transcode_video(
-                    video_file,
-                    normalize_audio=True,
-                    denoise=False,
-                )
-
-        build_call = mock_transcoder.executor.build_loudness_analysis_command.call_args
-        assert build_call is not None
-        audio_filter = build_call.kwargs.get("audio_filter") or build_call.args[1]
-        assert "afftdn" not in audio_filter
-        assert "loudnorm" in audio_filter
 
     def test_external_audio_clap_sync_passes_offset_to_ffmpeg(
         self,
@@ -909,13 +745,18 @@ class TestTranscoderNoAudioPaths:
         vf.path = Path("/fake/video.mp4")
         return vf
 
-    def test_normalize_no_audio_skips(
+    def test_no_audio_passes_through(
         self,
         mock_transcoder: MagicMock,
         mock_metadata: MagicMock,
         video_file: MagicMock,
     ) -> None:
-        """has_audio=False + normalize_audio=True → loudnorm 분석 스킵."""
+        """has_audio=False여도 트랜스코딩이 정상 진행된다.
+
+        과거에는 normalize_audio 옵션 분기에서 별도 처리가 필요했으나,
+        라우드니스 정규화가 병합 후 단계로 옮겨진 뒤에는 트랜스코더에서
+        오디오 유무를 더 이상 분기하지 않는다.
+        """
         with (
             patch(
                 "tubearchive.domain.media.transcoder.detect_metadata", return_value=mock_metadata
@@ -928,50 +769,9 @@ class TestTranscoderNoAudioPaths:
             mock_transcoder.executor.run.return_value = None
 
             with contextlib.suppress(Exception):
-                mock_transcoder.transcode_video(video_file, normalize_audio=True)
+                mock_transcoder.transcode_video(video_file)
 
-            # loudnorm 분석이 호출되지 않아야 함
             mock_transcoder.executor.build_loudness_analysis_command.assert_not_called()
-
-    def test_normalize_failure_skips(
-        self,
-        mock_transcoder: MagicMock,
-        video_file: MagicMock,
-    ) -> None:
-        """loudnorm 분석 실패 → 정규화 없이 진행."""
-        from tubearchive.infra.ffmpeg.executor import FFmpegError
-
-        meta = MagicMock()
-        meta.width = 3840
-        meta.height = 2160
-        meta.duration_seconds = 60.0
-        meta.fps = 29.97
-        meta.is_portrait = False
-        meta.is_vfr = False
-        meta.device_model = None
-        meta.color_transfer = None
-        meta.has_audio = True
-
-        with (
-            patch("tubearchive.domain.media.transcoder.detect_metadata", return_value=meta),
-            patch(
-                "tubearchive.domain.media.transcoder.create_combined_filter",
-                return_value=("vf", "af"),
-            ),
-            patch(
-                "tubearchive.domain.media.transcoder.create_loudnorm_analysis_filter",
-                return_value="loudnorm",
-            ),
-        ):
-            mock_transcoder.executor.run.return_value = None
-            mock_transcoder.executor.run_analysis.side_effect = FFmpegError("loudnorm fail")
-            mock_transcoder.executor.build_loudness_analysis_command.return_value = ["ffmpeg"]
-
-            with contextlib.suppress(Exception):
-                mock_transcoder.transcode_video(video_file, normalize_audio=True)
-
-            # 분석 실패해도 트랜스코딩은 진행
-            mock_transcoder.executor.build_transcode_command.assert_called()
 
 
 class TestTranscoderLutResolution:

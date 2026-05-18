@@ -165,6 +165,9 @@ def test_run_pipeline_notifier_called_on_merge(tmp_path: Path) -> None:
         args.stabilize = False
         args.fade_duration = 0.5
         args.watermark = False
+        # MagicMock의 기본 attribute는 truthy MagicMock이므로 명시적으로 False 설정.
+        # 누락 시 post-merge loudnorm 분기로 진입해 CI 환경의 ffprobe 부재로 실패한다.
+        args.normalize_audio = False
 
         run_pipeline(args, context=ctx)
 

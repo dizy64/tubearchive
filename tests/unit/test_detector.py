@@ -134,6 +134,96 @@ class TestDetector:
         assert metadata.is_portrait is False
         assert metadata.is_vfr is False
 
+    def test_audio_and_sar_fields(self, tmp_path: Path) -> None:
+        """오디오 코덱·샘플레이트·채널 및 SAR 필드 감지."""
+        ffprobe_output = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 3840,
+                    "height": 2160,
+                    "pix_fmt": "p010le",
+                    "r_frame_rate": "30000/1001",
+                    "avg_frame_rate": "30000/1001",
+                    "duration": "30.0",
+                    "sample_aspect_ratio": "1:1",
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "sample_rate": "48000",
+                    "channels": 2,
+                },
+            ],
+            "format": {"duration": "30.0", "tags": {}},
+        }
+        video_file = tmp_path / "clip.mp4"
+        video_file.write_text("")
+
+        with patch("tubearchive.domain.media.detector._run_ffprobe", return_value=ffprobe_output):
+            metadata = detect_metadata(video_file)
+
+        assert metadata.sar == "1:1"
+        assert metadata.audio_codec == "aac"
+        assert metadata.audio_sample_rate == 48000
+        assert metadata.audio_channels == 2
+        assert metadata.has_audio is True
+
+    def test_no_audio_stream_yields_none_audio_fields(self, tmp_path: Path) -> None:
+        """오디오 스트림이 없으면 모든 오디오 필드가 None이어야 한다."""
+        ffprobe_output = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 3840,
+                    "height": 2160,
+                    "pix_fmt": "p010le",
+                    "r_frame_rate": "30000/1001",
+                    "avg_frame_rate": "30000/1001",
+                    "duration": "10.0",
+                },
+            ],
+            "format": {"duration": "10.0", "tags": {}},
+        }
+        video_file = tmp_path / "silent.mp4"
+        video_file.write_text("")
+
+        with patch("tubearchive.domain.media.detector._run_ffprobe", return_value=ffprobe_output):
+            metadata = detect_metadata(video_file)
+
+        assert metadata.has_audio is False
+        assert metadata.audio_codec is None
+        assert metadata.audio_sample_rate is None
+        assert metadata.audio_channels is None
+
+    def test_sar_undefined_falls_back_to_none(self, tmp_path: Path) -> None:
+        """ffprobe가 SAR을 ``0:1`` 등으로 반환할 때 ``None``으로 정규화한다."""
+        ffprobe_output = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 3840,
+                    "height": 2160,
+                    "pix_fmt": "p010le",
+                    "r_frame_rate": "30000/1001",
+                    "avg_frame_rate": "30000/1001",
+                    "duration": "5.0",
+                    "sample_aspect_ratio": "0:1",
+                },
+            ],
+            "format": {"duration": "5.0", "tags": {}},
+        }
+        video_file = tmp_path / "sar.mp4"
+        video_file.write_text("")
+
+        with patch("tubearchive.domain.media.detector._run_ffprobe", return_value=ffprobe_output):
+            metadata = detect_metadata(video_file)
+
+        assert metadata.sar is None
+
     def test_detect_portrait_video(self, portrait_ffprobe_output: dict, tmp_path: Path) -> None:
         """세로 영상 감지."""
         video_file = tmp_path / "test.mov"
