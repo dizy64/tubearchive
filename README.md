@@ -133,7 +133,7 @@ uv python list | grep 3.14         # Python 3.14 설치 확인
 
 ```bash
 # 저장소 클론
-git clone <repository-url>
+git clone https://github.com/dizy64/tubearchive.git
 cd tubearchive
 
 # 의존성 설치 (uv가 자동으로 Python 버전 관리)
@@ -199,28 +199,10 @@ uv run tubearchive ~/Videos/Trip2024/
 ### TUI 대시보드
 
 ```bash
-# 현재 디렉토리를 기준으로 TUI 실행
-tubearchive tui
-
-# 특정 촬영 폴더를 열어서 시작
 tubearchive tui ~/Videos/Trip2026/
-
-# 개발 환경에서 실행
-uv run tubearchive tui ~/Videos/Trip2026/
 ```
 
-키보드 단축키:
-
-| 키 | 동작 |
-|----|------|
-| `1` | Pipeline 탭 |
-| `2` | Projects 탭 |
-| `3` | Stats 탭 |
-| `4` | History 탭 |
-| `5` | YouTube 탭 |
-| `r` | 현재 탭 새로고침 |
-| `t` | 테마 전환 |
-| `q` | 종료 |
+TUI는 Pipeline, Projects, Stats, History, YouTube 탭을 제공하며 터미널 안에서 바로 실행됩니다. 자세한 실행 방식과 단축키는 [TUI 가이드](docs/tui.md)를 참고하세요.
 
 ### 다른 경로에서 실행
 

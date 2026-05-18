@@ -79,7 +79,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv python install 3.14
 
 # Project setup
-git clone <repository-url>
+git clone https://github.com/dizy64/tubearchive.git
 cd tubearchive
 uv sync
 ```
@@ -123,18 +123,9 @@ uv run tubearchive tui ~/Videos/Trip2026/
 uv run tubearchive ~/Videos/Trip2026/
 ```
 
-## TUI Shortcuts
+## TUI Guide
 
-| Key | Action |
-|-----|--------|
-| `1` | Pipeline tab |
-| `2` | Projects tab |
-| `3` | Stats tab |
-| `4` | History tab |
-| `5` | YouTube tab |
-| `r` | Refresh current tab |
-| `t` | Toggle theme |
-| `q` | Quit |
+For detailed launch modes, tabs, and keyboard shortcuts, see the [TUI guide](docs/tui.en.md).
 
 ## Configuration
 

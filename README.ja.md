@@ -79,7 +79,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv python install 3.14
 
 # プロジェクト設定
-git clone <repository-url>
+git clone https://github.com/dizy64/tubearchive.git
 cd tubearchive
 uv sync
 ```
@@ -123,18 +123,9 @@ uv run tubearchive tui ~/Videos/Trip2026/
 uv run tubearchive ~/Videos/Trip2026/
 ```
 
-## TUI ショートカット
+## TUI ガイド
 
-| キー | 操作 |
-|------|------|
-| `1` | Pipeline タブ |
-| `2` | Projects タブ |
-| `3` | Stats タブ |
-| `4` | History タブ |
-| `5` | YouTube タブ |
-| `r` | 現在のタブを更新 |
-| `t` | テーマ切り替え |
-| `q` | 終了 |
+詳しい起動方法、タブ構成、キーボードショートカットは [TUI ガイド](docs/tui.ja.md) を参照してください。
 
 ## 設定
 
