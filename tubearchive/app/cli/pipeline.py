@@ -32,9 +32,11 @@ from tubearchive.app.cli.context import (
 from tubearchive.app.cli.validators import ValidatedArgs
 from tubearchive.config import HooksConfig
 from tubearchive.domain.media.audio_sync import (
+    AudioSyncError,
     ExternalAudioSegment,
     calculate_external_audio_segments,
     calculate_external_audio_segments_from_timestamps,
+    calculate_external_audio_segments_from_wav_dir,
 )
 from tubearchive.domain.media.backup import BackupExecutor, BackupResult
 from tubearchive.domain.media.detector import (
@@ -1333,6 +1335,67 @@ def _analyze_long_external_audio(
     return segments
 
 
+def _analyze_long_external_audio_from_dir(
+    video_files: list[VideoFile],
+    wav_dir: Path,
+    temp_dir: Path,
+) -> dict[Path, ExternalAudioSegment]:
+    """WAV 디렉토리의 BEXT 메타데이터로 각 클립에 맞는 WAV 구간을 자동 매핑한다.
+
+    - 각 WAV의 BEXT time_reference → 녹음 시작 UTC
+    - 각 DJI 클립의 creation_time UTC와 비교
+    - 클립이 WAV 경계에 걸치면 임시 concat WAV 생성
+    - DJI 파일명으로 타임존 오프셋 자동 감지 (비-DJI 카메라는 KST=32400 폴백)
+    """
+    reference_timestamps: dict[Path, datetime] = {}
+    for video_file in video_files:
+        ts = get_video_creation_time(video_file.path)
+        if ts is None:
+            raise AudioSyncError(
+                f"creation_time 태그를 읽지 못했습니다: {video_file.path.name}\n"
+                "BEXT 기반 WAV 매핑은 각 클립의 촬영 시각 메타데이터가 필요합니다."
+            )
+        reference_timestamps[video_file.path] = ts
+
+    tz_offset = detect_local_timezone_offset(video_files[0].path)
+    if tz_offset is None:
+        logger.warning(
+            "타임존 오프셋 자동 감지 실패 (DJI 파일명 패턴이 아님). KST(+9h) 기본값 사용."
+        )
+        tz_offset = 32400
+
+    reference_durations: dict[Path, float] = {}
+    for video_file in video_files:
+        metadata = detect_metadata(video_file.path)
+        reference_durations[video_file.path] = metadata.duration_seconds
+
+    logger.info(
+        "WAV 디렉토리 기반 외부 오디오 매핑: %s (타임존 오프셋 %+ds)",
+        wav_dir,
+        tz_offset,
+    )
+
+    segments = calculate_external_audio_segments_from_wav_dir(
+        [vf.path for vf in video_files],
+        wav_dir,
+        reference_timestamps=reference_timestamps,
+        reference_durations=reference_durations,
+        tz_offset_seconds=tz_offset,
+        temp_dir=temp_dir,
+    )
+
+    for video_file in video_files:
+        seg = segments[video_file.path]
+        logger.info(
+            "External audio segment: %s -> wav=%s start=%.3fs duration=%.3fs",
+            video_file.path.name,
+            seg.path.name,
+            seg.start_seconds,
+            seg.duration_seconds,
+        )
+    return segments
+
+
 def _resolve_output_path(validated_args: ValidatedArgs) -> Path:
     """출력 파일 경로를 결정한다.
 
@@ -1539,15 +1602,26 @@ def run_pipeline(
         default_fade=validated_args.fade_duration,
     )
 
+    # 2. 트랜스코딩용 임시 디렉토리 (이후 단계에서도 공유)
+    temp_dir = get_temp_dir()
+    logger.info(f"Using temp directory: {temp_dir}")
+
     external_audio_segments: dict[Path, ExternalAudioSegment] | None = None
-    if validated_args.external_audio_scope == "long" and validated_args.external_audio_path:
-        external_audio_segments = _analyze_long_external_audio(
-            main_video_files,
-            validated_args.external_audio_path,
-            validated_args.external_audio_min_confidence,
-            use_clap_sync=validated_args.sync_audio_clap,
-            wav_start_offset_seconds=validated_args.external_audio_wav_offset,
-        )
+    if validated_args.external_audio_scope == "long":
+        if validated_args.external_audio_path:
+            external_audio_segments = _analyze_long_external_audio(
+                main_video_files,
+                validated_args.external_audio_path,
+                validated_args.external_audio_min_confidence,
+                use_clap_sync=validated_args.sync_audio_clap,
+                wav_start_offset_seconds=validated_args.external_audio_wav_offset,
+            )
+        elif validated_args.external_audio_dir:
+            external_audio_segments = _analyze_long_external_audio_from_dir(
+                main_video_files,
+                validated_args.external_audio_dir,
+                temp_dir,
+            )
 
     video_files = list(main_video_files)
     if template_intro_file is not None:
@@ -1578,8 +1652,6 @@ def run_pipeline(
                 fade_out=0.0,
             )
     # 2. 트랜스코딩
-    temp_dir = get_temp_dir()
-    logger.info(f"Using temp directory: {temp_dir}")
 
     transcode_opts = TranscodeOptions(
         denoise=validated_args.denoise,

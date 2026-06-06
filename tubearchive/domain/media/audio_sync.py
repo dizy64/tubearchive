@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
+import uuid
 from array import array
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import median
+
+logger = logging.getLogger(__name__)
+
+# detector는 audio_sync를 import하지 않으므로 순환 참조 없음
+from tubearchive.domain.media.detector import get_audio_bext_start_utc  # noqa: E402
 
 SUPPORTED_EXTERNAL_AUDIO_EXTENSIONS = {
     ".aac",
@@ -677,3 +684,188 @@ def select_external_audio_candidate(
             f"(best score={best.score:.2f}, min={min_score:.2f})"
         )
     return best
+
+
+# ---------------------------------------------------------------------------
+# BEXT 타임스탬프 기반 WAV 디렉토리 자동 매핑
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WavInfo:
+    """BEXT time_reference로 파악한 WAV 파일의 타임라인 정보."""
+
+    path: Path
+    start_utc: datetime
+    duration_seconds: float
+
+    @property
+    def end_utc(self) -> datetime:
+        return self.start_utc + timedelta(seconds=self.duration_seconds)
+
+
+def scan_wav_dir_bext(
+    wav_dir: Path,
+    tz_offset_seconds: int,
+    *,
+    ffprobe_path: str = "ffprobe",
+) -> list[WavInfo]:
+    """WAV 디렉토리에서 BEXT time_reference가 있는 파일만 추출해 시작 시각 순으로 반환.
+
+    BEXT가 없는 파일(ffmpeg concat 결과물 등)은 제외한다.
+    """
+    results: list[WavInfo] = []
+    for path in sorted(wav_dir.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTERNAL_AUDIO_EXTENSIONS:
+            continue
+        start_utc = get_audio_bext_start_utc(path, tz_offset_seconds)
+        if start_utc is None:
+            continue
+        try:
+            duration = probe_media_duration(path, ffprobe_path=ffprobe_path)
+        except AudioSyncError:
+            continue
+        results.append(WavInfo(path=path, start_utc=start_utc, duration_seconds=duration))
+
+    results.sort(key=lambda w: w.start_utc)
+    return results
+
+
+def _create_spanning_wav(
+    segments: list[tuple[Path, float, float]],
+    output_path: Path,
+    *,
+    ffmpeg_path: str = "ffmpeg",
+) -> None:
+    """여러 WAV 구간을 이어 붙여 단일 WAV 파일로 만든다.
+
+    Args:
+        segments: (wav_path, start_seconds, duration_seconds) 목록 (순서 중요)
+        output_path: 출력 WAV 경로
+    """
+    inputs: list[str] = []
+    filter_parts: list[str] = []
+    for i, (wav_path, start_s, dur_s) in enumerate(segments):
+        inputs += ["-ss", str(start_s), "-t", str(dur_s), "-i", str(wav_path)]
+        filter_parts.append(f"[{i}:a]atrim=start=0:duration={dur_s},asetpts=PTS-STARTPTS[a{i}]")
+
+    n = len(segments)
+    concat_inputs = "".join(f"[a{i}]" for i in range(n))
+    filter_complex = ";".join(filter_parts) + f";{concat_inputs}concat=n={n}:v=0:a=1[out]"
+
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        *inputs,
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[out]",
+        "-c:a",
+        "pcm_s24le",
+        str(output_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise AudioSyncError(f"Failed to concat WAV segments: {result.stderr[-500:]}")
+
+
+def calculate_external_audio_segments_from_wav_dir(
+    clip_paths: Sequence[Path],
+    wav_dir: Path,
+    *,
+    reference_timestamps: dict[Path, datetime],
+    reference_durations: dict[Path, float],
+    tz_offset_seconds: int,
+    temp_dir: Path,
+    ffprobe_path: str = "ffprobe",
+    ffmpeg_path: str = "ffmpeg",
+) -> dict[Path, ExternalAudioSegment]:
+    """WAV 디렉토리의 BEXT 메타데이터로 각 클립에 맞는 WAV 구간을 자동 매핑한다.
+
+    각 WAV 파일의 BEXT time_reference(녹음 시작 UTC)와 DJI 클립의 creation_time(UTC)을
+    비교해 클립별 WAV 파일 + 시작 오프셋을 결정한다.
+
+    클립이 두 WAV 파일 경계에 걸치는 경우 임시 concat WAV를 생성한다.
+    """
+    wav_infos = scan_wav_dir_bext(wav_dir, tz_offset_seconds, ffprobe_path=ffprobe_path)
+    if not wav_infos:
+        raise AudioSyncError(
+            f"BEXT time_reference가 있는 WAV 파일을 찾지 못했습니다: {wav_dir}\n"
+            "ffmpeg concat으로 만든 파일은 BEXT가 제거됩니다. 원본 WAV 파일 디렉토리를 지정하세요."
+        )
+
+    logger.info(
+        "WAV 타임라인 구축: %d개 파일 (%s ~ %s UTC)",
+        len(wav_infos),
+        wav_infos[0].start_utc.strftime("%H:%M:%S"),
+        wav_infos[-1].end_utc.strftime("%H:%M:%S"),
+    )
+
+    segments: dict[Path, ExternalAudioSegment] = {}
+    for clip_path in clip_paths:
+        clip_utc = reference_timestamps[clip_path]
+        clip_dur = reference_durations[clip_path]
+        clip_end_utc = clip_utc + timedelta(seconds=clip_dur)
+
+        # 클립 시작 시각이 속하는 WAV 찾기
+        start_wav: WavInfo | None = None
+        for w in wav_infos:
+            if w.start_utc <= clip_utc < w.end_utc:
+                start_wav = w
+                break
+
+        if start_wav is None:
+            raise AudioSyncError(
+                f"{clip_path.name}: WAV 타임라인에 포함되지 않음 "
+                f"(클립 시작 {clip_utc.strftime('%H:%M:%S')} UTC, "
+                f"WAV 범위 {wav_infos[0].start_utc.strftime('%H:%M:%S')}~"
+                f"{wav_infos[-1].end_utc.strftime('%H:%M:%S')} UTC)"
+            )
+
+        wav_ss = (clip_utc - start_wav.start_utc).total_seconds()
+
+        if clip_end_utc <= start_wav.end_utc:
+            # 단일 WAV 안에 완전히 포함
+            segments[clip_path] = ExternalAudioSegment(
+                path=start_wav.path,
+                start_seconds=wav_ss,
+                duration_seconds=clip_dur,
+                confidence=1.0,
+            )
+        else:
+            # 두 WAV 이상에 걸쳐 있음 → 임시 concat WAV 생성
+            span_segments: list[tuple[Path, float, float]] = []
+            remaining_start_utc = clip_utc
+            remaining_dur = clip_dur
+
+            for w in wav_infos:
+                if remaining_dur <= 0:
+                    break
+                if w.end_utc <= remaining_start_utc:
+                    continue
+                if w.start_utc > remaining_start_utc:
+                    break
+                seg_start_in_wav = (remaining_start_utc - w.start_utc).total_seconds()
+                available = w.duration_seconds - seg_start_in_wav
+                use_dur = min(remaining_dur, available)
+                span_segments.append((w.path, seg_start_in_wav, use_dur))
+                remaining_start_utc += timedelta(seconds=use_dur)
+                remaining_dur -= use_dur
+
+            concat_path = temp_dir / f"span_{uuid.uuid4().hex[:8]}.wav"
+            logger.info(
+                "%s: WAV 경계 걸침 → %d개 WAV concat → %s",
+                clip_path.name,
+                len(span_segments),
+                concat_path.name,
+            )
+            _create_spanning_wav(span_segments, concat_path, ffmpeg_path=ffmpeg_path)
+            segments[clip_path] = ExternalAudioSegment(
+                path=concat_path,
+                start_seconds=0.0,
+                duration_seconds=clip_dur,
+                confidence=1.0,
+            )
+
+    return segments
