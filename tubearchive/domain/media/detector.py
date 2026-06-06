@@ -15,12 +15,13 @@ ffprobe를 서브프로세스로 실행하여 영상 파일의 기술 메타데�
     :class:`~tubearchive.domain.models.video.VideoMetadata` 데이터클래스
 """
 
+import contextlib
 import json
 import logging
 import re
 import subprocess
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -732,6 +733,84 @@ def get_video_creation_time(video_path: Path) -> datetime | None:
         dt = datetime.fromisoformat(creation_time_str.replace("Z", "+00:00"))
         return dt.astimezone(UTC).replace(tzinfo=None)
     except ValueError:
+        return None
+
+
+_DJI_FILENAME_TS_PATTERN = re.compile(r"^DJI_(\d{14})_\d{4}_\w\.\w+$", re.IGNORECASE)
+
+
+def detect_local_timezone_offset(video_path: Path) -> int | None:
+    """DJI 파일명(로컬 시각)과 ffprobe UTC creation_time 비교로 timezone offset(초) 반환.
+
+    DJI 파일명에는 로컬 촬영 시각이, ffprobe ``creation_time`` 태그에는 UTC가
+    저장된다. 두 값의 차이를 15분 단위로 반올림해 timezone offset을 구한다.
+
+    Returns:
+        UTC+9(KST)이면 32400, 감지 실패 시 None
+    """
+    match = _DJI_FILENAME_TS_PATTERN.match(video_path.name)
+    if not match:
+        return None
+    try:
+        local_dt = datetime.strptime(match.group(1), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
+    utc_dt = get_video_creation_time(video_path)
+    if utc_dt is None:
+        return None
+
+    diff_seconds = (local_dt - utc_dt).total_seconds()
+    # 15분(900초) 단위로 반올림해 clock drift 노이즈 제거
+    return round(diff_seconds / 900) * 900
+
+
+def get_audio_bext_start_utc(
+    audio_path: Path,
+    local_tz_offset_seconds: int,
+) -> datetime | None:
+    """WAV BEXT time_reference + date 태그로 녹음 시작 시각(UTC naive datetime)을 반환.
+
+    TASCAM 등 필드 레코더의 BWF BEXT 청크에서 ``time_reference`` (자정부터 샘플 수)와
+    ``date`` 태그(YYYY-MM-DD)를 읽어 UTC datetime으로 변환한다.
+
+    Args:
+        audio_path: WAV 파일 경로
+        local_tz_offset_seconds: 레코더 로컬 timezone offset(초). 예: KST(UTC+9) = 32400
+
+    Returns:
+        녹음 시작 UTC naive datetime, 실패 시 None
+    """
+    try:
+        probe_data = _run_ffprobe(audio_path)
+    except RuntimeError:
+        return None
+
+    tags = probe_data.get("format", {}).get("tags", {})
+    date_str = tags.get("date")
+    time_ref_str = tags.get("time_reference")
+
+    if not date_str or time_ref_str is None:
+        return None
+
+    sample_rate: int | None = None
+    for stream in probe_data.get("streams", []):
+        if stream.get("codec_type") == "audio":
+            sr_str = stream.get("sample_rate")
+            if sr_str is not None:
+                with contextlib.suppress(ValueError):
+                    sample_rate = int(sr_str)
+            break
+
+    if sample_rate is None or sample_rate == 0:
+        return None
+
+    try:
+        seconds_from_midnight = int(time_ref_str) / sample_rate
+        wav_local_midnight = datetime.strptime(date_str, "%Y-%m-%d")
+        wav_local_dt = wav_local_midnight + timedelta(seconds=seconds_from_midnight)
+        return wav_local_dt - timedelta(seconds=local_tz_offset_seconds)
+    except (ValueError, OverflowError, OSError):
         return None
 
 

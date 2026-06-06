@@ -721,3 +721,97 @@ class TestBuildDeviceName:
     def test_unknown_make_title_case(self) -> None:
         result = _build_device_name("ACME CORP", "Model X")
         assert result == "Acme Model X"
+
+
+class TestDetectLocalTimezoneOffset:
+    """detect_local_timezone_offset 단위 테스트."""
+
+    def _mock_ffprobe(self, creation_time_utc: str) -> dict:
+        return {
+            "streams": [],
+            "format": {
+                "duration": "60.0",
+                "tags": {"creation_time": creation_time_utc},
+            },
+        }
+
+    def test_kst_utc_plus9(self, tmp_path: Path) -> None:
+        """DJI 파일명 19:08:10(KST), UTC 10:08:11 → offset 32400s (UTC+9)."""
+        dji_file = tmp_path / "DJI_20260605190810_0001_D.MP4"
+        dji_file.touch()
+        probe = self._mock_ffprobe("2026-06-05T10:08:11.000000Z")
+        with patch("tubearchive.domain.media.detector._run_ffprobe", return_value=probe):
+            from tubearchive.domain.media.detector import detect_local_timezone_offset
+
+            offset = detect_local_timezone_offset(dji_file)
+        assert offset == 32400  # UTC+9
+
+    def test_non_dji_returns_none(self, tmp_path: Path) -> None:
+        """DJI 파일명 패턴이 아니면 None."""
+        non_dji = tmp_path / "GH010042.MP4"
+        non_dji.touch()
+        from tubearchive.domain.media.detector import detect_local_timezone_offset
+
+        assert detect_local_timezone_offset(non_dji) is None
+
+    def test_no_creation_time_returns_none(self, tmp_path: Path) -> None:
+        """ffprobe에 creation_time 없으면 None."""
+        dji_file = tmp_path / "DJI_20260605190810_0001_D.MP4"
+        dji_file.touch()
+        probe = {"streams": [], "format": {"duration": "60.0", "tags": {}}}
+        with patch("tubearchive.domain.media.detector._run_ffprobe", return_value=probe):
+            from tubearchive.domain.media.detector import detect_local_timezone_offset
+
+            assert detect_local_timezone_offset(dji_file) is None
+
+
+class TestGetAudioBextStartUtc:
+    """get_audio_bext_start_utc 단위 테스트."""
+
+    def _make_probe(self, time_reference: int, sample_rate: int, date: str) -> dict:
+        return {
+            "streams": [{"codec_type": "audio", "sample_rate": str(sample_rate)}],
+            "format": {
+                "tags": {
+                    "date": date,
+                    "time_reference": str(time_reference),
+                }
+            },
+        }
+
+    def test_kst_19_03_36_to_utc(self) -> None:
+        """time_reference → 19:03:36 KST → UTC 10:03:36."""
+        # 19:03:36 KST = 19*3600+3*60+36 = 68616s from midnight
+        # @ 48kHz: 68616 * 48000 = 3293568000 samples
+        samples = 68616 * 48000
+        probe = self._make_probe(samples, 48000, "2026-06-05")
+        with patch("tubearchive.domain.media.detector._run_ffprobe", return_value=probe):
+            from datetime import datetime
+
+            from tubearchive.domain.media.detector import get_audio_bext_start_utc
+
+            result = get_audio_bext_start_utc(Path("test.wav"), local_tz_offset_seconds=32400)
+        assert result is not None
+        assert result == datetime(2026, 6, 5, 10, 3, 36)
+
+    def test_no_time_reference_returns_none(self) -> None:
+        """time_reference 태그 없으면 None."""
+        probe = {
+            "streams": [{"codec_type": "audio", "sample_rate": "48000"}],
+            "format": {"tags": {"date": "2026-06-05"}},
+        }
+        with patch("tubearchive.domain.media.detector._run_ffprobe", return_value=probe):
+            from tubearchive.domain.media.detector import get_audio_bext_start_utc
+
+            assert get_audio_bext_start_utc(Path("test.wav"), 32400) is None
+
+    def test_no_date_tag_returns_none(self) -> None:
+        """date 태그 없으면 None."""
+        probe = {
+            "streams": [{"codec_type": "audio", "sample_rate": "48000"}],
+            "format": {"tags": {"time_reference": "3293568000"}},
+        }
+        with patch("tubearchive.domain.media.detector._run_ffprobe", return_value=probe):
+            from tubearchive.domain.media.detector import get_audio_bext_start_utc
+
+            assert get_audio_bext_start_utc(Path("test.wav"), 32400) is None

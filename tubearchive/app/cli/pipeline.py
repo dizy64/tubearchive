@@ -37,7 +37,12 @@ from tubearchive.domain.media.audio_sync import (
     calculate_external_audio_segments_from_timestamps,
 )
 from tubearchive.domain.media.backup import BackupExecutor, BackupResult
-from tubearchive.domain.media.detector import detect_metadata, get_video_creation_time
+from tubearchive.domain.media.detector import (
+    detect_local_timezone_offset,
+    detect_metadata,
+    get_audio_bext_start_utc,
+    get_video_creation_time,
+)
 from tubearchive.domain.media.grouper import (
     FileSequenceGroup,
     compute_fade_map,
@@ -1222,6 +1227,40 @@ def _apply_ordering(
     return video_files
 
 
+def _auto_detect_wav_offset(
+    audio_path: Path,
+    reference_video_path: Path,
+    reference_timestamps: dict[Path, datetime],
+) -> float:
+    """BEXT time_reference + DJI timezone으로 WAV 시작 offset(초)을 자동 계산한다.
+
+    WAV 파일의 BEXT ``time_reference`` 와 레코더의 로컬 날짜를 사용해 WAV 녹음
+    시작 UTC datetime을 구한 뒤, 첫 번째 영상의 UTC creation_time과의 차이를 반환한다.
+
+    반환값이 양수이면 WAV가 첫 영상보다 먼저 시작된 것이다.
+    BEXT 정보가 없거나 DJI 파일명 timezone 감지에 실패하면 0.0을 반환한다.
+    """
+    tz_offset = detect_local_timezone_offset(reference_video_path)
+    if tz_offset is None:
+        logger.debug("Timezone auto-detection failed (non-DJI file?) — using wav_offset=0")
+        return 0.0
+
+    wav_start_utc = get_audio_bext_start_utc(audio_path, tz_offset)
+    if wav_start_utc is None:
+        logger.debug("No BEXT time_reference in audio file — using wav_offset=0")
+        return 0.0
+
+    first_video_utc = min(reference_timestamps.values())
+    offset = (first_video_utc - wav_start_utc).total_seconds()
+    logger.info(
+        "BEXT 기반 WAV offset 자동 감지: %.1fs (WAV 시작 %s UTC, 첫 클립 %s UTC)",
+        offset,
+        wav_start_utc.strftime("%H:%M:%S"),
+        first_video_utc.strftime("%H:%M:%S"),
+    )
+    return offset
+
+
 def _analyze_long_external_audio(
     video_files: list[VideoFile],
     external_audio_path: Path,
@@ -1256,16 +1295,21 @@ def _analyze_long_external_audio(
         reference_timestamps[video_file.path] = ts
 
     if reference_timestamps:
+        effective_offset = wav_start_offset_seconds
+        if effective_offset == 0.0:
+            effective_offset = _auto_detect_wav_offset(
+                external_audio_path, video_files[0].path, reference_timestamps
+            )
         logger.info(
             "Using timestamp-based external audio alignment (wav_offset=%.1fs)",
-            wav_start_offset_seconds,
+            effective_offset,
         )
         segments = calculate_external_audio_segments_from_timestamps(
             [video_file.path for video_file in video_files],
             external_audio_path,
             reference_durations=reference_durations,
             reference_timestamps=reference_timestamps,
-            wav_start_offset_seconds=wav_start_offset_seconds,
+            wav_start_offset_seconds=effective_offset,
         )
     else:
         logger.info("Timestamps unavailable, falling back to audio envelope matching")
