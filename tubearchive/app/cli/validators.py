@@ -310,10 +310,11 @@ def validate_args(
     external_audio_scope = str(getattr(args, "external_audio_scope", "single") or "single")
     if external_audio_scope not in {"single", "long"}:
         raise ValueError("--external-audio-scope must be one of: single, long")
-    if external_audio_scope == "long" and external_audio_path is None:
-        raise ValueError("--external-audio-scope long requires --external-audio")
-    if external_audio_scope == "long" and external_audio_dir is not None:
-        raise ValueError("--external-audio-scope long does not support --external-audio-dir")
+    has_external = external_audio_path is not None or external_audio_dir is not None
+    if external_audio_scope == "long" and not has_external:
+        raise ValueError(
+            "--external-audio-scope long requires --external-audio or --external-audio-dir"
+        )
 
     sync_audio_clap = bool(getattr(args, "sync_audio_clap", False))
     if sync_audio_clap and external_audio_path is None and external_audio_dir is None:
