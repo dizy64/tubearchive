@@ -333,6 +333,67 @@ def _normalize(values: Sequence[float]) -> list[float]:
     return [(value - mean) / stddev for value in values]
 
 
+def estimate_segment_by_transient(
+    reference_samples: Sequence[float],
+    external_samples: Sequence[float],
+    sample_rate: int,
+    *,
+    external_path: Path,
+    reference_duration_seconds: float,
+    search_start_seconds: float = 0.0,
+    search_slack_seconds: float = 120.0,
+    min_confidence: float = 0.35,
+) -> ExternalAudioSegment:
+    """transient 매칭으로 긴 외부 녹음에서 reference clip의 시작 위치를 찾는다.
+
+    envelope 상관 분석이 저신뢰도일 때 fallback으로 사용한다. 악기 연주처럼
+    명확한 어택 transient가 있는 경우 환경음 기반 envelope보다 정확하다.
+
+    - reference: 첫 30초에서만 대표 transient를 찾는다 (클립 시작점 기준).
+    - external: search_start_seconds 주변 search_slack_seconds 창에서만 찾는다.
+      창을 전체 clip 길이로 늘리면 클립마다 누적 오차가 발생하므로 slack만 사용.
+    """
+    ref_window_seconds = min(30.0, reference_duration_seconds)
+    ref_window_size = max(1, int(ref_window_seconds * sample_rate))
+    reference_candidates = find_transient_candidates(
+        list(reference_samples[:ref_window_size]), sample_rate
+    )
+    if not reference_candidates:
+        raise AudioSyncError("Reference clip has no detectable transients for segment matching")
+
+    ref_transient = reference_candidates[0]
+
+    search_start_sample = int(search_start_seconds * sample_rate)
+    if search_start_sample >= len(external_samples):
+        raise AudioSyncError("Search window start exceeds external audio length")
+
+    search_end_sample = min(
+        int((search_start_seconds + search_slack_seconds) * sample_rate),
+        len(external_samples),
+    )
+    external_window = list(external_samples[search_start_sample:search_end_sample])
+    window_candidates = find_transient_candidates(external_window, sample_rate)
+    if not window_candidates:
+        raise AudioSyncError("No transient candidates found in external audio search window")
+
+    best_candidate = window_candidates[0]
+    external_abs_time = search_start_seconds + best_candidate.time_seconds
+    segment_start = max(0.0, external_abs_time - ref_transient.time_seconds)
+
+    confidence = min(1.0, min(ref_transient.score, best_candidate.score) / 10.0)
+    if confidence < min_confidence:
+        raise AudioSyncError(
+            f"Transient sync confidence too low: {confidence:.2f} (min={min_confidence:.2f})"
+        )
+
+    return ExternalAudioSegment(
+        path=external_path,
+        start_seconds=segment_start,
+        duration_seconds=reference_duration_seconds,
+        confidence=confidence,
+    )
+
+
 def estimate_external_audio_segment(
     reference_samples: Sequence[float],
     external_samples: Sequence[float],
@@ -341,6 +402,7 @@ def estimate_external_audio_segment(
     external_path: Path,
     reference_duration_seconds: float,
     search_start_seconds: float = 0.0,
+    search_end_seconds: float | None = None,
     min_confidence: float = 0.35,
 ) -> ExternalAudioSegment:
     """긴 외부 녹음에서 reference_samples와 가장 잘 맞는 구간을 찾는다.
@@ -348,6 +410,9 @@ def estimate_external_audio_segment(
     박수 한 번만 보는 방식이 아니라 에너지 envelope의 정규화 상관관계를
     사용한다. 반환되는 start_seconds는 외부 녹음에서 clip 오디오가 시작되는
     시점이다.
+
+    search_end_seconds를 지정하면 그 시점까지만 탐색한다. 전체 WAV에서
+    false positive를 막기 위해 scope=long에서는 반드시 상한을 전달해야 한다.
     """
     if sample_rate <= 0:
         raise ValueError(f"sample_rate must be > 0, got: {sample_rate}")
@@ -370,11 +435,17 @@ def estimate_external_audio_segment(
         max(0, int(search_start_seconds / frame_seconds)),
         len(external_env) - len(reference_env),
     )
+    ref_len = len(reference_env)
+    natural_end = len(external_env) - ref_len + 1
+    if search_end_seconds is not None:
+        bound_end = max(start_frame + 1, int(search_end_seconds / frame_seconds) - ref_len + 1)
+        end_frame = min(natural_end, bound_end)
+    else:
+        end_frame = natural_end
 
     best_index = start_frame
     best_corr = -1.0
-    ref_len = len(reference_env)
-    for index in range(start_frame, len(external_env) - ref_len + 1):
+    for index in range(start_frame, end_frame):
         window = external_env[index : index + ref_len]
         corr = sum(a * b for a, b in zip(reference_env, window, strict=True)) / ref_len
         if corr > best_corr:
@@ -396,6 +467,9 @@ def estimate_external_audio_segment(
     )
 
 
+_SEGMENT_SEARCH_SLACK_SECONDS = 120.0
+
+
 def calculate_external_audio_segments(
     reference_paths: Sequence[Path],
     external_path: Path,
@@ -404,8 +478,14 @@ def calculate_external_audio_segments(
     ffmpeg_path: str = "ffmpeg",
     sample_rate: int = 200,
     min_confidence: float = 0.35,
+    clap_sync_fallback: bool = False,
 ) -> dict[Path, ExternalAudioSegment]:
-    """긴 외부 녹음 1개에서 각 영상 클립에 대응하는 구간 맵을 계산한다."""
+    """긴 외부 녹음 1개에서 각 영상 클립에 대응하는 구간 맵을 계산한다.
+
+    각 클립 탐색 범위는 search_start + clip_duration + slack으로 제한해
+    distant false positive를 방지한다. envelope 상관이 min_confidence 미만이고
+    clap_sync_fallback=True이면 transient 매칭으로 재시도한다.
+    """
     if not reference_paths:
         return {}
 
@@ -423,18 +503,67 @@ def calculate_external_audio_segments(
             sample_rate=sample_rate,
         )
         duration_seconds = reference_durations[reference_path]
-        segment = estimate_external_audio_segment(
-            reference_samples,
-            external_samples,
-            sample_rate,
-            external_path=external_path,
-            reference_duration_seconds=duration_seconds,
-            search_start_seconds=search_start_seconds,
-            min_confidence=min_confidence,
-        )
+        search_end_seconds = search_start_seconds + duration_seconds + _SEGMENT_SEARCH_SLACK_SECONDS
+        try:
+            segment = estimate_external_audio_segment(
+                reference_samples,
+                external_samples,
+                sample_rate,
+                external_path=external_path,
+                reference_duration_seconds=duration_seconds,
+                search_start_seconds=search_start_seconds,
+                search_end_seconds=search_end_seconds,
+                min_confidence=min_confidence,
+            )
+        except AudioSyncError:
+            if not clap_sync_fallback:
+                raise
+            segment = estimate_segment_by_transient(
+                reference_samples,
+                external_samples,
+                sample_rate,
+                external_path=external_path,
+                reference_duration_seconds=duration_seconds,
+                search_start_seconds=search_start_seconds,
+                min_confidence=min_confidence,
+            )
         segments[reference_path] = segment
         search_start_seconds = segment.start_seconds + segment.duration_seconds
 
+    return segments
+
+
+def calculate_external_audio_segments_from_timestamps(
+    reference_paths: Sequence[Path],
+    external_path: Path,
+    *,
+    reference_durations: dict[Path, float],
+    reference_timestamps: dict[Path, datetime],
+    wav_start_offset_seconds: float = 0.0,
+) -> dict[Path, ExternalAudioSegment]:
+    """클립 타임스탬프 기반으로 긴 외부 녹음의 클립별 시작 위치를 계산한다.
+
+    오디오 분석 없이 각 클립의 촬영 시각 차이로 WAV 위치를 결정한다.
+    WAV 녹음 시작이 첫 번째 클립 시작과 동시라고 가정하며,
+    ``wav_start_offset_seconds`` 로 WAV가 먼저/늦게 시작한 경우를 보정한다.
+    (양수 → WAV가 클립1보다 먼저 시작, 음수 → WAV가 늦게 시작)
+    """
+    if not reference_paths:
+        return {}
+
+    sorted_paths = sorted(reference_paths, key=lambda p: reference_timestamps[p])
+    base_time = reference_timestamps[sorted_paths[0]]
+
+    segments: dict[Path, ExternalAudioSegment] = {}
+    for path in reference_paths:
+        elapsed = (reference_timestamps[path] - base_time).total_seconds()
+        wav_start = max(0.0, elapsed + wav_start_offset_seconds)
+        segments[path] = ExternalAudioSegment(
+            path=external_path,
+            start_seconds=wav_start,
+            duration_seconds=reference_durations[path],
+            confidence=1.0,
+        )
     return segments
 
 

@@ -83,6 +83,7 @@ class ValidatedArgs:
     camera_audio_volume: float = 0.1
     external_audio_min_confidence: float = 0.6
     external_audio_match_window: float = 300.0
+    external_audio_wav_offset: float = 0.0
     group_sequences: bool = True
     fade_duration: float = 0.5
     upload: bool = False
@@ -357,6 +358,8 @@ def validate_args(
         raise ValueError(
             f"--external-audio-match-window must be > 0, got: {external_audio_match_window}"
         )
+
+    external_audio_wav_offset = float(getattr(args, "external_audio_wav_offset", 0.0) or 0.0)
 
     # 그룹핑 설정 (CLI 인자 > 환경 변수 > 기본값)
     group_flag = bool(getattr(args, "group", False))
@@ -653,6 +656,7 @@ def validate_args(
         camera_audio_volume=camera_audio_volume,
         external_audio_min_confidence=external_audio_min_confidence,
         external_audio_match_window=external_audio_match_window,
+        external_audio_wav_offset=external_audio_wav_offset,
         group_sequences=group_sequences,
         fade_duration=fade_duration,
         upload=upload,

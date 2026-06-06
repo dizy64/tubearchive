@@ -20,6 +20,7 @@ import logging
 import re
 import subprocess
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -711,6 +712,27 @@ def _run_ffprobe(video_path: Path) -> dict[str, Any]:
         raise RuntimeError(f"ffprobe failed: {e.stderr}") from e
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Failed to parse ffprobe output: {e}") from e
+
+
+def get_video_creation_time(video_path: Path) -> datetime | None:
+    """영상 파일의 촬영 시각을 UTC datetime으로 반환한다.
+
+    ffprobe ``format.tags.creation_time`` 을 우선 사용하고,
+    실패 시 ``None`` 을 반환한다.
+    """
+    try:
+        probe_data = _run_ffprobe(video_path)
+    except RuntimeError:
+        return None
+    creation_time_str = probe_data.get("format", {}).get("tags", {}).get("creation_time")
+    if not creation_time_str:
+        return None
+    try:
+        # ISO 8601: "2026-06-05T10:08:11.000000Z"
+        dt = datetime.fromisoformat(creation_time_str.replace("Z", "+00:00"))
+        return dt.astimezone(UTC).replace(tzinfo=None)
+    except ValueError:
+        return None
 
 
 def _parse_frame_rate(frame_rate_str: str) -> float:

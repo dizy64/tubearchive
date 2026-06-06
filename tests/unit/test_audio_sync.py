@@ -11,10 +11,13 @@ import pytest
 
 from tubearchive.domain.media.audio_sync import (
     AudioSyncError,
+    ExternalAudioSegment,
     _score_external_audio_candidate,
+    calculate_external_audio_segments_from_timestamps,
     estimate_clap_sync_offset,
     estimate_clap_sync_with_drift,
     estimate_external_audio_segment,
+    estimate_segment_by_transient,
     extract_mono_pcm_samples,
     find_transient_candidates,
     probe_media_duration,
@@ -225,3 +228,199 @@ def test_estimate_external_audio_segment_respects_search_start() -> None:
     )
 
     assert segment.start_seconds == pytest.approx(4.0, abs=0.15)
+
+
+def test_estimate_segment_by_transient_finds_start_from_peak() -> None:
+    """외부 오디오 검색창 내에서 가장 강한 transient로 시작점을 계산한다."""
+    # reference: 1초 지점에 강한 피크
+    reference = [0.01] * 2000
+    reference[1000] = 5.0
+    reference[1001] = 3.5
+
+    # external: 3초 지점에 같은 강도 피크 (reference 피크가 1초에 있으므로 segment_start = 2.0s)
+    external = [0.01] * 8000
+    external[3000] = 5.0
+    external[3001] = 3.5
+
+    segment = estimate_segment_by_transient(
+        reference,
+        external,
+        sample_rate=1000,
+        external_path=Path("recorder.wav"),
+        reference_duration_seconds=2.0,
+    )
+
+    assert segment.path == Path("recorder.wav")
+    assert segment.start_seconds == pytest.approx(2.0, abs=0.1)
+    assert segment.duration_seconds == pytest.approx(2.0)
+    assert segment.confidence > 0.35
+
+
+def test_estimate_segment_by_transient_respects_search_start() -> None:
+    """search_start_seconds 이후 slack 창에서만 transient를 찾는다."""
+    reference = [0.01] * 1000
+    reference[100] = 6.0
+
+    # 1초에도 피크, 5초에도 피크 — search_start=3s, slack=4s → 5초 피크가 창 내 있음
+    external = [0.01] * 10000
+    external[1000] = 6.0  # 창 밖 (search_start=3s 이전)
+    external[5000] = 6.0  # 창 내 (3~7s)
+
+    segment = estimate_segment_by_transient(
+        reference,
+        external,
+        sample_rate=1000,
+        external_path=Path("recorder.wav"),
+        reference_duration_seconds=1.0,
+        search_start_seconds=3.0,
+        search_slack_seconds=4.0,
+    )
+
+    # external 피크 = 5초, reference 피크 = 0.1초 → segment_start ≈ 4.9s
+    assert segment.start_seconds == pytest.approx(4.9, abs=0.15)
+
+
+def test_estimate_segment_by_transient_raises_when_no_transient_in_reference() -> None:
+    """reference에 transient가 없으면 AudioSyncError가 발생한다."""
+    reference = [0.01] * 1000  # 모두 균일한 노이즈, 피크 없음
+    external = [0.01] * 3000
+    external[1500] = 5.0
+
+    with pytest.raises(AudioSyncError, match="transients"):
+        estimate_segment_by_transient(
+            reference,
+            external,
+            sample_rate=1000,
+            external_path=Path("recorder.wav"),
+            reference_duration_seconds=1.0,
+        )
+
+
+def test_calculate_external_audio_segments_uses_clap_fallback_on_low_confidence() -> None:
+    """envelope 신뢰도가 낮을 때 clap_sync_fallback=True이면 transient 매칭으로 재시도한다."""
+    from unittest.mock import patch
+
+    from tubearchive.domain.media.audio_sync import (
+        AudioSyncError,
+        calculate_external_audio_segments,
+    )
+
+    # envelope 분석은 항상 실패, transient 매칭은 성공 시나리오
+    fake_segment = ExternalAudioSegment(
+        path=Path("ext.wav"),
+        start_seconds=5.0,
+        duration_seconds=2.0,
+        confidence=0.7,
+    )
+    with (
+        patch(
+            "tubearchive.domain.media.audio_sync.extract_mono_pcm_samples",
+            return_value=[0.0] * 400,
+        ),
+        patch(
+            "tubearchive.domain.media.audio_sync.estimate_external_audio_segment",
+            side_effect=AudioSyncError("low confidence"),
+        ),
+        patch(
+            "tubearchive.domain.media.audio_sync.estimate_segment_by_transient",
+            return_value=fake_segment,
+        ) as mock_transient,
+    ):
+        result = calculate_external_audio_segments(
+            [Path("clip.mp4")],
+            Path("ext.wav"),
+            reference_durations={Path("clip.mp4"): 2.0},
+            clap_sync_fallback=True,
+        )
+
+    mock_transient.assert_called_once()
+    assert result[Path("clip.mp4")] == fake_segment
+
+
+def test_calculate_external_audio_segments_raises_without_clap_fallback() -> None:
+    """clap_sync_fallback=False이면 envelope 실패 시 예외가 전파된다."""
+    from unittest.mock import patch
+
+    from tubearchive.domain.media.audio_sync import calculate_external_audio_segments
+
+    with (
+        patch(
+            "tubearchive.domain.media.audio_sync.extract_mono_pcm_samples",
+            return_value=[0.0] * 400,
+        ),
+        patch(
+            "tubearchive.domain.media.audio_sync.estimate_external_audio_segment",
+            side_effect=AudioSyncError("low confidence"),
+        ),
+        pytest.raises(AudioSyncError),
+    ):
+        calculate_external_audio_segments(
+            [Path("clip.mp4")],
+            Path("ext.wav"),
+            reference_durations={Path("clip.mp4"): 2.0},
+            clap_sync_fallback=False,
+        )
+
+
+def test_calculate_external_audio_segments_from_timestamps_basic() -> None:
+    """타임스탬프 기반으로 WAV 위치가 클립 간 시각 차이로 계산된다."""
+    base = datetime(2026, 6, 5, 10, 8, 10)
+    clips = [Path("clip1.mp4"), Path("clip2.mp4"), Path("clip3.mp4")]
+    timestamps = {
+        clips[0]: base,
+        clips[1]: datetime(2026, 6, 5, 10, 10, 14),  # +124s
+        clips[2]: datetime(2026, 6, 5, 10, 50, 39),  # +2549s
+    }
+    durations = {clips[0]: 62.0, clips[1]: 2423.0, clips[2]: 2424.0}
+
+    result = calculate_external_audio_segments_from_timestamps(
+        clips,
+        Path("recorder.wav"),
+        reference_durations=durations,
+        reference_timestamps=timestamps,
+    )
+
+    assert result[clips[0]].start_seconds == pytest.approx(0.0)
+    assert result[clips[1]].start_seconds == pytest.approx(124.0)
+    assert result[clips[2]].start_seconds == pytest.approx(2549.0)
+    assert all(seg.confidence == 1.0 for seg in result.values())
+
+
+def test_calculate_external_audio_segments_from_timestamps_wav_offset() -> None:
+    """wav_start_offset_seconds가 양수이면 WAV가 클립1보다 먼저 시작한 만큼 보정된다."""
+    base = datetime(2026, 6, 5, 10, 0, 0)
+    clips = [Path("clip1.mp4"), Path("clip2.mp4")]
+    timestamps = {
+        clips[0]: base,
+        clips[1]: datetime(2026, 6, 5, 10, 1, 0),  # +60s
+    }
+    durations = {clips[0]: 60.0, clips[1]: 60.0}
+
+    result = calculate_external_audio_segments_from_timestamps(
+        clips,
+        Path("recorder.wav"),
+        reference_durations=durations,
+        reference_timestamps=timestamps,
+        wav_start_offset_seconds=10.0,  # WAV가 10초 먼저 시작
+    )
+
+    assert result[clips[0]].start_seconds == pytest.approx(10.0)
+    assert result[clips[1]].start_seconds == pytest.approx(70.0)
+
+
+def test_calculate_external_audio_segments_from_timestamps_negative_offset_clamped() -> None:
+    """wav_start_offset_seconds가 음수이더라도 start_seconds는 0 미만으로 내려가지 않는다."""
+    base = datetime(2026, 6, 5, 10, 0, 0)
+    clips = [Path("clip1.mp4")]
+    timestamps = {clips[0]: base}
+    durations = {clips[0]: 60.0}
+
+    result = calculate_external_audio_segments_from_timestamps(
+        clips,
+        Path("recorder.wav"),
+        reference_durations=durations,
+        reference_timestamps=timestamps,
+        wav_start_offset_seconds=-5.0,  # WAV가 5초 늦게 시작 → 클립1의 시작은 0으로 클램프
+    )
+
+    assert result[clips[0]].start_seconds == pytest.approx(0.0)

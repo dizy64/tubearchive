@@ -324,6 +324,17 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--external-audio-wav-offset",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help=(
+            "--external-audio-scope long 타임스탬프 기반 정렬 시 WAV 시작 보정값(초). "
+            "양수: WAV가 첫 클립보다 먼저 시작, 음수: 늦게 시작 (기본: 0)"
+        ),
+    )
+
+    parser.add_argument(
         "--bgm",
         type=str,
         default=None,

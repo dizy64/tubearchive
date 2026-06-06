@@ -34,9 +34,10 @@ from tubearchive.config import HooksConfig
 from tubearchive.domain.media.audio_sync import (
     ExternalAudioSegment,
     calculate_external_audio_segments,
+    calculate_external_audio_segments_from_timestamps,
 )
 from tubearchive.domain.media.backup import BackupExecutor, BackupResult
-from tubearchive.domain.media.detector import detect_metadata
+from tubearchive.domain.media.detector import detect_metadata, get_video_creation_time
 from tubearchive.domain.media.grouper import (
     FileSequenceGroup,
     compute_fade_map,
@@ -1225,8 +1226,15 @@ def _analyze_long_external_audio(
     video_files: list[VideoFile],
     external_audio_path: Path,
     min_confidence: float,
+    use_clap_sync: bool = False,
+    wav_start_offset_seconds: float = 0.0,
 ) -> dict[Path, ExternalAudioSegment]:
-    """긴 외부 녹음에서 각 영상 클립에 대응하는 외부 오디오 구간을 찾는다."""
+    """긴 외부 녹음에서 각 영상 클립에 대응하는 외부 오디오 구간을 찾는다.
+
+    ffprobe ``creation_time`` 태그가 모든 클립에 존재하면 타임스탬프 기반으로
+    WAV 위치를 계산한다. 타임스탬프를 얻을 수 없는 클립이 하나라도 있으면
+    envelope/transient 오디오 분석으로 폴백한다.
+    """
     reference_durations: dict[Path, float] = {}
     for video_file in video_files:
         metadata = detect_metadata(video_file.path)
@@ -1237,12 +1245,38 @@ def _analyze_long_external_audio(
         reference_durations[video_file.path] = metadata.duration_seconds
 
     logger.info("Analyzing long external audio: %s", external_audio_path)
-    segments = calculate_external_audio_segments(
-        [video_file.path for video_file in video_files],
-        external_audio_path,
-        reference_durations=reference_durations,
-        min_confidence=min_confidence,
-    )
+
+    # 타임스탬프 기반 계산 시도
+    reference_timestamps: dict[Path, datetime] = {}
+    for video_file in video_files:
+        ts = get_video_creation_time(video_file.path)
+        if ts is None:
+            reference_timestamps = {}
+            break
+        reference_timestamps[video_file.path] = ts
+
+    if reference_timestamps:
+        logger.info(
+            "Using timestamp-based external audio alignment (wav_offset=%.1fs)",
+            wav_start_offset_seconds,
+        )
+        segments = calculate_external_audio_segments_from_timestamps(
+            [video_file.path for video_file in video_files],
+            external_audio_path,
+            reference_durations=reference_durations,
+            reference_timestamps=reference_timestamps,
+            wav_start_offset_seconds=wav_start_offset_seconds,
+        )
+    else:
+        logger.info("Timestamps unavailable, falling back to audio envelope matching")
+        segments = calculate_external_audio_segments(
+            [video_file.path for video_file in video_files],
+            external_audio_path,
+            reference_durations=reference_durations,
+            min_confidence=min_confidence,
+            clap_sync_fallback=use_clap_sync,
+        )
+
     for video_file in video_files:
         segment = segments[video_file.path]
         logger.info(
@@ -1467,6 +1501,8 @@ def run_pipeline(
             main_video_files,
             validated_args.external_audio_path,
             validated_args.external_audio_min_confidence,
+            use_clap_sync=validated_args.sync_audio_clap,
+            wav_start_offset_seconds=validated_args.external_audio_wav_offset,
         )
 
     video_files = list(main_video_files)
