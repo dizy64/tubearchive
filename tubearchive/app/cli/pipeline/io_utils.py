@@ -164,5 +164,5 @@ def _has_audio_stream(media_path: Path) -> bool:
         info = json.loads(probe_result.stdout)
         streams = info.get("streams", [])
         return len(streams) > 0
-    except (subprocess.CalledProcessError, ValueError):
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
         return False

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from tubearchive.app.cli.validators import ValidatedArgs
@@ -65,6 +66,11 @@ def build_validated_args(
         [item for item in state.external_audio_clip_adjustments_raw.split(",") if item.strip()],
         context="클립별 수동 보정",
     )
+
+    # TUI 입력은 CLI validator를 우회하므로 wav offset의 유한성을 여기서 보장한다.
+    # NaN/inf가 타임스탬프 정렬 계산에 전파되면 동작이 정의되지 않는다.
+    if not math.isfinite(state.external_audio_wav_offset):
+        raise ValueError("WAV 시작 보정 값이 유한한 수여야 합니다.")
 
     exclude_patterns: list[str] | None = None
     if state.exclude_patterns.strip():
