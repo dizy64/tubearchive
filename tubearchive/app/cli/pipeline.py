@@ -18,6 +18,7 @@ import sys
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from dataclasses import replace as dc_replace
 from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
@@ -1396,6 +1397,30 @@ def _analyze_long_external_audio_from_dir(
     return segments
 
 
+def _apply_clip_adjustments(
+    segments: dict[Path, ExternalAudioSegment],
+    adjustments: dict[str, float],
+) -> dict[Path, ExternalAudioSegment]:
+    """클립별 수동 오프셋 보정을 segments에 적용한다.
+
+    파일명에 패턴이 포함된 클립의 start_seconds를 조정한다.
+    """
+    result = dict(segments)
+    for path, seg in segments.items():
+        for pattern, delta in adjustments.items():
+            if pattern in path.name:
+                new_start = max(0.0, seg.start_seconds + delta)
+                result[path] = dc_replace(seg, start_seconds=new_start)
+                logger.info(
+                    "%s: 수동 오프셋 보정 %+.3fs → start=%.3fs",
+                    path.name,
+                    delta,
+                    new_start,
+                )
+                break
+    return result
+
+
 def _resolve_output_path(validated_args: ValidatedArgs) -> Path:
     """출력 파일 경로를 결정한다.
 
@@ -1498,6 +1523,22 @@ def _run_error_hook(
             error_message=str(error),
         ),
     )
+
+
+def analyze_long_audio_segments(
+    targets: list[Path],
+    wav_dir: Path,
+    temp_dir: Path,
+) -> dict[Path, ExternalAudioSegment]:
+    """TUI 사전 분석 전용: 파이프라인 실행 없이 오디오 세그먼트 매핑만 수행한다.
+
+    scan → group → main_video_files → BEXT 매핑 순으로 처리하고,
+    confidence가 낮은 클립을 포함한 전체 결과를 반환한다.
+    """
+    all_files = scan_videos(targets)
+    groups = group_sequences(all_files)
+    ordered = reorder_with_groups(all_files, groups)
+    return _analyze_long_external_audio_from_dir(ordered, wav_dir, temp_dir)
 
 
 def run_pipeline(
@@ -1621,6 +1662,12 @@ def run_pipeline(
                 main_video_files,
                 validated_args.external_audio_dir,
                 temp_dir,
+            )
+
+        if external_audio_segments and validated_args.external_audio_clip_adjustments:
+            external_audio_segments = _apply_clip_adjustments(
+                external_audio_segments,
+                validated_args.external_audio_clip_adjustments,
             )
 
     video_files = list(main_video_files)

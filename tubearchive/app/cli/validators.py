@@ -84,6 +84,7 @@ class ValidatedArgs:
     external_audio_min_confidence: float = 0.6
     external_audio_match_window: float = 300.0
     external_audio_wav_offset: float = 0.0
+    external_audio_clip_adjustments: dict[str, float] = field(default_factory=dict)
     group_sequences: bool = True
     fade_duration: float = 0.5
     upload: bool = False
@@ -361,6 +362,22 @@ def validate_args(
         )
 
     external_audio_wav_offset = float(getattr(args, "external_audio_wav_offset", 0.0) or 0.0)
+
+    external_audio_clip_adjustments: dict[str, float] = {}
+    for raw in getattr(args, "external_audio_clip_adjust", None) or []:
+        if ":" not in raw:
+            raise ValueError(
+                f"--external-audio-clip-adjust 형식이 올바르지 않습니다 (패턴:초): {raw!r}"
+            )
+        pattern, _, seconds_str = raw.partition(":")
+        if not pattern:
+            raise ValueError(f"--external-audio-clip-adjust 패턴이 비어있습니다: {raw!r}")
+        try:
+            external_audio_clip_adjustments[pattern] = float(seconds_str)
+        except ValueError as exc:
+            raise ValueError(
+                f"--external-audio-clip-adjust 초 값이 숫자가 아닙니다: {seconds_str!r}"
+            ) from exc
 
     # 그룹핑 설정 (CLI 인자 > 환경 변수 > 기본값)
     group_flag = bool(getattr(args, "group", False))
@@ -658,6 +675,7 @@ def validate_args(
         external_audio_min_confidence=external_audio_min_confidence,
         external_audio_match_window=external_audio_match_window,
         external_audio_wav_offset=external_audio_wav_offset,
+        external_audio_clip_adjustments=external_audio_clip_adjustments,
         group_sequences=group_sequences,
         fade_duration=fade_duration,
         upload=upload,

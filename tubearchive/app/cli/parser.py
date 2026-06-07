@@ -335,6 +335,19 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--external-audio-clip-adjust",
+        action="append",
+        default=None,
+        metavar="PATTERN:SECONDS",
+        dest="external_audio_clip_adjust",
+        help=(
+            "--external-audio-scope long에서 특정 클립의 오디오 시작점 수동 보정. "
+            "형식: '파일명패턴:초' (예: --external-audio-clip-adjust 0004:4.0). "
+            "양수: 해당 클립 오디오를 뒤로, 음수: 앞으로 (여러 번 지정 가능)"
+        ),
+    )
+
+    parser.add_argument(
         "--bgm",
         type=str,
         default=None,
