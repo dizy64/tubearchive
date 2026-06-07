@@ -305,7 +305,7 @@ def _extract_mono_pcm_segment(
             check=False,
             timeout=AUDIO_EXTRACTION_TIMEOUT_SECONDS,
         )
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, FileNotFoundError):
         return []
     if result.returncode != 0:
         return []
@@ -328,12 +328,14 @@ def _raw_pcm_correlation_offset(
 
     lag > 0: cand의 뒤쪽에서 ref와 더 잘 매치됨 → cand 시작을 lag/sr초 늦춰야 함
     """
+    import operator
+
     n = min(len(ref), max(0, len(cand) - search_range_frames * 2))
     if n < max(1, len(ref) // 10):
         return 0, 0.0
 
     ref_n = ref[:n]
-    ref_power = sum(x * x for x in ref_n)
+    ref_power = sum(map(operator.mul, ref_n, ref_n))
     if ref_power == 0.0:
         return 0, 0.0
 
@@ -343,7 +345,7 @@ def _raw_pcm_correlation_offset(
         end = offset + n
         if end > len(cand):
             continue
-        corr = sum(a * b for a, b in zip(ref_n, cand[offset:end], strict=False))
+        corr = sum(map(operator.mul, ref_n, cand[offset:end]))
         if corr > best_corr:
             best_corr = corr
             best_lag = lag
@@ -932,7 +934,12 @@ def _create_spanning_wav(
         "pcm_s24le",
         str(output_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError as exc:
+        raise AudioSyncError(
+            "ffmpeg을 실행할 수 없습니다. ffmpeg이 설치되어 있고 PATH에 등록되어 있는지 확인하세요."
+        ) from exc
     if result.returncode != 0:
         raise AudioSyncError(f"Failed to concat WAV segments: {result.stderr[-500:]}")
 
@@ -978,10 +985,11 @@ def calculate_external_audio_segments_from_wav_dir(
         clip_dur = reference_durations[clip_path]
         clip_end_utc = clip_utc + timedelta(seconds=clip_dur)
 
-        # 클립 시작 시각이 속하는 WAV 찾기
+        # 클립 시작 시각이 속하는 WAV 찾기 (카메라/레코더 시계 오차 최대 15초 허용)
+        clock_tolerance = timedelta(seconds=15.0)
         start_wav: WavInfo | None = None
         for w in wav_infos:
-            if w.start_utc <= clip_utc < w.end_utc:
+            if (w.start_utc - clock_tolerance) <= clip_utc < (w.end_utc + clock_tolerance):
                 start_wav = w
                 break
 
@@ -1004,14 +1012,14 @@ def calculate_external_audio_segments_from_wav_dir(
                     wav_ss,
                     ffmpeg_path=ffmpeg_path,
                 )
-                # fine-tune 결과가 WAV 파일 경계를 넘지 않도록 클램핑
-                wav_ss = min(wav_ss, max(0.0, start_wav.duration_seconds - clip_dur))
                 logger.info(
                     "%s: BEXT fine-tune → WAV ss=%.3fs (conf=%.3f)",
                     clip_path.name,
                     wav_ss,
                     conf,
                 )
+            # fine_tune 여부와 무관하게 WAV 경계 초과 방지
+            wav_ss = max(0.0, min(wav_ss, start_wav.duration_seconds - clip_dur))
             segments[clip_path] = ExternalAudioSegment(
                 path=start_wav.path,
                 start_seconds=wav_ss,
@@ -1027,8 +1035,8 @@ def calculate_external_audio_segments_from_wav_dir(
                     wav_ss,
                     ffmpeg_path=ffmpeg_path,
                 )
-                # span 케이스에서도 첫 WAV 경계 초과 방지
-                wav_ss = min(wav_ss, max(0.0, start_wav.duration_seconds))
+                # span 케이스: 첫 WAV 경계 초과 방지 (clip_dur 제한 없이 시작점만 클램핑)
+                wav_ss = max(0.0, min(wav_ss, start_wav.duration_seconds))
                 logger.info(
                     "%s: BEXT fine-tune (span) → WAV ss=%.3fs (conf=%.3f)",
                     clip_path.name,

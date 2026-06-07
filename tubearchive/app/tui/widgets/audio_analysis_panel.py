@@ -79,20 +79,24 @@ class _SegmentRow(Horizontal):
         placeholder = "예: 5.0 (느릴때) / -3.0 (빠를때)" if self._low else "예: 1.0 / -1.0"
         yield Input(
             placeholder=placeholder,
-            id=f"adj-{self._filename}",
             classes="seg-input",
         )
 
     def get_adjustment(self) -> tuple[str, float] | None:
         """입력된 보정값을 반환한다. 비어있으면 None."""
+        import math
+
         inp = self.query_one(Input)
         raw = inp.value.strip()
         if not raw:
             return None
         try:
-            return self._filename, float(raw)
+            val = float(raw)
         except ValueError:
             return None
+        if not math.isfinite(val):
+            return None
+        return self._filename, val
 
 
 class AudioAnalysisPanel(ModalScreen[str]):
