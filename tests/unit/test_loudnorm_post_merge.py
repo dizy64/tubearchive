@@ -57,8 +57,8 @@ def test_skips_when_no_audio_stream(merged_video: Path, tmp_path: Path) -> None:
     output = tmp_path / "normalized.mp4"
 
     with (
-        patch("tubearchive.app.cli.pipeline._has_audio_stream", return_value=False),
-        patch("tubearchive.app.cli.pipeline.subprocess.run") as mock_run,
+        patch("tubearchive.app.cli.pipeline.postprocess._has_audio_stream", return_value=False),
+        patch("tubearchive.app.cli.pipeline.postprocess.subprocess.run") as mock_run,
     ):
         result = _apply_post_merge_loudnorm(merged_video, output)
 
@@ -75,9 +75,9 @@ def test_analysis_failure_falls_back_to_original_path(merged_video: Path, tmp_pa
     output = tmp_path / "normalized.mp4"
 
     with (
-        patch("tubearchive.app.cli.pipeline._has_audio_stream", return_value=True),
+        patch("tubearchive.app.cli.pipeline.postprocess._has_audio_stream", return_value=True),
         patch("tubearchive.infra.ffmpeg.executor.FFmpegExecutor") as mock_executor_cls,
-        patch("tubearchive.app.cli.pipeline.subprocess.run") as mock_run,
+        patch("tubearchive.app.cli.pipeline.postprocess.subprocess.run") as mock_run,
     ):
         mock_executor = mock_executor_cls.return_value
         mock_executor.build_loudness_analysis_command.return_value = ["ffmpeg"]
@@ -106,9 +106,9 @@ def test_runs_analysis_then_applies_loudnorm(merged_video: Path, tmp_path: Path)
         return _CompletedProc(returncode=0)
 
     with (
-        patch("tubearchive.app.cli.pipeline._has_audio_stream", return_value=True),
+        patch("tubearchive.app.cli.pipeline.postprocess._has_audio_stream", return_value=True),
         patch("tubearchive.infra.ffmpeg.executor.FFmpegExecutor") as mock_executor_cls,
-        patch("tubearchive.app.cli.pipeline.subprocess.run", side_effect=_capture),
+        patch("tubearchive.app.cli.pipeline.postprocess.subprocess.run", side_effect=_capture),
     ):
         mock_executor = mock_executor_cls.return_value
         mock_executor.build_loudness_analysis_command.return_value = [
@@ -153,10 +153,10 @@ def test_ffmpeg_2nd_pass_failure_raises(merged_video: Path, tmp_path: Path) -> N
     output = tmp_path / "normalized.mp4"
 
     with (
-        patch("tubearchive.app.cli.pipeline._has_audio_stream", return_value=True),
+        patch("tubearchive.app.cli.pipeline.postprocess._has_audio_stream", return_value=True),
         patch("tubearchive.infra.ffmpeg.executor.FFmpegExecutor") as mock_executor_cls,
         patch(
-            "tubearchive.app.cli.pipeline.subprocess.run",
+            "tubearchive.app.cli.pipeline.postprocess.subprocess.run",
             return_value=_CompletedProc(returncode=1, stderr="encode failed"),
         ),
     ):

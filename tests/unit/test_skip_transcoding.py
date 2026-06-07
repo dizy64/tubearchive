@@ -75,7 +75,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -90,7 +90,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -105,7 +105,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -120,7 +120,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -136,7 +136,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -152,7 +152,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -167,7 +167,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, intro, None)
@@ -183,7 +183,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, outro)
@@ -198,7 +198,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(audio_stream_count=2),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -213,7 +213,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(codec="h264"),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -231,7 +231,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(pixel_format="yuv420p10le"),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -245,7 +245,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(pixel_format="yuv420p"),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -260,7 +260,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(width=1920, height=1080),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -275,7 +275,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(color_transfer="arib-std-b67"),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -290,7 +290,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(width=2160, height=3840, is_portrait=True),
         ):
             can_skip, _reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -304,7 +304,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(is_vfr=True),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -319,7 +319,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(audio_codec="pcm_s16le"),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -334,7 +334,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(audio_sample_rate=96000),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -353,7 +353,7 @@ class TestCanSkipTranscoding:
         metas = iter([_profile_sdr_metadata(), _profile_sdr_metadata(codec="h264")])
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             side_effect=lambda *_a, **_k: next(metas),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -368,7 +368,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(sar="40:33"),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -383,7 +383,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             return_value=_profile_sdr_metadata(sar=None),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -397,7 +397,7 @@ class TestCanSkipTranscoding:
         args = _make_validated_args(tmp_path)
 
         with patch(
-            "tubearchive.app.cli.pipeline.detect_metadata",
+            "tubearchive.app.cli.pipeline.transcode.detect_metadata",
             side_effect=RuntimeError("ffprobe gone"),
         ):
             can_skip, reason, _metas = _can_skip_transcoding(files, opts, args, None, None)
@@ -420,7 +420,7 @@ class TestRunSkipTranscoding:
             files[1].path: _profile_sdr_metadata(),
         }
 
-        with patch("tubearchive.app.cli.pipeline.Transcoder") as mock_transcoder_cls:
+        with patch("tubearchive.app.cli.pipeline.transcode.Transcoder") as mock_transcoder_cls:
             mock_transcoder = MagicMock()
             mock_transcoder.__enter__.return_value = mock_transcoder
             mock_transcoder.register_video.side_effect = [11, 12]
@@ -441,9 +441,9 @@ class TestRunSkipTranscoding:
         files = [_make_video_file(tmp_path, "a.mp4")]
 
         with (
-            patch("tubearchive.app.cli.pipeline.Transcoder") as mock_transcoder_cls,
+            patch("tubearchive.app.cli.pipeline.transcode.Transcoder") as mock_transcoder_cls,
             patch(
-                "tubearchive.app.cli.pipeline.detect_metadata",
+                "tubearchive.app.cli.pipeline.transcode.detect_metadata",
                 return_value=_profile_sdr_metadata(),
             ) as mock_probe,
         ):

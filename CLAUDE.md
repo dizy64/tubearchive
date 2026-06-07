@@ -194,6 +194,7 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 ### 레이어드 패키지 구조 (리팩토링 반영)
 - `tubearchive/app/`: CLI 진입점·오케스트레이션·조회성 커맨드
   - `app/cli/main.py`: 기존 `cli.py` 역할(파서/검증/파이프라인/업로드 라우팅)
+  - `app/cli/pipeline/`: 파이프라인 패키지. `__init__.py`(run_pipeline 오케스트레이션 + 전 심볼 re-export), `transcode.py`(트랜스코딩/스킵판정), `postprocess.py`(BGM/loudnorm/썸네일/자막/타임랩스/품질), `persistence.py`(merge_job DB 저장/프로젝트 연결), `archive.py`(아카이브/백업), `io_utils.py`(ffprobe 길이·오디오 확인/임시·출력 경로), `single_file.py`(단일 파일 업로드). 외부 import 경로는 `tubearchive.app.cli.pipeline.<name>`로 불변(패키지 `__init__`이 모든 심볼 re-export)
   - `app/queries/`: `catalog/project/stats/migrate` 조회·관리 커맨드
   - `app/tui/`: Textual 기반 TUI 대시보드 (app.py/bridge.py/models.py/screens/widgets)
 - `tubearchive/domain/`: 순수 비즈니스 로직/도메인 모델
@@ -208,7 +209,7 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
   - `infra/notification/`: notifier/providers/events
 - `tubearchive/shared/`: 공통 유틸리티(progress/validators/summary/temp)
 
-### 파이프라인 흐름 (app/cli/pipeline.py:run_pipeline)
+### 파이프라인 흐름 (app/cli/pipeline/__init__.py:run_pipeline)
 ```text
 scan_videos() → group_sequences() → reorder_with_groups()
   → TranscodeOptions 생성 (LUT 옵션 포함)
@@ -232,7 +233,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
 
 ### 핵심 컴포넌트
 
-**app/cli/pipeline.py** (+ **main.py** re-export): CLI 파이프라인 오케스트레이터
+**app/cli/pipeline/** (패키지, + **main.py** re-export): CLI 파이프라인 오케스트레이터 (아래 함수들은 `__init__` 또는 transcode/postprocess/persistence/archive/io_utils/single_file 서브모듈에 분산되어 있으나 패키지 `__init__`이 전부 re-export)
 - `run_pipeline()`: 메인 파이프라인 (스캔→그룹핑→[스킵판정]→트랜스코딩→병합→후처리→저장→[분할])
 - `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, stabilize, fade_map, lut_path, auto_lut, lut_before_hdr, device_luts 등 — `normalize_audio`는 병합 후 loudnorm 적용 여부 제어)
 - `TranscodeResult`: 단일 트랜스코딩 결과 (frozen dataclass)
