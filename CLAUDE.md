@@ -199,7 +199,8 @@ uv run tubearchive --config /path/to/config.toml    # 커스텀 설정 파일 �
 - `tubearchive/domain/`: 순수 비즈니스 로직/도메인 모델
   - `domain/media/`: 스캔/정렬/트랜스코딩/병합/분할/아카이브/감지/백업/훅/품질/자막
   - `domain/models/`: `VideoFile`, `VideoMetadata`, Job 모델
-  - `domain/services/`: 도메인 서비스 계층
+  - `domain/services/`: 도메인 서비스 계층 (여러 media 모듈을 조합하는 오케스트레이션)
+    - `external_audio.py`: 긴 외부 녹음 ↔ 클립 매핑 서비스. 전략 선택(타임스탬프 → envelope → transient)을 소유. `analyze_long_external_audio()`, `analyze_long_external_audio_from_dir()`, `apply_clip_adjustments()`, `analyze_long_audio_segments()`(TUI 사전 분석 진입점). app/cli·infra 비의존
 - `tubearchive/infra/`: 외부 시스템 연동
   - `infra/ffmpeg/`: 필터/실행기/프로파일/썸네일
   - `infra/db/`: schema/repository/resume
@@ -215,7 +216,7 @@ scan_videos() → group_sequences() → reorder_with_groups()
       ├─ [스킵 가능] _run_skip_transcoding()  ← stream-copy concat 직행 (ffprobe N회)
       └─ [스킵 불가] Transcoder.transcode_video() (순차 또는 병렬, auto-lut + lut3d)
            → [select_external_audio_candidate()]  ← --external-audio-dir 지정 시 후보 자동 선택
-           → [calculate_external_audio_segments()]  ← --external-audio-scope long 사전 분석
+           → [external_audio.analyze_long_external_audio*()]  ← --external-audio-scope long 사전 분석 (domain/services)
            → [calculate_clap_sync_offset()/calculate_clap_sync_drift()]  ← 외부 오디오 clap sync/drift
            → [_run_vidstab_analysis()]  ← 영상 안정화 1st pass (--stabilize 시)
   → Merger.merge()

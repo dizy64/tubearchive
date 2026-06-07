@@ -676,7 +676,7 @@ class TestFineTuneBextOffsetByCorrelation:
 
 
 class TestApplyClipAdjustments:
-    """_apply_clip_adjustments 단위 테스트."""
+    """apply_clip_adjustments 단위 테스트."""
 
     def _seg(self, start: float) -> ExternalAudioSegment:
         return ExternalAudioSegment(
@@ -688,26 +688,26 @@ class TestApplyClipAdjustments:
         )
 
     def test_pattern_matches_filename(self) -> None:
-        from tubearchive.app.cli.pipeline import _apply_clip_adjustments
+        from tubearchive.domain.services.external_audio import apply_clip_adjustments
 
         clips = {
             Path("/a/DJI_0001.MP4"): self._seg(10.0),
             Path("/a/DJI_0004.MP4"): self._seg(50.0),
         }
-        result = _apply_clip_adjustments(clips, {"0004": 4.0})
+        result = apply_clip_adjustments(clips, {"0004": 4.0})
         assert result[Path("/a/DJI_0001.MP4")].start_seconds == pytest.approx(10.0)
         assert result[Path("/a/DJI_0004.MP4")].start_seconds == pytest.approx(54.0)
 
     def test_negative_adjustment_clamped_to_zero(self) -> None:
-        from tubearchive.app.cli.pipeline import _apply_clip_adjustments
+        from tubearchive.domain.services.external_audio import apply_clip_adjustments
 
         clips = {Path("/a/clip.MP4"): self._seg(1.0)}
-        result = _apply_clip_adjustments(clips, {"clip": -5.0})
+        result = apply_clip_adjustments(clips, {"clip": -5.0})
         assert result[Path("/a/clip.MP4")].start_seconds == pytest.approx(0.0)
 
     def test_no_match_leaves_segment_unchanged(self) -> None:
-        from tubearchive.app.cli.pipeline import _apply_clip_adjustments
+        from tubearchive.domain.services.external_audio import apply_clip_adjustments
 
         clips = {Path("/a/DJI_0001.MP4"): self._seg(10.0)}
-        result = _apply_clip_adjustments(clips, {"0004": 4.0})
+        result = apply_clip_adjustments(clips, {"0004": 4.0})
         assert result[Path("/a/DJI_0001.MP4")].start_seconds == pytest.approx(10.0)

@@ -19,13 +19,14 @@ from textual.widget import Widget
 from textual.widgets import Button, Label
 
 from tubearchive.app.cli.context import PipelineContext
-from tubearchive.app.cli.pipeline import analyze_long_audio_segments, run_pipeline
+from tubearchive.app.cli.pipeline import run_pipeline
 from tubearchive.app.tui.models import TuiOptionState
 from tubearchive.app.tui.widgets.audio_analysis_panel import AudioAnalysisPanel
 from tubearchive.app.tui.widgets.audio_browser import AudioBrowserPane
 from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
 from tubearchive.app.tui.widgets.file_progress_panel import FileProgressPanel
 from tubearchive.app.tui.widgets.option_panels import OptionsPane
+from tubearchive.domain.services.external_audio import analyze_long_audio_segments
 from tubearchive.infra.notification.notifier import Notifier
 
 logger = logging.getLogger(__name__)
