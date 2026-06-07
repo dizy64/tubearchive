@@ -408,8 +408,6 @@ def test_calculate_external_audio_segments_from_timestamps_wav_offset() -> None:
 
 def test_calculate_external_audio_segments_from_timestamps_negative_offset_raises() -> None:
     """wav_start_offset_seconds가 음수여서 첫 클립의 WAV 시작 위치가 음수가 되면 AudioSyncError."""
-    from tubearchive.domain.media.audio_sync import AudioSyncError
-
     base = datetime(2026, 6, 5, 10, 0, 0)
     clips = [Path("clip1.mp4")]
     timestamps = {clips[0]: base}
