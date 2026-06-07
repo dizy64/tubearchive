@@ -375,14 +375,21 @@ def validate_args(
                 f"--external-audio-clip-adjust 형식이 올바르지 않습니다 (패턴:초): {raw!r}"
             )
         pattern, _, seconds_str = raw.partition(":")
+        pattern = pattern.strip()
+        seconds_str = seconds_str.strip()
         if not pattern:
             raise ValueError(f"--external-audio-clip-adjust 패턴이 비어있습니다: {raw!r}")
         try:
-            external_audio_clip_adjustments[pattern] = float(seconds_str)
+            seconds_val = float(seconds_str)
         except ValueError as exc:
             raise ValueError(
                 f"--external-audio-clip-adjust 초 값이 숫자가 아닙니다: {seconds_str!r}"
             ) from exc
+        if not math.isfinite(seconds_val):
+            raise ValueError(
+                f"--external-audio-clip-adjust 초 값이 유한한 수여야 합니다: {seconds_str!r}"
+            )
+        external_audio_clip_adjustments[pattern] = seconds_val
 
     # 그룹핑 설정 (CLI 인자 > 환경 변수 > 기본값)
     group_flag = bool(getattr(args, "group", False))

@@ -253,6 +253,7 @@ class PipelinePane(Widget):
         self.query_one("#pipeline-body").display = False
         self.query_one("#pipeline-progress").display = True
         self.query_one("#run-button", Button).disabled = True
+        self.query_one("#analyze-button", Button).disabled = True
 
     def _launch_audio_analysis(self) -> None:
         """외부 오디오 사전 분석 worker 실행."""

@@ -1557,6 +1557,8 @@ def analyze_long_audio_segments(
     confidence가 낮은 클립을 포함한 전체 결과를 반환한다.
     """
     all_files = scan_videos(targets)
+    if not all_files:
+        raise AudioSyncError("대상 디렉토리에서 영상 파일을 찾을 수 없습니다.")
     groups = group_sequences(all_files)
     ordered = reorder_with_groups(all_files, groups)
     return _analyze_long_external_audio_from_dir(ordered, wav_dir, temp_dir)

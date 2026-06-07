@@ -879,6 +879,8 @@ def scan_wav_dir_bext(
 
     BEXT가 없는 파일(ffmpeg concat 결과물 등)은 제외한다.
     """
+    if not wav_dir.is_dir():
+        raise AudioSyncError(f"WAV 디렉토리가 존재하지 않거나 디렉토리가 아닙니다: {wav_dir}")
     results: list[WavInfo] = []
     for path in sorted(wav_dir.iterdir()):
         if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTERNAL_AUDIO_EXTENSIONS:
@@ -1002,6 +1004,8 @@ def calculate_external_audio_segments_from_wav_dir(
                     wav_ss,
                     ffmpeg_path=ffmpeg_path,
                 )
+                # fine-tune 결과가 WAV 파일 경계를 넘지 않도록 클램핑
+                wav_ss = min(wav_ss, max(0.0, start_wav.duration_seconds - clip_dur))
                 logger.info(
                     "%s: BEXT fine-tune → WAV ss=%.3fs (conf=%.3f)",
                     clip_path.name,
@@ -1023,6 +1027,8 @@ def calculate_external_audio_segments_from_wav_dir(
                     wav_ss,
                     ffmpeg_path=ffmpeg_path,
                 )
+                # span 케이스에서도 첫 WAV 경계 초과 방지
+                wav_ss = min(wav_ss, max(0.0, start_wav.duration_seconds))
                 logger.info(
                     "%s: BEXT fine-tune (span) → WAV ss=%.3fs (conf=%.3f)",
                     clip_path.name,
