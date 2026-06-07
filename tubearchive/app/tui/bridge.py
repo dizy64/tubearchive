@@ -60,6 +60,18 @@ def build_validated_args(
 
     timelapse_resolution: str | None = state.timelapse_resolution or None
 
+    external_audio_clip_adjustments: dict[str, float] = {}
+    for item in state.external_audio_clip_adjustments_raw.split(","):
+        item = item.strip()
+        if ":" in item:
+            pattern, _, seconds_str = item.partition(":")
+            pattern = pattern.strip()
+            if pattern:
+                import contextlib
+
+                with contextlib.suppress(ValueError):
+                    external_audio_clip_adjustments[pattern] = float(seconds_str.strip())
+
     exclude_patterns: list[str] | None = None
     if state.exclude_patterns.strip():
         exclude_patterns = [p.strip() for p in state.exclude_patterns.split(",") if p.strip()]
@@ -89,6 +101,7 @@ def build_validated_args(
         camera_audio_volume=state.camera_audio_volume,
         external_audio_min_confidence=state.external_audio_min_confidence,
         external_audio_match_window=state.external_audio_match_window,
+        external_audio_clip_adjustments=external_audio_clip_adjustments,
         # BGM
         bgm_path=bgm_path,
         bgm_volume=state.bgm_volume,
