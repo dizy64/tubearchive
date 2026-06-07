@@ -14,6 +14,7 @@ from tubearchive.domain.media.audio_sync import (
     ExternalAudioSegment,
     WavInfo,
     _score_external_audio_candidate,
+    calculate_external_audio_segments,
     calculate_external_audio_segments_from_timestamps,
     calculate_external_audio_segments_from_wav_dir,
     estimate_clap_sync_offset,
@@ -302,13 +303,6 @@ def test_estimate_segment_by_transient_raises_when_no_transient_in_reference() -
 
 def test_calculate_external_audio_segments_uses_clap_fallback_on_low_confidence() -> None:
     """envelope 신뢰도가 낮을 때 clap_sync_fallback=True이면 transient 매칭으로 재시도한다."""
-    from unittest.mock import patch
-
-    from tubearchive.domain.media.audio_sync import (
-        AudioSyncError,
-        calculate_external_audio_segments,
-    )
-
     # envelope 분석은 항상 실패, transient 매칭은 성공 시나리오
     fake_segment = ExternalAudioSegment(
         path=Path("ext.wav"),
@@ -343,10 +337,6 @@ def test_calculate_external_audio_segments_uses_clap_fallback_on_low_confidence(
 
 def test_calculate_external_audio_segments_raises_without_clap_fallback() -> None:
     """clap_sync_fallback=False이면 envelope 실패 시 예외가 전파된다."""
-    from unittest.mock import patch
-
-    from tubearchive.domain.media.audio_sync import calculate_external_audio_segments
-
     with (
         patch(
             "tubearchive.domain.media.audio_sync.extract_mono_pcm_samples",
@@ -539,11 +529,11 @@ class TestCalculateExternalAudioSegmentsFromWavDir:
 
         # 0001: (10:08:10 - 10:03:36) = 274s
         assert result[clip0001].path == Path("/wav/0006.wav")
-        assert result[clip0001].start_seconds == pytest.approx(274.0, abs=1.0)
+        assert result[clip0001].start_seconds == pytest.approx(274.0, abs=0.01)
         # 0002: (10:10:13 - 10:03:36) = 397s
-        assert result[clip0002].start_seconds == pytest.approx(397.0, abs=1.0)
+        assert result[clip0002].start_seconds == pytest.approx(397.0, abs=0.01)
         # 0003: (10:50:39 - 10:03:36) = 2823s
-        assert result[clip0003].start_seconds == pytest.approx(2823.0, abs=1.0)
+        assert result[clip0003].start_seconds == pytest.approx(2823.0, abs=0.01)
 
     def test_clip_spanning_two_wavs_creates_temp_file(self, tmp_path: Path) -> None:
         """클립이 두 WAV 파일 경계를 넘을 때 임시 concat WAV를 생성한다."""

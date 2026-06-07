@@ -1290,13 +1290,16 @@ def _analyze_long_external_audio(
             break
         reference_timestamps[video_file.path] = ts
 
-    # 타임스탬프 중복 감지 → 신뢰할 수 없으면 envelope 폴백
+    # 타임스탬프 품질 검사(중복/역행) → 신뢰할 수 없으면 envelope 폴백
     if reference_timestamps:
-        ts_values = list(reference_timestamps.values())
-        if len(set(ts_values)) < len(ts_values):
-            logger.warning(
-                "타임스탬프에 중복값이 있어 신뢰할 수 없음 → envelope/transient 매칭으로 폴백"
-            )
+        ordered_ts = [reference_timestamps[v.path] for v in video_files]
+        has_duplicate = len(set(ordered_ts)) < len(ordered_ts)
+        has_non_monotonic = any(
+            (ordered_ts[i + 1] - ordered_ts[i]).total_seconds() <= 0
+            for i in range(len(ordered_ts) - 1)
+        )
+        if has_duplicate or has_non_monotonic:
+            logger.warning("타임스탬프 중복/역행 감지 → envelope/transient 매칭으로 폴백")
             reference_timestamps = {}
 
     if reference_timestamps:
