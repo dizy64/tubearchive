@@ -38,6 +38,7 @@ from tubearchive.domain.media.audio_sync import (
     calculate_external_audio_segments,
     calculate_external_audio_segments_from_timestamps,
     calculate_external_audio_segments_from_wav_dir,
+    probe_media_duration,
 )
 from tubearchive.domain.media.backup import BackupExecutor, BackupResult
 from tubearchive.domain.media.detector import (
@@ -270,23 +271,8 @@ def _get_media_duration(media_path: Path) -> float:
         RuntimeError: ffprobe 실행 실패 또는 길이 파싱 실패
     """
     try:
-        probe_result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_format",
-                str(media_path),
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        info = json.loads(probe_result.stdout)
-        return float(info["format"]["duration"])
-    except (subprocess.CalledProcessError, KeyError, ValueError) as e:
+        return probe_media_duration(media_path)
+    except AudioSyncError as e:
         raise RuntimeError(f"Failed to probe duration: {media_path} - {e}") from e
 
 
@@ -1270,19 +1256,23 @@ def _analyze_long_external_audio(
     min_confidence: float,
     use_clap_sync: bool = False,
     wav_start_offset_seconds: float = 0.0,
+    metadata_cache: dict[Path, VideoMetadata] | None = None,
 ) -> dict[Path, ExternalAudioSegment]:
     """긴 외부 녹음에서 각 영상 클립에 대응하는 외부 오디오 구간을 찾는다.
 
     ffprobe ``creation_time`` 태그가 모든 클립에 존재하면 타임스탬프 기반으로
     WAV 위치를 계산한다. 타임스탬프를 얻을 수 없는 클립이 하나라도 있으면
     envelope/transient 오디오 분석으로 폴백한다.
+
+    ``metadata_cache`` 가 주어지면 포함된 파일은 ``detect_metadata`` 를 재호출하지 않는다.
     """
     if not video_files:
         raise AudioSyncError("분석할 영상 파일이 없습니다.")
 
     reference_durations: dict[Path, float] = {}
     for video_file in video_files:
-        metadata = detect_metadata(video_file.path)
+        cached = (metadata_cache or {}).get(video_file.path)
+        metadata = cached if cached is not None else detect_metadata(video_file.path)
         if not metadata.has_audio:
             raise ValueError(
                 f"Long external audio matching requires camera audio: {video_file.path}"
@@ -1352,6 +1342,7 @@ def _analyze_long_external_audio_from_dir(
     video_files: list[VideoFile],
     wav_dir: Path,
     temp_dir: Path,
+    metadata_cache: dict[Path, VideoMetadata] | None = None,
 ) -> dict[Path, ExternalAudioSegment]:
     """WAV 디렉토리의 BEXT 메타데이터로 각 클립에 맞는 WAV 구간을 자동 매핑한다.
 
@@ -1359,6 +1350,8 @@ def _analyze_long_external_audio_from_dir(
     - 각 DJI 클립의 creation_time UTC와 비교
     - 클립이 WAV 경계에 걸치면 임시 concat WAV 생성
     - DJI 파일명으로 타임존 오프셋 자동 감지 (비-DJI 카메라는 시스템 로컬 폴백)
+
+    ``metadata_cache`` 가 주어지면 포함된 파일은 ``detect_metadata`` 를 재호출하지 않는다.
     """
     if not video_files:
         raise AudioSyncError("분석할 영상 파일이 없습니다.")
@@ -1388,7 +1381,8 @@ def _analyze_long_external_audio_from_dir(
 
     reference_durations: dict[Path, float] = {}
     for video_file in video_files:
-        metadata = detect_metadata(video_file.path)
+        cached = (metadata_cache or {}).get(video_file.path)
+        metadata = cached if cached is not None else detect_metadata(video_file.path)
         reference_durations[video_file.path] = metadata.duration_seconds
 
     logger.info(

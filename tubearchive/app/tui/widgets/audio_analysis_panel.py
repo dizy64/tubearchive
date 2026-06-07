@@ -10,6 +10,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static
 
 from tubearchive.domain.media.audio_sync import ExternalAudioSegment
+from tubearchive.shared.validators import parse_finite_float
 
 _LOW_CONFIDENCE_THRESHOLD = 0.1
 _NAME_WIDTH = 32
@@ -84,17 +85,13 @@ class _SegmentRow(Horizontal):
 
     def get_adjustment(self) -> tuple[str, float] | None:
         """입력된 보정값을 반환한다. 비어있으면 None."""
-        import math
-
         inp = self.query_one(Input)
         raw = inp.value.strip()
         if not raw:
             return None
         try:
-            val = float(raw)
+            val = parse_finite_float(raw, "보정값")
         except ValueError:
-            return None
-        if not math.isfinite(val):
             return None
         return self._filename, val
 

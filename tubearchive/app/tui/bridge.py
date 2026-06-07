@@ -10,6 +10,7 @@ from pathlib import Path
 
 from tubearchive.app.cli.validators import ValidatedArgs
 from tubearchive.app.tui.models import TuiOptionState
+from tubearchive.shared.validators import parse_clip_adjust_list
 
 
 def build_validated_args(
@@ -60,27 +61,10 @@ def build_validated_args(
 
     timelapse_resolution: str | None = state.timelapse_resolution or None
 
-    import math
-
-    external_audio_clip_adjustments: dict[str, float] = {}
-    for item in state.external_audio_clip_adjustments_raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        if ":" not in item:
-            raise ValueError(f"클립별 수동 보정 형식이 올바르지 않습니다 (패턴:초): {item!r}")
-        pattern, _, seconds_str = item.partition(":")
-        pattern = pattern.strip()
-        seconds_str = seconds_str.strip()
-        if not pattern:
-            raise ValueError(f"클립별 수동 보정 패턴이 비어있습니다: {item!r}")
-        try:
-            seconds_val = float(seconds_str)
-        except ValueError as exc:
-            raise ValueError(f"클립별 수동 보정 초 값이 숫자가 아닙니다: {seconds_str!r}") from exc
-        if not math.isfinite(seconds_val):
-            raise ValueError(f"클립별 수동 보정 초 값이 유한한 수여야 합니다: {seconds_str!r}")
-        external_audio_clip_adjustments[pattern] = seconds_val
+    external_audio_clip_adjustments = parse_clip_adjust_list(
+        [item for item in state.external_audio_clip_adjustments_raw.split(",") if item.strip()],
+        context="클립별 수동 보정",
+    )
 
     exclude_patterns: list[str] | None = None
     if state.exclude_patterns.strip():

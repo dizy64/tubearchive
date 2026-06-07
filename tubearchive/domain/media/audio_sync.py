@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+import operator
 import subprocess
 import sys
 import uuid
 from array import array
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from statistics import median
 
@@ -227,12 +228,27 @@ def extract_mono_pcm_samples(
     *,
     ffmpeg_path: str = "ffmpeg",
     sample_rate: int = 1000,
+    start_seconds: float | None = None,
+    duration_seconds: float | None = None,
 ) -> list[float]:
-    """FFmpeg로 media_path의 첫 오디오 스트림을 mono s16le 샘플로 추출한다."""
-    cmd = [
-        ffmpeg_path,
-        "-v",
-        "error",
+    """FFmpeg로 media_path의 첫 오디오 스트림을 mono s16le 샘플로 추출한다.
+
+    Args:
+        media_path: 미디어 파일 경로
+        ffmpeg_path: ffmpeg 실행 파일 경로
+        sample_rate: 출력 샘플레이트 (Hz)
+        start_seconds: 추출 시작 위치(초). None이면 처음부터.
+        duration_seconds: 추출 길이(초). None이면 끝까지.
+
+    Raises:
+        AudioSyncError: 추출 실패 또는 타임아웃
+    """
+    cmd = [ffmpeg_path, "-v", "error"]
+    if start_seconds is not None:
+        cmd += ["-ss", str(start_seconds)]
+    if duration_seconds is not None:
+        cmd += ["-t", str(duration_seconds)]
+    cmd += [
         "-i",
         str(media_path),
         "-vn",
@@ -279,44 +295,16 @@ def _extract_mono_pcm_segment(
     ffmpeg_path: str = "ffmpeg",
 ) -> list[float]:
     """미디어의 지정 구간을 mono PCM으로 추출한다. 오류 시 빈 리스트 반환."""
-    cmd = [
-        ffmpeg_path,
-        "-v",
-        "error",
-        "-ss",
-        str(start_seconds),
-        "-t",
-        str(duration_seconds),
-        "-i",
-        str(media_path),
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        str(sample_rate),
-        "-f",
-        "s16le",
-        "pipe:1",
-    ]
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            check=False,
-            timeout=AUDIO_EXTRACTION_TIMEOUT_SECONDS,
+        return extract_mono_pcm_samples(
+            media_path,
+            ffmpeg_path=ffmpeg_path,
+            sample_rate=sample_rate,
+            start_seconds=start_seconds,
+            duration_seconds=duration_seconds,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (AudioSyncError, FileNotFoundError):
         return []
-    if result.returncode != 0:
-        return []
-    raw = array("h")
-    stdout = result.stdout
-    if len(stdout) % 2 != 0:
-        stdout = stdout[:-1]
-    raw.frombytes(stdout)
-    if sys.byteorder != "little":
-        raw.byteswap()
-    return [sample / 32768.0 for sample in raw]
 
 
 def _raw_pcm_correlation_offset(
@@ -328,8 +316,6 @@ def _raw_pcm_correlation_offset(
 
     lag > 0: cand의 뒤쪽에서 ref와 더 잘 매치됨 → cand 시작을 lag/sr초 늦춰야 함
     """
-    import operator
-
     n = min(len(ref), max(0, len(cand) - search_range_frames * 2))
     if n < max(1, len(ref) // 10):
         return 0, 0.0
@@ -351,7 +337,8 @@ def _raw_pcm_correlation_offset(
             best_lag = lag
 
     offset = best_lag + search_range_frames
-    cand_power = sum(x * x for x in cand[offset : offset + n])
+    cand_slice = cand[offset : offset + n]
+    cand_power = sum(map(operator.mul, cand_slice, cand_slice))
     denom = (ref_power * cand_power) ** 0.5
     confidence = best_corr / denom if denom > 0.0 else 0.0
 
@@ -482,7 +469,7 @@ def _energy_envelope(
         frame = samples[start : start + frame_size]
         if not frame:
             continue
-        envelope.append(sum(abs(sample) for sample in frame) / len(frame))
+        envelope.append(sum(map(abs, frame)) / len(frame))
     return envelope
 
 
@@ -614,7 +601,7 @@ def estimate_external_audio_segment(
     best_corr = -1.0
     for index in range(start_frame, end_frame):
         window = external_env[index : index + ref_len]
-        corr = sum(a * b for a, b in zip(reference_env, window, strict=True)) / ref_len
+        corr = sum(map(operator.mul, reference_env, window)) / ref_len
         if corr > best_corr:
             best_corr = corr
             best_index = index
@@ -635,6 +622,21 @@ def estimate_external_audio_segment(
 
 
 _SEGMENT_SEARCH_SLACK_SECONDS = 120.0
+
+# 카메라/레코더 간 허용하는 시계 오차 상한 (초).
+# WAV 타임라인에서 클립 시작 시각이 WAV 경계 근처일 때 이 값만큼 여유를 준다.
+_CLOCK_TOLERANCE_SECONDS: float = 15.0
+_CLOCK_TOLERANCE = timedelta(seconds=_CLOCK_TOLERANCE_SECONDS)
+
+
+def _clamp_wav_ss(wav_ss: float, upper: float) -> float:
+    """WAV seek 위치를 [0, upper] 범위로 클램핑한다.
+
+    단일 WAV 케이스는 ``upper = wav_duration - clip_dur`` 를 전달해
+    clip이 WAV 경계를 벗어나지 않도록 한다.
+    span 케이스는 ``upper = wav_duration`` 을 전달해 시작점만 클램핑한다.
+    """
+    return max(0.0, min(wav_ss, upper))
 
 
 def calculate_external_audio_segments(
@@ -821,7 +823,7 @@ def select_external_audio_candidate(
             duration_seconds = probe_media_duration(path, ffprobe_path=ffprobe_path)
         except AudioSyncError:
             continue
-        mtime = datetime.fromtimestamp(path.stat().st_mtime)
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
         duration_delta = abs(duration_seconds - video_duration_seconds)
         mtime_delta = abs((mtime - video_creation_time).total_seconds())
         score = _score_external_audio_candidate(
@@ -884,7 +886,7 @@ def scan_wav_dir_bext(
     if not wav_dir.is_dir():
         raise AudioSyncError(f"WAV 디렉토리가 존재하지 않거나 디렉토리가 아닙니다: {wav_dir}")
     results: list[WavInfo] = []
-    for path in sorted(wav_dir.iterdir()):
+    for path in wav_dir.iterdir():
         if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTERNAL_AUDIO_EXTENSIONS:
             continue
         start_utc = get_audio_bext_start_utc(path, tz_offset_seconds)
@@ -935,7 +937,15 @@ def _create_spanning_wav(
         str(output_path),
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=AUDIO_EXTRACTION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AudioSyncError("Timed out concatenating WAV segments") from exc
     except FileNotFoundError as exc:
         raise AudioSyncError(
             "ffmpeg을 실행할 수 없습니다. ffmpeg이 설치되어 있고 PATH에 등록되어 있는지 확인하세요."
@@ -985,11 +995,11 @@ def calculate_external_audio_segments_from_wav_dir(
         clip_dur = reference_durations[clip_path]
         clip_end_utc = clip_utc + timedelta(seconds=clip_dur)
 
-        # 클립 시작 시각이 속하는 WAV 찾기 (카메라/레코더 시계 오차 최대 15초 허용)
-        clock_tolerance = timedelta(seconds=15.0)
+        # 클립 시작 시각이 속하는 WAV 찾기
+        # (카메라/레코더 시계 오차 최대 _CLOCK_TOLERANCE_SECONDS초 허용)
         start_wav: WavInfo | None = None
         for w in wav_infos:
-            if (w.start_utc - clock_tolerance) <= clip_utc < (w.end_utc + clock_tolerance):
+            if (w.start_utc - _CLOCK_TOLERANCE) <= clip_utc < (w.end_utc + _CLOCK_TOLERANCE):
                 start_wav = w
                 break
 
@@ -1019,7 +1029,7 @@ def calculate_external_audio_segments_from_wav_dir(
                     conf,
                 )
             # fine_tune 여부와 무관하게 WAV 경계 초과 방지
-            wav_ss = max(0.0, min(wav_ss, start_wav.duration_seconds - clip_dur))
+            wav_ss = _clamp_wav_ss(wav_ss, start_wav.duration_seconds - clip_dur)
             segments[clip_path] = ExternalAudioSegment(
                 path=start_wav.path,
                 start_seconds=wav_ss,
@@ -1036,7 +1046,7 @@ def calculate_external_audio_segments_from_wav_dir(
                     ffmpeg_path=ffmpeg_path,
                 )
                 # span 케이스: 첫 WAV 경계 초과 방지 (clip_dur 제한 없이 시작점만 클램핑)
-                wav_ss = max(0.0, min(wav_ss, start_wav.duration_seconds))
+                wav_ss = _clamp_wav_ss(wav_ss, start_wav.duration_seconds)
                 logger.info(
                     "%s: BEXT fine-tune (span) → WAV ss=%.3fs (conf=%.3f)",
                     clip_path.name,
@@ -1045,30 +1055,34 @@ def calculate_external_audio_segments_from_wav_dir(
                 )
 
             span_segments: list[tuple[Path, float, float]] = []
-            # fine-tune된 wav_ss로 실제 시작 UTC를 역산해 span_segments 재구성
-            remaining_start_utc = start_wav.start_utc + timedelta(seconds=wav_ss)
+            # fine-tune된 wav_ss로 실제 시작 epoch(초)를 역산해 span_segments 재구성.
+            # timedelta 객체 대신 float 산술로 처리해 루프 내 allocation을 줄인다.
+            epoch = start_wav.start_utc.timestamp()
+            remaining_start_epoch = epoch + wav_ss
             remaining_dur = clip_dur
 
             for w in wav_infos:
                 if remaining_dur <= 0:
                     break
-                if w.end_utc <= remaining_start_utc:
+                w_end_epoch = w.end_utc.timestamp()
+                if w_end_epoch <= remaining_start_epoch:
                     continue
-                if w.start_utc > remaining_start_utc:
+                w_start_epoch = w.start_utc.timestamp()
+                if w_start_epoch > remaining_start_epoch:
                     # WAV 파일 사이에 gap 존재
-                    gap = (w.start_utc - remaining_start_utc).total_seconds()
+                    gap = w_start_epoch - remaining_start_epoch
                     logger.warning(
                         "%s: WAV 파일 간 %.1fs gap 감지 — 해당 구간 오디오 없음",
                         clip_path.name,
                         gap,
                     )
                     break
-                seg_start_in_wav = (remaining_start_utc - w.start_utc).total_seconds()
+                seg_start_in_wav = remaining_start_epoch - w_start_epoch
                 available = w.duration_seconds - seg_start_in_wav
                 use_dur = min(remaining_dur, available)
                 if use_dur > 0:
                     span_segments.append((w.path, seg_start_in_wav, use_dur))
-                    remaining_start_utc += timedelta(seconds=use_dur)
+                    remaining_start_epoch += use_dur
                     remaining_dur -= use_dur
 
             if not span_segments:

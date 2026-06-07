@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import subprocess
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -91,7 +91,7 @@ def test_estimate_clap_sync_with_drift_returns_tempo_ratio() -> None:
 
 def test_score_external_audio_candidate_prefers_duration_and_time_match() -> None:
     """외부 오디오 후보는 영상 길이와 촬영 시각에 가까울수록 높은 점수를 받는다."""
-    video_time = datetime(2026, 1, 1, 12, 0, 0)
+    video_time = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
     good = _score_external_audio_candidate(
         video_duration_seconds=60.0,
@@ -125,7 +125,7 @@ def test_select_external_audio_candidate_chooses_best_match(
     poor.touch()
     best.touch()
 
-    video_time = datetime(2026, 1, 1, 12, 0, 0)
+    video_time = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     (tmp_path / "video.mp4").touch()
     poor_mtime = (video_time + timedelta(hours=1)).timestamp()
     best_mtime = (video_time + timedelta(seconds=8)).timestamp()

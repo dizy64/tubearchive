@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -50,7 +49,11 @@ from tubearchive.domain.media.subtitle import (
 )
 from tubearchive.infra.ffmpeg.constants import WB_PRESETS
 from tubearchive.infra.ffmpeg.effects import LUT_SUPPORTED_EXTENSIONS
-from tubearchive.shared.validators import ValidationError
+from tubearchive.shared.validators import (
+    ValidationError,
+    parse_clip_adjust_list,
+    parse_finite_float,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -362,34 +365,13 @@ def validate_args(
             f"--external-audio-match-window must be > 0, got: {external_audio_match_window}"
         )
 
-    external_audio_wav_offset = float(getattr(args, "external_audio_wav_offset", 0.0) or 0.0)
-    if not math.isfinite(external_audio_wav_offset):
-        raise ValueError(
-            f"--external-audio-wav-offset must be a finite number, got: {external_audio_wav_offset}"
-        )
+    _wav_offset_raw = str(getattr(args, "external_audio_wav_offset", 0.0) or 0.0)
+    external_audio_wav_offset = parse_finite_float(_wav_offset_raw, "--external-audio-wav-offset")
 
-    external_audio_clip_adjustments: dict[str, float] = {}
-    for raw in getattr(args, "external_audio_clip_adjust", None) or []:
-        if ":" not in raw:
-            raise ValueError(
-                f"--external-audio-clip-adjust 형식이 올바르지 않습니다 (패턴:초): {raw!r}"
-            )
-        pattern, _, seconds_str = raw.partition(":")
-        pattern = pattern.strip()
-        seconds_str = seconds_str.strip()
-        if not pattern:
-            raise ValueError(f"--external-audio-clip-adjust 패턴이 비어있습니다: {raw!r}")
-        try:
-            seconds_val = float(seconds_str)
-        except ValueError as exc:
-            raise ValueError(
-                f"--external-audio-clip-adjust 초 값이 숫자가 아닙니다: {seconds_str!r}"
-            ) from exc
-        if not math.isfinite(seconds_val):
-            raise ValueError(
-                f"--external-audio-clip-adjust 초 값이 유한한 수여야 합니다: {seconds_str!r}"
-            )
-        external_audio_clip_adjustments[pattern] = seconds_val
+    external_audio_clip_adjustments = parse_clip_adjust_list(
+        list(getattr(args, "external_audio_clip_adjust", None) or []),
+        context="--external-audio-clip-adjust",
+    )
 
     # 그룹핑 설정 (CLI 인자 > 환경 변수 > 기본값)
     group_flag = bool(getattr(args, "group", False))
