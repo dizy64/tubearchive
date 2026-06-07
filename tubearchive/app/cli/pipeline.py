@@ -1277,6 +1277,9 @@ def _analyze_long_external_audio(
     WAV 위치를 계산한다. 타임스탬프를 얻을 수 없는 클립이 하나라도 있으면
     envelope/transient 오디오 분석으로 폴백한다.
     """
+    if not video_files:
+        raise AudioSyncError("분석할 영상 파일이 없습니다.")
+
     reference_durations: dict[Path, float] = {}
     for video_file in video_files:
         metadata = detect_metadata(video_file.path)
@@ -1296,6 +1299,15 @@ def _analyze_long_external_audio(
             reference_timestamps = {}
             break
         reference_timestamps[video_file.path] = ts
+
+    # 타임스탬프 중복 감지 → 신뢰할 수 없으면 envelope 폴백
+    if reference_timestamps:
+        ts_values = list(reference_timestamps.values())
+        if len(set(ts_values)) < len(ts_values):
+            logger.warning(
+                "타임스탬프에 중복값이 있어 신뢰할 수 없음 → envelope/transient 매칭으로 폴백"
+            )
+            reference_timestamps = {}
 
     if reference_timestamps:
         effective_offset = wav_start_offset_seconds
@@ -1346,8 +1358,11 @@ def _analyze_long_external_audio_from_dir(
     - 각 WAV의 BEXT time_reference → 녹음 시작 UTC
     - 각 DJI 클립의 creation_time UTC와 비교
     - 클립이 WAV 경계에 걸치면 임시 concat WAV 생성
-    - DJI 파일명으로 타임존 오프셋 자동 감지 (비-DJI 카메라는 KST=32400 폴백)
+    - DJI 파일명으로 타임존 오프셋 자동 감지 (비-DJI 카메라는 시스템 로컬 폴백)
     """
+    if not video_files:
+        raise AudioSyncError("분석할 영상 파일이 없습니다.")
+
     reference_timestamps: dict[Path, datetime] = {}
     for video_file in video_files:
         ts = get_video_creation_time(video_file.path)
@@ -1360,10 +1375,16 @@ def _analyze_long_external_audio_from_dir(
 
     tz_offset = detect_local_timezone_offset(video_files[0].path)
     if tz_offset is None:
+        from datetime import datetime as _dt
+
+        utc_delta = _dt.now().astimezone().utcoffset()
+        system_offset = int(utc_delta.total_seconds()) if utc_delta is not None else 0
         logger.warning(
-            "타임존 오프셋 자동 감지 실패 (DJI 파일명 패턴이 아님). KST(+9h) 기본값 사용."
+            "타임존 오프셋 자동 감지 실패 (DJI 파일명 패턴이 아님). "
+            "시스템 로컬 타임존(%+ds)을 기본값으로 사용.",
+            system_offset,
         )
-        tz_offset = 32400
+        tz_offset = system_offset
 
     reference_durations: dict[Path, float] = {}
     for video_file in video_files:

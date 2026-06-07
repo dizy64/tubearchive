@@ -412,22 +412,23 @@ def test_calculate_external_audio_segments_from_timestamps_wav_offset() -> None:
     assert result[clips[1]].start_seconds == pytest.approx(70.0)
 
 
-def test_calculate_external_audio_segments_from_timestamps_negative_offset_clamped() -> None:
-    """wav_start_offset_seconds가 음수이더라도 start_seconds는 0 미만으로 내려가지 않는다."""
+def test_calculate_external_audio_segments_from_timestamps_negative_offset_raises() -> None:
+    """wav_start_offset_seconds가 음수여서 첫 클립의 WAV 시작 위치가 음수가 되면 AudioSyncError."""
+    from tubearchive.domain.media.audio_sync import AudioSyncError
+
     base = datetime(2026, 6, 5, 10, 0, 0)
     clips = [Path("clip1.mp4")]
     timestamps = {clips[0]: base}
     durations = {clips[0]: 60.0}
 
-    result = calculate_external_audio_segments_from_timestamps(
-        clips,
-        Path("recorder.wav"),
-        reference_durations=durations,
-        reference_timestamps=timestamps,
-        wav_start_offset_seconds=-5.0,  # WAV가 5초 늦게 시작 → 클립1의 시작은 0으로 클램프
-    )
-
-    assert result[clips[0]].start_seconds == pytest.approx(0.0)
+    with pytest.raises(AudioSyncError, match="음수"):
+        calculate_external_audio_segments_from_timestamps(
+            clips,
+            Path("recorder.wav"),
+            reference_durations=durations,
+            reference_timestamps=timestamps,
+            wav_start_offset_seconds=-5.0,
+        )
 
 
 # ---------------------------------------------------------------------------

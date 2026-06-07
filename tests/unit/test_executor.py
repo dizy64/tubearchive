@@ -234,10 +234,10 @@ class TestFFmpegExecutor:
         assert ss_val == pytest.approx(405.554 + 24.237, abs=0.01)
         assert t_val == pytest.approx(2423.72 - 24.237, abs=0.01)
 
-    def test_build_command_external_audio_duration_only_no_seek_correction(
+    def test_build_command_external_audio_duration_only_seek_correction(
         self, executor: FFmpegExecutor
     ) -> None:
-        """external_audio_start 없이 duration만 있을 때 seek_start 보정 미적용."""
+        """external_audio_start 없는 1:1 매칭에서도 resume 시 WAV에 seek_start 보정 적용."""
         cmd = executor.build_transcode_command(
             input_path=Path("/input/video.mp4"),
             output_path=Path("/output/video.mp4"),
@@ -250,10 +250,9 @@ class TestFFmpegExecutor:
         )
         external_input_index = cmd.index("/input/recorder.wav")
         video_input_index = cmd.index("/input/video.mp4")
-        # WAV 입력 앞에 -ss 없이 -t만 원본 값 그대로
-        # video -i 이후 ~ recorder.wav -i 사이: "-t 100 -i" 형태
+        # resume 시 WAV도 -ss seek_start, -t duration-seek_start로 보정
         wav_prefix = cmd[video_input_index + 1 : external_input_index - 1]
-        assert wav_prefix == ["-t", "100"]
+        assert wav_prefix == ["-ss", "24", "-t", "76"]
 
     def test_build_command_overwrite(self, executor: FFmpegExecutor) -> None:
         """덮어쓰기 옵션."""

@@ -261,7 +261,10 @@ def extract_mono_pcm_samples(
         raise AudioSyncError(f"Failed to extract audio samples from {media_path}: {stderr}")
 
     raw = array("h")
-    raw.frombytes(result.stdout)
+    stdout = result.stdout
+    if len(stdout) % 2 != 0:
+        stdout = stdout[:-1]
+    raw.frombytes(stdout)
     if sys.byteorder != "little":
         raw.byteswap()
     return [sample / 32768.0 for sample in raw]
@@ -307,7 +310,10 @@ def _extract_mono_pcm_segment(
     if result.returncode != 0:
         return []
     raw = array("h")
-    raw.frombytes(result.stdout)
+    stdout = result.stdout
+    if len(stdout) % 2 != 0:
+        stdout = stdout[:-1]
+    raw.frombytes(stdout)
     if sys.byteorder != "little":
         raw.byteswap()
     return [sample / 32768.0 for sample in raw]
@@ -326,7 +332,8 @@ def _raw_pcm_correlation_offset(
     if n < max(1, len(ref) // 10):
         return 0, 0.0
 
-    ref_power = sum(x * x for x in ref[:n])
+    ref_n = ref[:n]
+    ref_power = sum(x * x for x in ref_n)
     if ref_power == 0.0:
         return 0, 0.0
 
@@ -336,7 +343,7 @@ def _raw_pcm_correlation_offset(
         end = offset + n
         if end > len(cand):
             continue
-        corr = sum(a * b for a, b in zip(ref[:n], cand[offset:end], strict=False))
+        corr = sum(a * b for a, b in zip(ref_n, cand[offset:end], strict=False))
         if corr > best_corr:
             best_corr = corr
             best_lag = lag
@@ -533,7 +540,9 @@ def estimate_segment_by_transient(
         raise AudioSyncError("No transient candidates found in external audio search window")
 
     best_candidate = window_candidates[0]
-    external_abs_time = search_start_seconds + best_candidate.time_seconds
+    # search_start_sample / sample_rate로 실제 슬라이싱 시작 시점을 기준으로 계산해
+    # search_start_seconds와의 반올림 오차(최대 1/sample_rate)를 제거한다.
+    external_abs_time = search_start_sample / sample_rate + best_candidate.time_seconds
     segment_start = max(0.0, external_abs_time - ref_transient.time_seconds)
 
     confidence = min(1.0, min(ref_transient.score, best_candidate.score) / 10.0)
@@ -681,6 +690,7 @@ def calculate_external_audio_segments(
                 external_path=external_path,
                 reference_duration_seconds=duration_seconds,
                 search_start_seconds=search_start_seconds,
+                search_slack_seconds=_SEGMENT_SEARCH_SLACK_SECONDS,
                 min_confidence=min_confidence,
             )
         segments[reference_path] = segment
@@ -713,7 +723,13 @@ def calculate_external_audio_segments_from_timestamps(
     segments: dict[Path, ExternalAudioSegment] = {}
     for path in reference_paths:
         elapsed = (reference_timestamps[path] - base_time).total_seconds()
-        wav_start = max(0.0, elapsed + wav_start_offset_seconds)
+        wav_start = elapsed + wav_start_offset_seconds
+        if wav_start < 0:
+            raise AudioSyncError(
+                f"WAV 시작 오프셋({wav_start_offset_seconds:.1f}초)이 너무 작아 "
+                f"{path.name}의 WAV 시작 위치({wav_start:.1f}초)가 음수가 됩니다. "
+                "양수 값(WAV가 클립보다 먼저 시작)을 사용하거나 0으로 설정하세요."
+            )
         segments[path] = ExternalAudioSegment(
             path=external_path,
             start_seconds=wav_start,
@@ -1025,13 +1041,33 @@ def calculate_external_audio_segments_from_wav_dir(
                 if w.end_utc <= remaining_start_utc:
                     continue
                 if w.start_utc > remaining_start_utc:
+                    # WAV 파일 사이에 gap 존재
+                    gap = (w.start_utc - remaining_start_utc).total_seconds()
+                    logger.warning(
+                        "%s: WAV 파일 간 %.1fs gap 감지 — 해당 구간 오디오 없음",
+                        clip_path.name,
+                        gap,
+                    )
                     break
                 seg_start_in_wav = (remaining_start_utc - w.start_utc).total_seconds()
                 available = w.duration_seconds - seg_start_in_wav
                 use_dur = min(remaining_dur, available)
-                span_segments.append((w.path, seg_start_in_wav, use_dur))
-                remaining_start_utc += timedelta(seconds=use_dur)
-                remaining_dur -= use_dur
+                if use_dur > 0:
+                    span_segments.append((w.path, seg_start_in_wav, use_dur))
+                    remaining_start_utc += timedelta(seconds=use_dur)
+                    remaining_dur -= use_dur
+
+            if not span_segments:
+                raise AudioSyncError(
+                    f"{clip_path.name}: WAV 파일에서 유효한 오디오 구간을 찾지 못했습니다. "
+                    "WAV 파일이 클립 촬영 시각과 겹치는지 확인하세요."
+                )
+            if remaining_dur > 1e-3:
+                logger.warning(
+                    "%s: WAV 커버리지 부족 — %.3fs 미포함 (클립 끝 오디오 없음)",
+                    clip_path.name,
+                    remaining_dur,
+                )
 
             concat_path = temp_dir / f"span_{uuid.uuid4().hex[:8]}.wav"
             logger.info(

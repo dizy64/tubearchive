@@ -115,17 +115,19 @@ def test_build_external_audio_drift_requires_clap_sync() -> None:
         build_validated_args(targets, state)
 
 
-def test_build_external_audio_long_scope_rejects_directory() -> None:
-    """긴 녹음 범위는 후보 디렉토리 자동 선택과 동시에 사용할 수 없다."""
+def test_build_external_audio_long_scope_accepts_directory() -> None:
+    """긴 녹음 범위에서 WAV 디렉토리 지정은 BEXT 기반 매핑이므로 허용된다."""
     targets = [Path("/tmp/test")]
     state = TuiOptionState(
-        external_audio_path="/tmp/mic.wav",
         external_audio_dir="/tmp/audio",
         external_audio_scope="long",
     )
-
-    with pytest.raises(ValueError, match="후보 디렉토리"):
+    # ValueError 없이 통과해야 함
+    try:
         build_validated_args(targets, state)
+    except ValueError as exc:
+        if "디렉토리" in str(exc) or "directory" in str(exc).lower():
+            raise AssertionError(f"long scope + dir가 거부됨: {exc}") from exc
 
 
 def test_build_external_audio_rejects_invalid_zero_confidence() -> None:

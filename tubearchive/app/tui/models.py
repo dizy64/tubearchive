@@ -52,6 +52,7 @@ class TuiOptionState:
     sync_audio_clap: bool = False
     external_audio_drift_correction: bool = False
     external_audio_offset: float = 0.0
+    external_audio_wav_offset: float = 0.0
     external_audio_mode: str = "replace"
     camera_audio_volume: float = 0.1
     external_audio_min_confidence: float = 0.6
@@ -214,6 +215,12 @@ CATEGORY_DEFS: tuple[CategoryDef, ...] = (
             OptionDef("sync_audio_clap", "박수/피크 자동 싱크", "switch"),
             OptionDef("external_audio_drift_correction", "장시간 Drift 보정", "switch"),
             OptionDef("external_audio_offset", "수동 Offset (초)", "input_float", hint="0.0"),
+            OptionDef(
+                "external_audio_wav_offset",
+                "WAV 시작 보정 (초)",
+                "input_float",
+                hint="양수=WAV가 먼저 시작",
+            ),
             OptionDef(
                 "external_audio_mode",
                 "외부 오디오 합성 방식",

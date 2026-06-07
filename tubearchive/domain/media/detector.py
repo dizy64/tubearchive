@@ -731,6 +731,9 @@ def get_video_creation_time(video_path: Path) -> datetime | None:
     try:
         # ISO 8601: "2026-06-05T10:08:11.000000Z"
         dt = datetime.fromisoformat(creation_time_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            # 타임존 정보가 없으면 ffprobe 표준에 따라 UTC로 간주
+            dt = dt.replace(tzinfo=UTC)
         return dt.astimezone(UTC).replace(tzinfo=None)
     except ValueError:
         return None

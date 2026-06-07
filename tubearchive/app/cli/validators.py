@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -362,6 +363,10 @@ def validate_args(
         )
 
     external_audio_wav_offset = float(getattr(args, "external_audio_wav_offset", 0.0) or 0.0)
+    if not math.isfinite(external_audio_wav_offset):
+        raise ValueError(
+            f"--external-audio-wav-offset must be a finite number, got: {external_audio_wav_offset}"
+        )
 
     external_audio_clip_adjustments: dict[str, float] = {}
     for raw in getattr(args, "external_audio_clip_adjust", None) or []:

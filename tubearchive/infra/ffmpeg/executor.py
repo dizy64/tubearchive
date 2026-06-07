@@ -186,6 +186,11 @@ class FFmpegExecutor:
                 cmd.extend(["-ss", f"{external_audio_start + seek:g}"])
                 if external_audio_duration is not None:
                     cmd.extend(["-t", f"{max(0.0, external_audio_duration - seek):g}"])
+            elif seek_start:
+                # 1:1 매칭(external_audio_start=None)에서도 resume 시 WAV를 동일하게 보정.
+                cmd.extend(["-ss", f"{seek_start:g}"])
+                if external_audio_duration is not None:
+                    cmd.extend(["-t", f"{max(0.0, external_audio_duration - seek_start):g}"])
             elif external_audio_duration is not None:
                 cmd.extend(["-t", f"{external_audio_duration:g}"])
             if external_audio_offset:

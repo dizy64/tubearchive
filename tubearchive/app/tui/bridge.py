@@ -97,6 +97,7 @@ def build_validated_args(
         sync_audio_clap=state.sync_audio_clap,
         external_audio_drift_correction=state.external_audio_drift_correction,
         external_audio_offset=state.external_audio_offset,
+        external_audio_wav_offset=state.external_audio_wav_offset,
         external_audio_mode=state.external_audio_mode,
         camera_audio_volume=state.camera_audio_volume,
         external_audio_min_confidence=state.external_audio_min_confidence,
@@ -189,10 +190,9 @@ def _validate_external_audio_options(
     """TUI에서 조합 가능한 외부 오디오 옵션을 CLI 검증 규칙과 맞춘다."""
     if external_audio_scope not in {"single", "long"}:
         raise ValueError("외부 오디오 범위는 single 또는 long이어야 합니다.")
-    if external_audio_scope == "long" and external_audio_path is None:
-        raise ValueError("긴 녹음 범위는 외부 오디오 파일이 필요합니다.")
-    if external_audio_scope == "long" and external_audio_dir is not None:
-        raise ValueError("긴 녹음 범위는 외부 오디오 후보 디렉토리와 함께 사용할 수 없습니다.")
+    has_external = external_audio_path is not None or external_audio_dir is not None
+    if external_audio_scope == "long" and not has_external:
+        raise ValueError("긴 녹음 범위는 외부 오디오 파일 또는 WAV 디렉토리가 필요합니다.")
     if sync_audio_clap and external_audio_path is None and external_audio_dir is None:
         raise ValueError("박수/피크 자동 싱크는 외부 오디오 파일 또는 후보 디렉토리가 필요합니다.")
     if (
