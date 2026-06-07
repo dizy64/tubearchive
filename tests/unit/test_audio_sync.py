@@ -22,6 +22,7 @@ from tubearchive.domain.media.audio_sync import (
     estimate_segment_by_transient,
     extract_mono_pcm_samples,
     find_transient_candidates,
+    fine_tune_bext_offset_by_correlation,
     probe_media_duration,
     scan_wav_dir_bext,
     select_external_audio_candidate,
@@ -532,6 +533,7 @@ class TestCalculateExternalAudioSegmentsFromWavDir:
                 reference_durations=durations,
                 tz_offset_seconds=32400,
                 temp_dir=tmp_path,
+                fine_tune=False,  # 단위 테스트에서는 BEXT 계산만 검증
             )
 
         # 0001: (10:08:10 - 10:03:36) = 274s
@@ -573,6 +575,7 @@ class TestCalculateExternalAudioSegmentsFromWavDir:
                 reference_durations=durations,
                 tz_offset_seconds=32400,
                 temp_dir=tmp_path,
+                fine_tune=False,  # subprocess.run mock과 충돌 방지
             )
 
         # 결과 path는 tmp_path 아래 임시 파일
@@ -603,3 +606,79 @@ class TestCalculateExternalAudioSegmentsFromWavDir:
                 tz_offset_seconds=32400,
                 temp_dir=tmp_path,
             )
+
+
+class TestFineTuneBextOffsetByCorrelation:
+    """fine_tune_bext_offset_by_correlation 단위 테스트."""
+
+    def _make_signal(self, length: int, peak_index: int, amplitude: float = 1.0) -> list[float]:
+        samples = [0.02] * length
+        samples[peak_index] = amplitude
+        samples[peak_index + 1] = amplitude * 0.7
+        samples[peak_index + 2] = amplitude * 0.4
+        return samples
+
+    def test_finds_known_offset_within_search_range(self) -> None:
+        """합성 신호에서 2초 오차를 보정해 실제 오프셋을 찾는다.
+
+        BEXT offset=20s, search_range=8s, 실제 offset=22s(2초 오차).
+        클립 peak(0.1s)가 WAV 22s 위치와 매치 → refined ≈ 21.9s
+        """
+        sample_rate = 100
+        sample_duration = 30
+        search_range = 8
+        # 클립 오디오: 30s * 100 = 3000 샘플, 피크는 처음 0.1s에
+        clip_audio = self._make_signal(3000, peak_index=10)
+        # WAV 구간(12~58s, 46s): 4600 샘플, WAV 22s = 구간 내 10s → index=1000
+        wav_audio = self._make_signal(4600, peak_index=10 * sample_rate)
+
+        with patch(
+            "tubearchive.domain.media.audio_sync._extract_mono_pcm_segment",
+            # 클립 먼저 추출, WAV 나중 추출 (코드 호출 순서와 일치)
+            side_effect=[clip_audio, wav_audio],
+        ):
+            refined, confidence = fine_tune_bext_offset_by_correlation(
+                clip_path=Path("clip.mp4"),
+                wav_path=Path("wav.wav"),
+                bext_offset_seconds=20.0,
+                search_range_seconds=float(search_range),
+                sample_duration_seconds=float(sample_duration),
+                sample_rate=sample_rate,
+            )
+
+        # wav_start=12, lag≈+1.9 → refined≈21.9 (clip peak at 0.1s → WAV 22s)
+        assert abs(refined - 22.0) < 1.0
+        assert confidence > 0.0
+
+    def test_returns_bext_offset_on_empty_samples(self) -> None:
+        """오디오 추출에 실패하면 원래 BEXT 오프셋과 confidence=0을 반환한다."""
+        with patch(
+            "tubearchive.domain.media.audio_sync._extract_mono_pcm_segment",
+            return_value=[],
+        ):
+            refined, confidence = fine_tune_bext_offset_by_correlation(
+                clip_path=Path("clip.mp4"),
+                wav_path=Path("wav.wav"),
+                bext_offset_seconds=275.0,
+            )
+
+        assert refined == pytest.approx(275.0)
+        assert confidence == pytest.approx(0.0)
+
+    def test_returns_bext_offset_on_low_confidence(self) -> None:
+        """모든 샘플이 동일(무음)이면 correlation이 낮아 BEXT 오프셋을 유지한다."""
+        flat_signal = [0.0] * 3000
+
+        with patch(
+            "tubearchive.domain.media.audio_sync._extract_mono_pcm_segment",
+            side_effect=[flat_signal, flat_signal * 2],
+        ):
+            refined, _confidence = fine_tune_bext_offset_by_correlation(
+                clip_path=Path("clip.mp4"),
+                wav_path=Path("wav.wav"),
+                bext_offset_seconds=100.0,
+                min_confidence=0.25,
+            )
+
+        # 무음 신호는 correlation이 낮으므로 BEXT 오프셋 유지
+        assert refined == pytest.approx(100.0)

@@ -212,6 +212,28 @@ class TestFFmpegExecutor:
             "/input/recorder.wav",
         ]
 
+    def test_build_command_external_audio_seek_start_adjusts_ss_and_t(
+        self, executor: FFmpegExecutor
+    ) -> None:
+        """resume(seek_start) 시 external_audio_start와 duration을 seek_start만큼 보정한다."""
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+            external_audio_path=Path("/input/recorder.wav"),
+            external_audio_start=405.554,
+            external_audio_duration=2423.72,
+            seek_start=24.237,
+        )
+
+        external_input_index = cmd.index("/input/recorder.wav")
+        # 순서: -ss <val> -t <val> -i <path>
+        ss_val = float(cmd[external_input_index - 4])
+        t_val = float(cmd[external_input_index - 2])
+        assert ss_val == pytest.approx(405.554 + 24.237, abs=0.01)
+        assert t_val == pytest.approx(2423.72 - 24.237, abs=0.01)
+
     def test_build_command_overwrite(self, executor: FFmpegExecutor) -> None:
         """덮어쓰기 옵션."""
         from pathlib import Path

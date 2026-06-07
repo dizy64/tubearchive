@@ -267,6 +267,155 @@ def extract_mono_pcm_samples(
     return [sample / 32768.0 for sample in raw]
 
 
+def _extract_mono_pcm_segment(
+    media_path: Path,
+    start_seconds: float,
+    duration_seconds: float,
+    *,
+    sample_rate: int = 100,
+    ffmpeg_path: str = "ffmpeg",
+) -> list[float]:
+    """미디어의 지정 구간을 mono PCM으로 추출한다. 오류 시 빈 리스트 반환."""
+    cmd = [
+        ffmpeg_path,
+        "-v",
+        "error",
+        "-ss",
+        str(start_seconds),
+        "-t",
+        str(duration_seconds),
+        "-i",
+        str(media_path),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-f",
+        "s16le",
+        "pipe:1",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            check=False,
+            timeout=AUDIO_EXTRACTION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return []
+    if result.returncode != 0:
+        return []
+    raw = array("h")
+    raw.frombytes(result.stdout)
+    if sys.byteorder != "little":
+        raw.byteswap()
+    return [sample / 32768.0 for sample in raw]
+
+
+def _raw_pcm_correlation_offset(
+    ref: list[float],
+    cand: list[float],
+    search_range_frames: int,
+) -> tuple[int, float]:
+    """ref를 cand에서 찾아 최적 lag (frames)와 normalized correlation을 반환.
+
+    lag > 0: cand의 뒤쪽에서 ref와 더 잘 매치됨 → cand 시작을 lag/sr초 늦춰야 함
+    """
+    n = min(len(ref), max(0, len(cand) - search_range_frames * 2))
+    if n < max(1, len(ref) // 10):
+        return 0, 0.0
+
+    ref_power = sum(x * x for x in ref[:n])
+    if ref_power == 0.0:
+        return 0, 0.0
+
+    best_lag, best_corr = 0, -1e18
+    for lag in range(-search_range_frames, search_range_frames + 1):
+        offset = lag + search_range_frames
+        end = offset + n
+        if end > len(cand):
+            continue
+        corr = sum(a * b for a, b in zip(ref[:n], cand[offset:end], strict=False))
+        if corr > best_corr:
+            best_corr = corr
+            best_lag = lag
+
+    offset = best_lag + search_range_frames
+    cand_power = sum(x * x for x in cand[offset : offset + n])
+    denom = (ref_power * cand_power) ** 0.5
+    confidence = best_corr / denom if denom > 0.0 else 0.0
+
+    return best_lag, max(0.0, confidence)
+
+
+def fine_tune_bext_offset_by_correlation(
+    clip_path: Path,
+    wav_path: Path,
+    bext_offset_seconds: float,
+    *,
+    search_range_seconds: float = 12.0,
+    sample_duration_seconds: float = 30.0,
+    sample_rate: int = 100,
+    min_confidence: float = 0.10,
+    ffmpeg_path: str = "ffmpeg",
+) -> tuple[float, float]:
+    """BEXT 기반 오프셋을 ±search_range_seconds 범위에서 raw PCM correlation으로 정밀화.
+
+    DJI creation_time은 초 단위이므로 실제 녹화 시작과 수 초 오차가 있을 수 있다.
+    raw PCM cross-correlation으로 클립 내장 오디오와 WAV 해당 구간을 비교해
+    실제 WAV 시작 위치를 찾는다.
+    confidence가 min_confidence 미만이면 원래 bext_offset_seconds를 그대로 반환한다.
+
+    Returns:
+        (refined_offset_seconds, confidence) 튜플
+    """
+    wav_start = max(0.0, bext_offset_seconds - search_range_seconds)
+    wav_duration = sample_duration_seconds + 2 * search_range_seconds
+
+    clip_samples = _extract_mono_pcm_segment(
+        clip_path,
+        start_seconds=0.0,
+        duration_seconds=sample_duration_seconds,
+        sample_rate=sample_rate,
+        ffmpeg_path=ffmpeg_path,
+    )
+    wav_samples = _extract_mono_pcm_segment(
+        wav_path,
+        start_seconds=wav_start,
+        duration_seconds=wav_duration,
+        sample_rate=sample_rate,
+        ffmpeg_path=ffmpeg_path,
+    )
+
+    if not clip_samples or not wav_samples:
+        return bext_offset_seconds, 0.0
+
+    search_range_frames = int(search_range_seconds * sample_rate)
+    lag_frames, confidence = _raw_pcm_correlation_offset(
+        clip_samples, wav_samples, search_range_frames
+    )
+
+    if confidence < min_confidence:
+        logger.warning(
+            "BEXT fine-tuning: confidence %.3f < %.3f, 원래 오프셋 사용 (%.3fs)",
+            confidence,
+            min_confidence,
+            bext_offset_seconds,
+        )
+        return bext_offset_seconds, confidence
+
+    refined_offset = wav_start + search_range_seconds + lag_frames / sample_rate
+    logger.debug(
+        "BEXT fine-tuning: %.3fs → %.3fs (delta=%+.3fs, conf=%.3f)",
+        bext_offset_seconds,
+        refined_offset,
+        refined_offset - bext_offset_seconds,
+        confidence,
+    )
+    return refined_offset, confidence
+
+
 def calculate_clap_sync_offset(
     reference_path: Path,
     external_path: Path,
@@ -778,6 +927,7 @@ def calculate_external_audio_segments_from_wav_dir(
     reference_durations: dict[Path, float],
     tz_offset_seconds: int,
     temp_dir: Path,
+    fine_tune: bool = True,
     ffprobe_path: str = "ffprobe",
     ffmpeg_path: str = "ffmpeg",
 ) -> dict[Path, ExternalAudioSegment]:
@@ -787,6 +937,8 @@ def calculate_external_audio_segments_from_wav_dir(
     비교해 클립별 WAV 파일 + 시작 오프셋을 결정한다.
 
     클립이 두 WAV 파일 경계에 걸치는 경우 임시 concat WAV를 생성한다.
+    fine_tune=True이면 raw PCM cross-correlation으로 BEXT 오프셋을 정밀화한다.
+    DJI creation_time은 초 단위이므로 실제 시작과 수 초 오차가 있을 수 있다.
     """
     wav_infos = scan_wav_dir_bext(wav_dir, tz_offset_seconds, ffprobe_path=ffprobe_path)
     if not wav_infos:
@@ -827,6 +979,19 @@ def calculate_external_audio_segments_from_wav_dir(
 
         if clip_end_utc <= start_wav.end_utc:
             # 단일 WAV 안에 완전히 포함
+            if fine_tune:
+                wav_ss, conf = fine_tune_bext_offset_by_correlation(
+                    clip_path,
+                    start_wav.path,
+                    wav_ss,
+                    ffmpeg_path=ffmpeg_path,
+                )
+                logger.info(
+                    "%s: BEXT fine-tune → WAV ss=%.3fs (conf=%.3f)",
+                    clip_path.name,
+                    wav_ss,
+                    conf,
+                )
             segments[clip_path] = ExternalAudioSegment(
                 path=start_wav.path,
                 start_seconds=wav_ss,
@@ -834,9 +999,24 @@ def calculate_external_audio_segments_from_wav_dir(
                 confidence=1.0,
             )
         else:
-            # 두 WAV 이상에 걸쳐 있음 → 임시 concat WAV 생성
+            # 두 WAV 이상에 걸쳐 있음 → 첫 WAV 오프셋 fine-tune 후 임시 concat WAV 생성
+            if fine_tune:
+                wav_ss, conf = fine_tune_bext_offset_by_correlation(
+                    clip_path,
+                    start_wav.path,
+                    wav_ss,
+                    ffmpeg_path=ffmpeg_path,
+                )
+                logger.info(
+                    "%s: BEXT fine-tune (span) → WAV ss=%.3fs (conf=%.3f)",
+                    clip_path.name,
+                    wav_ss,
+                    conf,
+                )
+
             span_segments: list[tuple[Path, float, float]] = []
-            remaining_start_utc = clip_utc
+            # fine-tune된 wav_ss로 실제 시작 UTC를 역산해 span_segments 재구성
+            remaining_start_utc = start_wav.start_utc + timedelta(seconds=wav_ss)
             remaining_dur = clip_dur
 
             for w in wav_infos:
