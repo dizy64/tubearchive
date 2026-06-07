@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -12,6 +13,88 @@ from tubearchive.app.cli.validators import ValidatedArgs
 from tubearchive.domain.models.video import VideoFile
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_post_merge_processing(
+    final_path: Path,
+    temp_dir: Path,
+    validated_args: ValidatedArgs,
+    main_video_files: list[VideoFile],
+    main_results: list[TranscodeResult],
+    generated_subtitle_paths: list[Path] | None,
+) -> None:
+    """병합 결과물에 라우드니스 정규화·BGM·자막·화질 리포트를 순서대로 적용한다.
+
+    ``final_path`` 의 내용을 in-place로 갱신한다(경로 자체는 불변). 자막 자동 감지 시
+    ``validated_args.subtitle_lang`` 와 ``generated_subtitle_paths`` 도 갱신한다.
+
+    순서가 중요하다: loudnorm은 BGM보다 먼저 수행해야 정규화된 원본 오디오에
+    BGM 비율이 의도대로 적용된다.
+    """
+    # 라우드니스 정규화 (옵션) — 병합 결과 전체에 1회 적용.
+    # 클립별이 아닌 한 번에 측정/정규화하므로 클립 간 상대 라우드니스가 보존된다.
+    if validated_args.normalize_audio:
+        logger.info("Applying post-merge loudnorm...")
+        temp_loud_output = temp_dir / f"loudnorm_{final_path.name}"
+        normalized_path = _apply_post_merge_loudnorm(
+            video_path=final_path,
+            output_path=temp_loud_output,
+        )
+        # 정규화가 스킵된 경우(오디오 없음·분석 실패) 원본 경로 그대로 반환되므로
+        # ``shutil.move`` 호출 시 ``SameFileError``가 발생한다. 경로가 동일하면 무동작.
+        if normalized_path != final_path:
+            shutil.move(str(normalized_path), str(final_path))
+            logger.info(f"Loudnorm applied: {final_path}")
+        else:
+            logger.info("Loudnorm skipped (no audio or analysis failed); keeping merged output")
+
+    # BGM 믹싱 (옵션)
+    if validated_args.bgm_path:
+        logger.info("Applying BGM mixing...")
+        temp_bgm_output = temp_dir / f"bgm_mixed_{final_path.name}"
+        bgm_mixed_path = _apply_bgm_mixing(
+            video_path=final_path,
+            bgm_path=validated_args.bgm_path,
+            bgm_volume=validated_args.bgm_volume,
+            bgm_loop=validated_args.bgm_loop,
+            output_path=temp_bgm_output,
+        )
+        # 원본을 BGM 믹싱된 파일로 대체
+        shutil.move(str(bgm_mixed_path), str(final_path))
+        logger.info(f"BGM mixing applied: {final_path}")
+
+    # 자막 생성/하드코딩 (선택)
+    if validated_args.subtitle:
+        from tubearchive.domain.media.subtitle import generate_subtitles
+
+        logger.info("Generating subtitles for merged output...")
+        generated = final_path.with_suffix(f".{validated_args.subtitle_format}")
+        subtitle_result = generate_subtitles(
+            final_path,
+            model=validated_args.subtitle_model,
+            language=validated_args.subtitle_lang,
+            output_format=validated_args.subtitle_format,
+            output_path=generated,
+        )
+        subtitle_path = subtitle_result.subtitle_path
+        if subtitle_result.detected_language and validated_args.subtitle_lang is None:
+            validated_args.subtitle_lang = subtitle_result.detected_language
+        if generated_subtitle_paths is not None:
+            generated_subtitle_paths.append(subtitle_path)
+
+        if validated_args.subtitle_burn:
+            logger.info("Applying hardcoded subtitles...")
+            burned_path = _apply_subtitle_burn(
+                input_path=final_path,
+                subtitle_path=subtitle_path,
+            )
+            # 원본을 burned 파일로 교체하여 --output 경로를 유지
+            final_path.unlink(missing_ok=True)
+            burned_path.rename(final_path)
+
+    # 화질 리포트 출력 (선택)
+    if validated_args.quality_report:
+        _print_quality_report(main_video_files, main_results)
 
 
 def _apply_bgm_mixing(

@@ -234,7 +234,12 @@ scan_videos() → group_sequences() → reorder_with_groups()
 ### 핵심 컴포넌트
 
 **app/cli/pipeline/** (패키지, + **main.py** re-export): CLI 파이프라인 오케스트레이터 (아래 함수들은 `__init__` 또는 transcode/postprocess/persistence/archive/io_utils/single_file 서브모듈에 분산되어 있으나 패키지 `__init__`이 전부 re-export)
-- `run_pipeline()`: 메인 파이프라인 (스캔→그룹핑→[스킵판정]→트랜스코딩→병합→후처리→저장→[분할])
+- `run_pipeline()`: 메인 파이프라인 (스캔→그룹핑→[스킵판정]→트랜스코딩→병합→후처리→저장→[분할]). 본체는 단계별 헬퍼로 분해되어 오케스트레이션만 담당
+  - `_prepare_video_assembly()`(__init__): 템플릿 삽입+시퀀스 그룹핑+fade_map+외부 오디오 세그먼트 → `_VideoAssembly` 반환
+  - `_build_transcode_options()`(transcode): `ValidatedArgs`+fade_map+세그먼트 → `TranscodeOptions`
+  - `_run_transcoding()`(__init__): 스킵/병렬/순차 디스패치 → `list[TranscodeResult]`
+  - `_apply_post_merge_processing()`(postprocess): loudnorm→BGM→자막→화질 리포트 (순서 의존, in-place)
+  - `_run_splitting()`(__init__): `--split-*` 분할 + DB 기록 (비필수, 실패 graceful)
 - `TranscodeOptions`: 트랜스코딩 공통 옵션 (denoise, stabilize, fade_map, lut_path, auto_lut, lut_before_hdr, device_luts 등 — `normalize_audio`는 병합 후 loudnorm 적용 여부 제어)
 - `TranscodeResult`: 단일 트랜스코딩 결과 (frozen dataclass)
 - `ClipInfo`: NamedTuple (name, duration, device, shot_time) — 클립 메타데이터

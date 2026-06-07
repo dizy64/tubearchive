@@ -12,6 +12,7 @@ from __future__ import annotations
 import fcntl
 import logging
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from tubearchive.app.cli.context import PipelineContext
@@ -40,6 +41,7 @@ from tubearchive.app.cli.pipeline.persistence import (
 from tubearchive.app.cli.pipeline.postprocess import (
     _apply_bgm_mixing,
     _apply_post_merge_loudnorm,
+    _apply_post_merge_processing,
     _apply_subtitle_burn,
     _detect_silence_only,
     _generate_thumbnails,
@@ -52,6 +54,7 @@ from tubearchive.app.cli.pipeline.single_file import (
 from tubearchive.app.cli.pipeline.transcode import (
     TranscodeOptions,
     TranscodeResult,
+    _build_transcode_options,
     _can_skip_transcoding,
     _collect_clip_info,
     _make_watermark_text,
@@ -278,6 +281,264 @@ def _run_error_hook(
     )
 
 
+@dataclass(frozen=True)
+class _VideoAssembly:
+    """트랜스코딩 직전 단계의 입력 구성 결과.
+
+    템플릿 삽입·시퀀스 그룹핑·fade_map·외부 오디오 세그먼트를 한 번에 산출해
+    ``run_pipeline`` 의 본체를 단순화한다.
+    """
+
+    video_files: list[VideoFile]  # 템플릿이 삽입된 최종 트랜스코딩 대상
+    main_video_files: list[VideoFile]  # 템플릿 제외, 그룹핑/재정렬된 메인 클립
+    groups: list[FileSequenceGroup]
+    fade_map: dict[Path, FadeConfig]
+    temp_dir: Path
+    external_audio_segments: dict[Path, ExternalAudioSegment] | None
+    template_intro_file: VideoFile | None
+    template_outro_file: VideoFile | None
+    template_intro_count: int
+    template_outro_count: int
+
+
+def _prepare_video_assembly(
+    validated_args: ValidatedArgs,
+    video_files: list[VideoFile],
+) -> _VideoAssembly:
+    """템플릿 삽입·그룹핑·fade_map·외부 오디오 세그먼트를 계산해 조립 결과를 반환한다.
+
+    스캔·정렬이 끝난 ``video_files`` 를 받아 트랜스코딩 단계가 필요로 하는 모든
+    입력 구성을 산출한다. 부수효과 없이(임시 디렉토리 생성 제외) 값만 만든다.
+    """
+    # 템플릿 삽입 (템플릿은 검증 및 파일 존재 확인을 validate_args에서 수행)
+    main_video_files = list(video_files)
+    template_intro_file: VideoFile | None = None
+    template_outro_file: VideoFile | None = None
+    main_paths = {vf.path for vf in main_video_files}
+
+    if validated_args.template_intro and validated_args.template_intro not in main_paths:
+        template_intro_file = _to_video_file(validated_args.template_intro)
+
+    if (
+        validated_args.template_outro
+        and validated_args.template_outro not in main_paths
+        and (
+            template_intro_file is None or template_intro_file.path != validated_args.template_outro
+        )
+    ):
+        template_outro_file = _to_video_file(validated_args.template_outro)
+
+    template_intro_count = 1 if template_intro_file is not None else 0
+    template_outro_count = 1 if template_outro_file is not None else 0
+
+    # 그룹핑 및 재정렬
+    if validated_args.group_sequences:
+        groups = group_sequences(main_video_files)
+        main_video_files = reorder_with_groups(main_video_files, groups)
+        for group in groups:
+            if len(group.files) > 1:
+                logger.info(
+                    "연속 시퀀스 감지: %s (%d개 파일)",
+                    group.group_id,
+                    len(group.files),
+                )
+    else:
+        groups = [
+            FileSequenceGroup(files=(video_file,), group_id=f"s_{i}")
+            for i, video_file in enumerate(main_video_files)
+        ]
+
+    fade_map = compute_fade_map(
+        groups=groups,
+        default_fade=validated_args.fade_duration,
+    )
+
+    # 트랜스코딩용 임시 디렉토리 (이후 단계에서도 공유)
+    temp_dir = get_temp_dir()
+    logger.info(f"Using temp directory: {temp_dir}")
+
+    external_audio_segments: dict[Path, ExternalAudioSegment] | None = None
+    if validated_args.external_audio_scope == "long":
+        if validated_args.external_audio_path:
+            external_audio_segments = analyze_long_external_audio(
+                main_video_files,
+                validated_args.external_audio_path,
+                validated_args.external_audio_min_confidence,
+                use_clap_sync=validated_args.sync_audio_clap,
+                wav_start_offset_seconds=validated_args.external_audio_wav_offset,
+            )
+        elif validated_args.external_audio_dir:
+            external_audio_segments = analyze_long_external_audio_from_dir(
+                main_video_files,
+                validated_args.external_audio_dir,
+                temp_dir,
+            )
+
+        if external_audio_segments and validated_args.external_audio_clip_adjustments:
+            external_audio_segments = apply_clip_adjustments(
+                external_audio_segments,
+                validated_args.external_audio_clip_adjustments,
+            )
+
+    # 템플릿 클립을 트랜스코딩 대상 목록에 삽입하고 경계 fade를 조정한다.
+    video_files = list(main_video_files)
+    if template_intro_file is not None:
+        video_files.insert(0, template_intro_file)
+        fade_map[template_intro_file.path] = FadeConfig(
+            fade_in=validated_args.fade_duration,
+            fade_out=0.0,
+        )
+        first_main = main_video_files[0]
+        first_fade = fade_map.get(first_main.path)
+        if first_fade is not None:
+            fade_map[first_main.path] = FadeConfig(
+                fade_in=0.0,
+                fade_out=first_fade.fade_out,
+            )
+
+    if template_outro_file is not None:
+        video_files.append(template_outro_file)
+        fade_map[template_outro_file.path] = FadeConfig(
+            fade_in=0.0,
+            fade_out=validated_args.fade_duration,
+        )
+        last_main = main_video_files[-1]
+        last_fade = fade_map.get(last_main.path)
+        if last_fade is not None:
+            fade_map[last_main.path] = FadeConfig(
+                fade_in=last_fade.fade_in,
+                fade_out=0.0,
+            )
+
+    return _VideoAssembly(
+        video_files=video_files,
+        main_video_files=main_video_files,
+        groups=groups,
+        fade_map=fade_map,
+        temp_dir=temp_dir,
+        external_audio_segments=external_audio_segments,
+        template_intro_file=template_intro_file,
+        template_outro_file=template_outro_file,
+        template_intro_count=template_intro_count,
+        template_outro_count=template_outro_count,
+    )
+
+
+def _run_splitting(
+    final_path: Path,
+    validated_args: ValidatedArgs,
+    merge_job_id: int | None,
+) -> list[Path]:
+    """``--split-duration`` / ``--split-size`` 지정 시 병합 결과를 분할하고 DB에 기록한다.
+
+    분할/DB 저장 실패는 전체 파이프라인을 중단하지 않고 경고만 남긴다(비필수 단계).
+    분할이 비활성이거나 결과가 없으면 빈 리스트를 반환한다.
+    """
+    if not (validated_args.split_duration or validated_args.split_size):
+        return []
+
+    from tubearchive.domain.media.splitter import SplitOptions, VideoSplitter
+
+    splitter = VideoSplitter()
+    split_opts = SplitOptions(
+        duration=(
+            splitter.parse_duration(validated_args.split_duration)
+            if validated_args.split_duration
+            else None
+        ),
+        size=(
+            splitter.parse_size(validated_args.split_size) if validated_args.split_size else None
+        ),
+    )
+
+    split_output_dir = final_path.parent
+    split_criterion = "duration" if split_opts.duration else "size"
+    split_value = validated_args.split_duration or validated_args.split_size or ""
+    logger.info("Splitting video...")
+    split_files: list[Path] = []
+    try:
+        split_files = splitter.split_video(final_path, split_output_dir, split_opts)
+        if split_files:
+            print(f"\n✂️  영상 {len(split_files)}개로 분할:")
+            for sf in split_files:
+                file_size = sf.stat().st_size if sf.exists() else 0
+                size_str = format_size(file_size)
+                print(f"  - {sf.name} ({size_str})")
+
+            # DB에 split job 저장
+            if merge_job_id is not None:
+                try:
+                    from tubearchive.app.cli.main import (
+                        database_session,  # lazy: avoids circular import
+                    )
+
+                    with database_session() as conn:
+                        split_repo = SplitJobRepository(conn)
+                        split_repo.create(
+                            merge_job_id=merge_job_id,
+                            split_criterion=split_criterion,
+                            split_value=split_value,
+                            output_files=split_files,
+                        )
+                    logger.debug("Split job saved to database")
+                except Exception as e:
+                    logger.warning(f"Failed to save split job to DB: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to split video: {e}")
+        print(f"\n⚠️  영상 분할 실패: {e}")
+    return split_files
+
+
+def _run_transcoding(
+    video_files: list[VideoFile],
+    main_video_files: list[VideoFile],
+    transcode_opts: TranscodeOptions,
+    temp_dir: Path,
+    validated_args: ValidatedArgs,
+    template_intro_file: VideoFile | None,
+    template_outro_file: VideoFile | None,
+    context: PipelineContext | None,
+) -> list[TranscodeResult]:
+    """스킵 판정 결과에 따라 stream-copy / 병렬 / 순차 트랜스코딩을 디스패치한다.
+
+    모든 입력이 PROFILE_SDR과 정합하고 필터가 없으면 트랜스코딩을 통째로 건너뛰고
+    원본을 concat demuxer로 stream-copy 병합한다. 메타데이터 캐시를 재사용해
+    스킵 분기의 재-probe(ffprobe 2N → N)를 방지한다.
+    """
+    can_skip, skip_reason, metadata_cache = _can_skip_transcoding(
+        main_video_files,
+        transcode_opts,
+        validated_args,
+        template_intro_file,
+        template_outro_file,
+    )
+    parallel = validated_args.parallel
+    if can_skip:
+        logger.info(f"트랜스코딩 스킵 (stream-copy 모드): {skip_reason}")
+        # 스킵이 가능한 경우 템플릿이 없음이 보장되므로 video_files == main_video_files.
+        return _run_skip_transcoding(main_video_files, temp_dir, metadata_cache, context=context)
+    if parallel > 1:
+        logger.debug(f"Skip not eligible: {skip_reason}")
+        logger.info(f"Starting parallel transcoding (workers: {parallel})...")
+        return _transcode_parallel(
+            video_files,
+            temp_dir,
+            parallel,
+            transcode_opts,
+            context=context,
+            metadata_cache=metadata_cache,
+        )
+    logger.debug(f"Skip not eligible: {skip_reason}")
+    logger.info("Starting transcoding...")
+    return _transcode_sequential(
+        video_files,
+        temp_dir,
+        transcode_opts,
+        context=context,
+        metadata_cache=metadata_cache,
+    )
+
+
 def run_pipeline(
     validated_args: ValidatedArgs,
     context: PipelineContext | None = None,
@@ -337,148 +598,21 @@ def run_pipeline(
     ):
         return handle_single_file_upload(video_files[0], validated_args)
 
-    # 템플릿 삽입 (템플릿은 검증 및 파일 존재 확인을 validate_args에서 수행)
-    main_video_files = list(video_files)
-    template_intro_file: VideoFile | None = None
-    template_outro_file: VideoFile | None = None
-    main_paths = {vf.path for vf in main_video_files}
+    # 1.5 입력 조립: 템플릿 삽입 + 시퀀스 그룹핑 + fade_map + 외부 오디오 세그먼트
+    assembly = _prepare_video_assembly(validated_args, video_files)
+    video_files = assembly.video_files
+    main_video_files = assembly.main_video_files
+    groups = assembly.groups
+    fade_map = assembly.fade_map
+    temp_dir = assembly.temp_dir
+    external_audio_segments = assembly.external_audio_segments
+    template_intro_file = assembly.template_intro_file
+    template_outro_file = assembly.template_outro_file
+    template_intro_count = assembly.template_intro_count
+    template_outro_count = assembly.template_outro_count
 
-    if validated_args.template_intro and validated_args.template_intro not in main_paths:
-        template_intro_file = _to_video_file(validated_args.template_intro)
-
-    if (
-        validated_args.template_outro
-        and validated_args.template_outro not in main_paths
-        and (
-            template_intro_file is None or template_intro_file.path != validated_args.template_outro
-        )
-    ):
-        template_outro_file = _to_video_file(validated_args.template_outro)
-
-    template_intro_count = 1 if template_intro_file is not None else 0
-    template_outro_count = 1 if template_outro_file is not None else 0
-
-    # 1.5 그룹핑 및 재정렬
-    if validated_args.group_sequences:
-        groups = group_sequences(main_video_files)
-        main_video_files = reorder_with_groups(main_video_files, groups)
-        for group in groups:
-            if len(group.files) > 1:
-                logger.info(
-                    "연속 시퀀스 감지: %s (%d개 파일)",
-                    group.group_id,
-                    len(group.files),
-                )
-    else:
-        groups = [
-            FileSequenceGroup(files=(video_file,), group_id=f"s_{i}")
-            for i, video_file in enumerate(main_video_files)
-        ]
-
-    fade_map = compute_fade_map(
-        groups=groups,
-        default_fade=validated_args.fade_duration,
-    )
-
-    # 2. 트랜스코딩용 임시 디렉토리 (이후 단계에서도 공유)
-    temp_dir = get_temp_dir()
-    logger.info(f"Using temp directory: {temp_dir}")
-
-    external_audio_segments: dict[Path, ExternalAudioSegment] | None = None
-    if validated_args.external_audio_scope == "long":
-        if validated_args.external_audio_path:
-            external_audio_segments = analyze_long_external_audio(
-                main_video_files,
-                validated_args.external_audio_path,
-                validated_args.external_audio_min_confidence,
-                use_clap_sync=validated_args.sync_audio_clap,
-                wav_start_offset_seconds=validated_args.external_audio_wav_offset,
-            )
-        elif validated_args.external_audio_dir:
-            external_audio_segments = analyze_long_external_audio_from_dir(
-                main_video_files,
-                validated_args.external_audio_dir,
-                temp_dir,
-            )
-
-        if external_audio_segments and validated_args.external_audio_clip_adjustments:
-            external_audio_segments = apply_clip_adjustments(
-                external_audio_segments,
-                validated_args.external_audio_clip_adjustments,
-            )
-
-    video_files = list(main_video_files)
-    if template_intro_file is not None:
-        video_files.insert(0, template_intro_file)
-        fade_map[template_intro_file.path] = FadeConfig(
-            fade_in=validated_args.fade_duration,
-            fade_out=0.0,
-        )
-        first_main = main_video_files[0]
-        first_fade = fade_map.get(first_main.path)
-        if first_fade is not None:
-            fade_map[first_main.path] = FadeConfig(
-                fade_in=0.0,
-                fade_out=first_fade.fade_out,
-            )
-
-    if template_outro_file is not None:
-        video_files.append(template_outro_file)
-        fade_map[template_outro_file.path] = FadeConfig(
-            fade_in=0.0,
-            fade_out=validated_args.fade_duration,
-        )
-        last_main = main_video_files[-1]
-        last_fade = fade_map.get(last_main.path)
-        if last_fade is not None:
-            fade_map[last_main.path] = FadeConfig(
-                fade_in=last_fade.fade_in,
-                fade_out=0.0,
-            )
     # 2. 트랜스코딩
-
-    transcode_opts = TranscodeOptions(
-        denoise=validated_args.denoise,
-        denoise_level=validated_args.denoise_level,
-        external_audio_path=(
-            None
-            if validated_args.external_audio_scope == "long"
-            else validated_args.external_audio_path
-        ),
-        external_audio_dir=validated_args.external_audio_dir,
-        external_audio_scope=validated_args.external_audio_scope,
-        external_audio_segments=external_audio_segments,
-        sync_audio_clap=validated_args.sync_audio_clap,
-        external_audio_drift_correction=validated_args.external_audio_drift_correction,
-        external_audio_offset=validated_args.external_audio_offset,
-        external_audio_mode=validated_args.external_audio_mode,
-        camera_audio_volume=validated_args.camera_audio_volume,
-        external_audio_min_confidence=validated_args.external_audio_min_confidence,
-        external_audio_match_window=validated_args.external_audio_match_window,
-        fade_map=fade_map,
-        fade_duration=validated_args.fade_duration,
-        trim_silence=validated_args.trim_silence,
-        silence_threshold=validated_args.silence_threshold,
-        silence_min_duration=validated_args.silence_min_duration,
-        stabilize=validated_args.stabilize,
-        stabilize_strength=validated_args.stabilize_strength,
-        stabilize_crop=validated_args.stabilize_crop,
-        lut_path=validated_args.lut_path,
-        auto_lut=validated_args.auto_lut,
-        lut_before_hdr=validated_args.lut_before_hdr,
-        device_luts=validated_args.device_luts,
-        video_denoise=validated_args.video_denoise,
-        video_denoise_strength=validated_args.video_denoise_strength,
-        wb_kelvin=validated_args.wb_kelvin,
-        auto_white_balance=validated_args.auto_white_balance,
-        device_wb=validated_args.device_wb,
-        watermark=validated_args.watermark,
-        watermark_text=validated_args.watermark_text or None,
-        watermark_pos=validated_args.watermark_pos,
-        watermark_size=validated_args.watermark_size,
-        watermark_color=validated_args.watermark_color,
-        watermark_alpha=validated_args.watermark_alpha,
-    )
+    transcode_opts = _build_transcode_options(validated_args, fade_map, external_audio_segments)
 
     if validated_args.stabilize:
         logger.info(
@@ -488,43 +622,16 @@ def run_pipeline(
             validated_args.stabilize_crop,
         )
 
-    # 트랜스코딩 스킵 검사: 모든 입력이 이미 PROFILE_SDR과 정합하고
-    # 어떤 필터도 활성화되지 않은 경우, 트랜스코딩 단계를 통째로 건너뛰고
-    # 원본 파일을 그대로 concat demuxer로 stream-copy 병합한다.
-    # 메타데이터 캐시를 반환받아 스킵 분기의 재-probe(ffprobe 2N → N)를 방지한다.
-    can_skip, skip_reason, metadata_cache = _can_skip_transcoding(
+    results = _run_transcoding(
+        video_files,
         main_video_files,
         transcode_opts,
+        temp_dir,
         validated_args,
         template_intro_file,
         template_outro_file,
+        context,
     )
-    parallel = validated_args.parallel
-    if can_skip:
-        logger.info(f"트랜스코딩 스킵 (stream-copy 모드): {skip_reason}")
-        # 스킵이 가능한 경우 템플릿이 없음이 보장되므로 video_files == main_video_files.
-        results = _run_skip_transcoding(main_video_files, temp_dir, metadata_cache, context=context)
-    elif parallel > 1:
-        logger.debug(f"Skip not eligible: {skip_reason}")
-        logger.info(f"Starting parallel transcoding (workers: {parallel})...")
-        results = _transcode_parallel(
-            video_files,
-            temp_dir,
-            parallel,
-            transcode_opts,
-            context=context,
-            metadata_cache=metadata_cache,
-        )
-    else:
-        logger.debug(f"Skip not eligible: {skip_reason}")
-        logger.info("Starting transcoding...")
-        results = _transcode_sequential(
-            video_files,
-            temp_dir,
-            transcode_opts,
-            context=context,
-            metadata_cache=metadata_cache,
-        )
 
     video_ids = [r.video_id for r in results]
     main_start = template_intro_count
@@ -593,73 +700,15 @@ def run_pipeline(
             )
         )
 
-    # 3.4 라우드니스 정규화 (옵션) — 병합 결과 전체에 1회 적용
-    # 클립별이 아닌 한 번에 측정/정규화하므로 클립 간 상대 라우드니스가 보존된다.
-    # BGM 믹싱은 정규화된 원본 오디오에 BGM 비율을 적용해야 의도대로 동작하므로
-    # 반드시 BGM 단계보다 먼저 수행한다.
-    if validated_args.normalize_audio:
-        logger.info("Applying post-merge loudnorm...")
-        temp_loud_output = temp_dir / f"loudnorm_{final_path.name}"
-        normalized_path = _apply_post_merge_loudnorm(
-            video_path=final_path,
-            output_path=temp_loud_output,
-        )
-        # 정규화가 스킵된 경우(오디오 없음·분석 실패) 원본 경로 그대로 반환되므로
-        # ``shutil.move`` 호출 시 ``SameFileError``가 발생한다. 경로가 동일하면 무동작.
-        if normalized_path != final_path:
-            shutil.move(str(normalized_path), str(final_path))
-            logger.info(f"Loudnorm applied: {final_path}")
-        else:
-            logger.info("Loudnorm skipped (no audio or analysis failed); keeping merged output")
-
-    # 3.5 BGM 믹싱 (옵션)
-    if validated_args.bgm_path:
-        logger.info("Applying BGM mixing...")
-        temp_bgm_output = temp_dir / f"bgm_mixed_{final_path.name}"
-        bgm_mixed_path = _apply_bgm_mixing(
-            video_path=final_path,
-            bgm_path=validated_args.bgm_path,
-            bgm_volume=validated_args.bgm_volume,
-            bgm_loop=validated_args.bgm_loop,
-            output_path=temp_bgm_output,
-        )
-        # 원본을 BGM 믹싱된 파일로 대체
-        shutil.move(str(bgm_mixed_path), str(final_path))
-        logger.info(f"BGM mixing applied: {final_path}")
-
-    # 4.1 자막 생성/하드코딩 (선택)
-    subtitle_path: Path | None = None
-    if validated_args.subtitle:
-        from tubearchive.domain.media.subtitle import generate_subtitles
-
-        logger.info("Generating subtitles for merged output...")
-        generated = final_path.with_suffix(f".{validated_args.subtitle_format}")
-        subtitle_result = generate_subtitles(
-            final_path,
-            model=validated_args.subtitle_model,
-            language=validated_args.subtitle_lang,
-            output_format=validated_args.subtitle_format,
-            output_path=generated,
-        )
-        subtitle_path = subtitle_result.subtitle_path
-        if subtitle_result.detected_language and validated_args.subtitle_lang is None:
-            validated_args.subtitle_lang = subtitle_result.detected_language
-        if generated_subtitle_paths is not None:
-            generated_subtitle_paths.append(subtitle_path)
-
-        if validated_args.subtitle_burn:
-            logger.info("Applying hardcoded subtitles...")
-            burned_path = _apply_subtitle_burn(
-                input_path=final_path,
-                subtitle_path=subtitle_path,
-            )
-            # 원본을 burned 파일로 교체하여 --output 경로를 유지
-            final_path.unlink(missing_ok=True)
-            burned_path.rename(final_path)
-
-    # 4.1 화질 리포트 출력 (선택)
-    if validated_args.quality_report:
-        _print_quality_report(main_video_files, main_results)
+    # 3.4 후처리: 라우드니스 정규화 → BGM 믹싱 → 자막 → 화질 리포트 (순서 중요)
+    _apply_post_merge_processing(
+        final_path,
+        temp_dir,
+        validated_args,
+        main_video_files,
+        main_results,
+        generated_subtitle_paths,
+    )
 
     # 4. DB 저장 및 Summary 생성
     video_ids = [r.video_id for r in results]
@@ -689,58 +738,7 @@ def run_pipeline(
                 print(f"  - {tp}")
 
     # 4.6 영상 분할 (비필수)
-    split_files: list[Path] = []
-    if validated_args.split_duration or validated_args.split_size:
-        from tubearchive.domain.media.splitter import SplitOptions, VideoSplitter
-
-        splitter = VideoSplitter()
-        split_opts = SplitOptions(
-            duration=(
-                splitter.parse_duration(validated_args.split_duration)
-                if validated_args.split_duration
-                else None
-            ),
-            size=(
-                splitter.parse_size(validated_args.split_size)
-                if validated_args.split_size
-                else None
-            ),
-        )
-
-        split_output_dir = final_path.parent
-        split_criterion = "duration" if split_opts.duration else "size"
-        split_value = validated_args.split_duration or validated_args.split_size or ""
-        logger.info("Splitting video...")
-        try:
-            split_files = splitter.split_video(final_path, split_output_dir, split_opts)
-            if split_files:
-                print(f"\n✂️  영상 {len(split_files)}개로 분할:")
-                for sf in split_files:
-                    file_size = sf.stat().st_size if sf.exists() else 0
-                    size_str = format_size(file_size)
-                    print(f"  - {sf.name} ({size_str})")
-
-                # DB에 split job 저장
-                if merge_job_id is not None:
-                    try:
-                        from tubearchive.app.cli.main import (
-                            database_session,  # lazy: avoids circular import
-                        )
-
-                        with database_session() as conn:
-                            split_repo = SplitJobRepository(conn)
-                            split_repo.create(
-                                merge_job_id=merge_job_id,
-                                split_criterion=split_criterion,
-                                split_value=split_value,
-                                output_files=split_files,
-                            )
-                        logger.debug("Split job saved to database")
-                    except Exception as e:
-                        logger.warning(f"Failed to save split job to DB: {e}")
-        except Exception as e:
-            logger.warning(f"Failed to split video: {e}")
-            print(f"\n⚠️  영상 분할 실패: {e}")
+    split_files = _run_splitting(final_path, validated_args, merge_job_id)
 
     # 4.7 타임랩스 생성 (비필수)
     timelapse_path: Path | None = None

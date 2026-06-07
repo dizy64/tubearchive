@@ -123,6 +123,60 @@ class TranscodeResult:
     silence_segments: list[SilenceSegment] | None = None
 
 
+def _build_transcode_options(
+    validated_args: ValidatedArgs,
+    fade_map: dict[Path, FadeConfig],
+    external_audio_segments: dict[Path, ExternalAudioSegment] | None,
+) -> TranscodeOptions:
+    """``ValidatedArgs`` 와 사전 계산된 fade_map/외부 오디오 세그먼트로 트랜스코딩 옵션을 구성한다.
+
+    ``external_audio_scope == "long"`` 인 경우 단일 외부 오디오 경로(``external_audio_path``)는
+    클립별 ``external_audio_segments`` 로 대체되므로 ``None`` 으로 전달한다.
+    """
+    return TranscodeOptions(
+        denoise=validated_args.denoise,
+        denoise_level=validated_args.denoise_level,
+        external_audio_path=(
+            None
+            if validated_args.external_audio_scope == "long"
+            else validated_args.external_audio_path
+        ),
+        external_audio_dir=validated_args.external_audio_dir,
+        external_audio_scope=validated_args.external_audio_scope,
+        external_audio_segments=external_audio_segments,
+        sync_audio_clap=validated_args.sync_audio_clap,
+        external_audio_drift_correction=validated_args.external_audio_drift_correction,
+        external_audio_offset=validated_args.external_audio_offset,
+        external_audio_mode=validated_args.external_audio_mode,
+        camera_audio_volume=validated_args.camera_audio_volume,
+        external_audio_min_confidence=validated_args.external_audio_min_confidence,
+        external_audio_match_window=validated_args.external_audio_match_window,
+        fade_map=fade_map,
+        fade_duration=validated_args.fade_duration,
+        trim_silence=validated_args.trim_silence,
+        silence_threshold=validated_args.silence_threshold,
+        silence_min_duration=validated_args.silence_min_duration,
+        stabilize=validated_args.stabilize,
+        stabilize_strength=validated_args.stabilize_strength,
+        stabilize_crop=validated_args.stabilize_crop,
+        lut_path=validated_args.lut_path,
+        auto_lut=validated_args.auto_lut,
+        lut_before_hdr=validated_args.lut_before_hdr,
+        device_luts=validated_args.device_luts,
+        video_denoise=validated_args.video_denoise,
+        video_denoise_strength=validated_args.video_denoise_strength,
+        wb_kelvin=validated_args.wb_kelvin,
+        auto_white_balance=validated_args.auto_white_balance,
+        device_wb=validated_args.device_wb,
+        watermark=validated_args.watermark,
+        watermark_text=validated_args.watermark_text or None,
+        watermark_pos=validated_args.watermark_pos,
+        watermark_size=validated_args.watermark_size,
+        watermark_color=validated_args.watermark_color,
+        watermark_alpha=validated_args.watermark_alpha,
+    )
+
+
 def _collect_clip_info(video_file: VideoFile, metadata: VideoMetadata | None = None) -> ClipInfo:
     """영상 파일에서 Summary·타임라인용 클립 메타데이터를 수집한다.
 
