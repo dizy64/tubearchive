@@ -266,11 +266,19 @@ class PipelinePane(Widget):
         state = options.collect_state()
         wav_dir = Path(state.external_audio_dir.strip()).expanduser()
         temp_dir = get_temp_dir()
+        # run_pipeline과 동일한 필터를 사전 분석에도 적용해 제외 대상(템플릿/타임랩스 등)이
+        # 분석에 포함되지 않도록 한다.
+        exclude_patterns = [p.strip() for p in state.exclude_patterns.split(",") if p.strip()]
+        include_only_patterns = [
+            p.strip() for p in state.include_only_patterns.split(",") if p.strip()
+        ]
 
         status = self.query_one("#pipeline-status", Label)
         status.update("오디오 사전 분석 중…")
         self.query_one("#analyze-button", Button).disabled = True
-        self._run_audio_analysis_worker(targets, wav_dir, temp_dir)
+        self._run_audio_analysis_worker(
+            targets, wav_dir, temp_dir, exclude_patterns, include_only_patterns
+        )
 
     @work(thread=True)
     def _run_audio_analysis_worker(
@@ -278,10 +286,18 @@ class PipelinePane(Widget):
         targets: list[Path],
         wav_dir: Path,
         temp_dir: Path,
+        exclude_patterns: list[str],
+        include_only_patterns: list[str],
     ) -> None:
         """worker 스레드에서 외부 오디오 세그먼트 분석 실행."""
         try:
-            segments = analyze_long_audio_segments(targets, wav_dir, temp_dir)
+            segments = analyze_long_audio_segments(
+                targets,
+                wav_dir,
+                temp_dir,
+                exclude_patterns=exclude_patterns or None,
+                include_only_patterns=include_only_patterns or None,
+            )
             self.app.call_from_thread(self._on_analysis_done, segments)
         except Exception as exc:
             self.app.call_from_thread(self._on_analysis_error, str(exc))

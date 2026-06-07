@@ -30,6 +30,7 @@ from tubearchive.domain.media.detector import (
     get_video_creation_time,
 )
 from tubearchive.domain.media.grouper import group_sequences, reorder_with_groups
+from tubearchive.domain.media.ordering import filter_videos
 from tubearchive.domain.media.scanner import scan_videos
 from tubearchive.domain.models.video import VideoFile, VideoMetadata
 
@@ -273,15 +274,30 @@ def analyze_long_audio_segments(
     targets: list[Path],
     wav_dir: Path,
     temp_dir: Path,
+    *,
+    exclude_patterns: list[str] | None = None,
+    include_only_patterns: list[str] | None = None,
 ) -> dict[Path, ExternalAudioSegment]:
     """TUI 사전 분석 전용: 파이프라인 실행 없이 오디오 세그먼트 매핑만 수행한다.
 
-    scan → group → main_video_files → BEXT 매핑 순으로 처리하고,
+    scan → filter → group → main_video_files → BEXT 매핑 순으로 처리하고,
     confidence가 낮은 클립을 포함한 전체 결과를 반환한다.
+
+    ``run_pipeline`` 과 동일하게 ``exclude_patterns`` / ``include_only_patterns`` 를
+    적용해, 제외 대상(템플릿·타임랩스 등 creation_time 없는 파일)이 사전 분석에
+    포함되어 불필요한 분석이나 ``AudioSyncError`` 가 발생하지 않도록 한다.
     """
     all_files = scan_videos(targets)
     if not all_files:
         raise AudioSyncError("대상 디렉토리에서 영상 파일을 찾을 수 없습니다.")
+    if exclude_patterns or include_only_patterns:
+        all_files = filter_videos(
+            all_files,
+            exclude_patterns=exclude_patterns,
+            include_only_patterns=include_only_patterns,
+        )
+        if not all_files:
+            raise AudioSyncError("필터 적용 후 분석 대상 영상이 없습니다.")
     groups = group_sequences(all_files)
     ordered = reorder_with_groups(all_files, groups)
     return analyze_long_external_audio_from_dir(ordered, wav_dir, temp_dir)
