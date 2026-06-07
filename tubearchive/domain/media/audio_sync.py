@@ -1012,16 +1012,20 @@ def calculate_external_audio_segments_from_wav_dir(
             )
 
         wav_ss = (clip_utc - start_wav.start_utc).total_seconds()
+        # DJI creation_time은 초 단위이므로 raw PCM correlation으로 실제 시작을 정밀화.
+        # 단일/span 두 경로 모두 동일한 fine-tune 입력을 쓰므로 분기 전에 1회만 호출한다.
+        conf = 1.0
+        if fine_tune:
+            wav_ss, conf = fine_tune_bext_offset_by_correlation(
+                clip_path,
+                start_wav.path,
+                wav_ss,
+                ffmpeg_path=ffmpeg_path,
+            )
 
         if clip_end_utc <= start_wav.end_utc:
             # 단일 WAV 안에 완전히 포함
             if fine_tune:
-                wav_ss, conf = fine_tune_bext_offset_by_correlation(
-                    clip_path,
-                    start_wav.path,
-                    wav_ss,
-                    ffmpeg_path=ffmpeg_path,
-                )
                 logger.info(
                     "%s: BEXT fine-tune → WAV ss=%.3fs (conf=%.3f)",
                     clip_path.name,
@@ -1037,14 +1041,8 @@ def calculate_external_audio_segments_from_wav_dir(
                 confidence=1.0,
             )
         else:
-            # 두 WAV 이상에 걸쳐 있음 → 첫 WAV 오프셋 fine-tune 후 임시 concat WAV 생성
+            # 두 WAV 이상에 걸쳐 있음 → 첫 WAV 오프셋 클램핑 후 임시 concat WAV 생성
             if fine_tune:
-                wav_ss, conf = fine_tune_bext_offset_by_correlation(
-                    clip_path,
-                    start_wav.path,
-                    wav_ss,
-                    ffmpeg_path=ffmpeg_path,
-                )
                 # span 케이스: 첫 WAV 경계 초과 방지 (clip_dur 제한 없이 시작점만 클램핑)
                 wav_ss = _clamp_wav_ss(wav_ss, start_wav.duration_seconds)
                 logger.info(

@@ -1250,6 +1250,28 @@ def _auto_detect_wav_offset(
     return offset
 
 
+def _build_reference_durations(
+    video_files: list[VideoFile],
+    metadata_cache: dict[Path, VideoMetadata] | None,
+    *,
+    require_audio: bool = False,
+) -> dict[Path, float]:
+    """각 클립의 길이를 수집한다. ``metadata_cache`` 적중 시 ffprobe 재호출을 생략한다.
+
+    ``require_audio=True`` 이면 카메라 내장 오디오가 없는 클립에서 ``ValueError`` 를 던진다.
+    """
+    durations: dict[Path, float] = {}
+    for video_file in video_files:
+        cached = (metadata_cache or {}).get(video_file.path)
+        metadata = cached if cached is not None else detect_metadata(video_file.path)
+        if require_audio and not metadata.has_audio:
+            raise ValueError(
+                f"Long external audio matching requires camera audio: {video_file.path}"
+            )
+        durations[video_file.path] = metadata.duration_seconds
+    return durations
+
+
 def _analyze_long_external_audio(
     video_files: list[VideoFile],
     external_audio_path: Path,
@@ -1269,15 +1291,9 @@ def _analyze_long_external_audio(
     if not video_files:
         raise AudioSyncError("분석할 영상 파일이 없습니다.")
 
-    reference_durations: dict[Path, float] = {}
-    for video_file in video_files:
-        cached = (metadata_cache or {}).get(video_file.path)
-        metadata = cached if cached is not None else detect_metadata(video_file.path)
-        if not metadata.has_audio:
-            raise ValueError(
-                f"Long external audio matching requires camera audio: {video_file.path}"
-            )
-        reference_durations[video_file.path] = metadata.duration_seconds
+    reference_durations = _build_reference_durations(
+        video_files, metadata_cache, require_audio=True
+    )
 
     logger.info("Analyzing long external audio: %s", external_audio_path)
 
@@ -1371,9 +1387,7 @@ def _analyze_long_external_audio_from_dir(
 
     tz_offset = detect_local_timezone_offset(video_files[0].path)
     if tz_offset is None:
-        from datetime import datetime as _dt
-
-        utc_delta = _dt.now().astimezone().utcoffset()
+        utc_delta = datetime.now().astimezone().utcoffset()
         system_offset = int(utc_delta.total_seconds()) if utc_delta is not None else 0
         logger.warning(
             "타임존 오프셋 자동 감지 실패 (DJI 파일명 패턴이 아님). "
@@ -1382,11 +1396,7 @@ def _analyze_long_external_audio_from_dir(
         )
         tz_offset = system_offset
 
-    reference_durations: dict[Path, float] = {}
-    for video_file in video_files:
-        cached = (metadata_cache or {}).get(video_file.path)
-        metadata = cached if cached is not None else detect_metadata(video_file.path)
-        reference_durations[video_file.path] = metadata.duration_seconds
+    reference_durations = _build_reference_durations(video_files, metadata_cache)
 
     logger.info(
         "WAV 디렉토리 기반 외부 오디오 매핑: %s (타임존 오프셋 %+ds)",

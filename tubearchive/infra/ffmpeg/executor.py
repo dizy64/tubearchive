@@ -179,20 +179,15 @@ class FFmpegExecutor:
         cmd.extend(["-i", str(input_path)])
 
         if external_audio_path is not None:
-            if external_audio_start is not None:
-                # resume 시 카메라가 seek_start만큼 건너뛰므로 WAV도 동일하게 보정.
-                # duration 보정도 -ss와 반드시 함께 적용해야 싱크가 유지됨.
-                seek = seek_start or 0.0
-                cmd.extend(["-ss", f"{external_audio_start + seek:g}"])
-                if external_audio_duration is not None:
-                    cmd.extend(["-t", f"{max(0.0, external_audio_duration - seek):g}"])
-            elif seek_start:
-                # 1:1 매칭(external_audio_start=None)에서도 resume 시 WAV를 동일하게 보정.
-                cmd.extend(["-ss", f"{seek_start:g}"])
-                if external_audio_duration is not None:
-                    cmd.extend(["-t", f"{max(0.0, external_audio_duration - seek_start):g}"])
-            elif external_audio_duration is not None:
-                cmd.extend(["-t", f"{external_audio_duration:g}"])
+            # resume 시 카메라가 seek_start만큼 건너뛰므로 WAV 입력도 동일하게 보정한다.
+            # external_audio_start(긴 녹음 구간)와 seek_start(resume)를 합산해 시작점을,
+            # duration은 seek_start만큼 줄여 싱크를 유지한다. 1:1 매칭(start=None)도 동일.
+            seek = seek_start or 0.0
+            if external_audio_start is not None or seek_start:
+                start = (external_audio_start or 0.0) + seek
+                cmd.extend(["-ss", f"{start:g}"])
+            if external_audio_duration is not None:
+                cmd.extend(["-t", f"{max(0.0, external_audio_duration - seek):g}"])
             if external_audio_offset:
                 cmd.extend(["-itsoffset", f"{external_audio_offset:g}"])
             cmd.extend(["-i", str(external_audio_path)])
