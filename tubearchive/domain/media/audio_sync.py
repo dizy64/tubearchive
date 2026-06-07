@@ -10,7 +10,7 @@ import uuid
 from array import array
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import median
 
@@ -823,7 +823,10 @@ def select_external_audio_candidate(
             duration_seconds = probe_media_duration(path, ffprobe_path=ffprobe_path)
         except AudioSyncError:
             continue
-        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+        # video_creation_time(VideoFile.creation_time)은 scanner의 st_birthtime 기반
+        # naive local datetime이다. mtime을 동일한 awareness로 맞춰 naive/aware 혼합
+        # 빼기(TypeError)를 방지한다. (aware caller에도 그대로 대응)
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=video_creation_time.tzinfo)
         duration_delta = abs(duration_seconds - video_duration_seconds)
         mtime_delta = abs((mtime - video_creation_time).total_seconds())
         score = _score_external_audio_candidate(
