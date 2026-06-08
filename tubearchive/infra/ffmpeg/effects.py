@@ -528,11 +528,23 @@ def parse_loudnorm_stats(ffmpeg_output: str) -> LoudnormAnalysis:
     except (KeyError, ValueError) as e:
         raise ValueError(f"Invalid loudnorm analysis data: {e}") from e
 
-    # 완전 무음 오디오는 -inf를 반환하며, FFmpeg loudnorm의
-    # measured_I 유효 범위 [-99, 0]을 벗어나 2nd pass에서 실패한다.
-    if math.isinf(analysis.input_i) or math.isinf(analysis.input_tp):
+    # 무음/혼합(오디오+무음) 오디오는 측정값에 inf/-inf 또는 NaN을 만들 수 있다.
+    # 완전 무음이면 input_i/input_tp가 -inf, 오디오+무음 혼합이면 input_i/tp는
+    # 유한해도 target_offset이 inf가 될 수 있다. 어느 값이든 비유한이면 2nd pass
+    # loudnorm 필터가 유효 범위([-99, 0]/[-99, 99])를 벗어나 실패하므로 차단한다.
+    if not all(
+        math.isfinite(value)
+        for value in (
+            analysis.input_i,
+            analysis.input_tp,
+            analysis.input_lra,
+            analysis.input_thresh,
+            analysis.target_offset,
+        )
+    ):
         raise ValueError(
-            "Detected silent audio (measured values are -inf), skipping loudnorm normalization"
+            "Detected silent or degenerate audio (non-finite loudnorm measurements), "
+            "skipping loudnorm normalization"
         )
 
     return analysis
