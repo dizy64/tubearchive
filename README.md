@@ -224,6 +224,13 @@ tubearchive --external-audio ~/Audio/mic.wav --sync-audio-clap video.mp4
 # 긴 외부 녹음 하나를 여러 영상 클립에 자동 구간 매칭
 tubearchive --external-audio ~/Audio/recorder.wav --external-audio-scope long ~/Videos/day1/
 
+# WAV 디렉토리의 BEXT 타임스탬프로 클립별 자동 매핑 (TASCAM 등 BWF 녹음)
+tubearchive --external-audio-dir ~/Audio/WAVs --external-audio-scope long ~/Videos/day1/
+
+# WAV 시작 보정(초, 양수=WAV가 클립보다 먼저 시작) + 클립별 수동 보정
+tubearchive --external-audio-dir ~/Audio/WAVs --external-audio-scope long \
+  --external-audio-wav-offset 1.5 --external-audio-clip-adjust "DJI_0003:-0.4" ~/Videos/
+
 # 시작/끝 기준음 2개 이상으로 장시간 drift 보정
 tubearchive --external-audio ~/Audio/mic.wav --sync-audio-clap --external-audio-drift-correction video.mp4
 
@@ -232,6 +239,8 @@ tubearchive --external-audio ~/Audio/mic.wav --sync-audio-clap --external-audio-
 ```
 
 > `--external-audio-scope long`은 긴 외부 녹음 1개를 여러 영상 클립에 자동 구간 매칭합니다. 각 영상에는 매칭 기준이 되는 카메라 내장 오디오가 필요합니다.
+>
+> `--external-audio-dir`을 `--external-audio-scope long`과 함께 쓰면, WAV 파일의 BEXT `time_reference`(녹음 시작 시각)와 영상 촬영 시각을 비교해 클립별로 알맞은 WAV 구간을 자동 매핑합니다. 클립이 두 WAV 경계에 걸치면 자동으로 이어 붙입니다. 시계 오차가 있으면 `--external-audio-wav-offset`(초)로 보정하세요.
 
 TUI에서는 Pipeline 탭 오른쪽의 **외부 오디오 선택** 패널에서 오디오 파일이나 후보 폴더를 바로 적용할 수 있습니다.
 

@@ -70,9 +70,13 @@ uv run tubearchive --denoise ~/Videos/              # 오디오 노이즈 제거
 uv run tubearchive --external-audio ~/Audio/mic.wav video.mp4  # 외부 마이크 오디오로 교체
 uv run tubearchive --external-audio-dir ~/Audio/Takes video.mp4  # 길이/시각 기반 외부 오디오 후보 자동 선택
 uv run tubearchive --external-audio ~/Audio/recorder.wav --external-audio-scope long ~/Videos/day1/  # 긴 외부 녹음 클립별 구간 매칭
+uv run tubearchive --external-audio-dir ~/Audio/WAVs --external-audio-scope long ~/Videos/day1/  # WAV 디렉토리 BEXT 타임스탬프로 클립별 자동 매핑
+uv run tubearchive --external-audio-dir ~/Audio/WAVs --external-audio-scope long --external-audio-wav-offset 1.5 ~/Videos/  # WAV 시작 보정(초, 양수=WAV가 먼저 시작)
+uv run tubearchive --external-audio-dir ~/Audio/WAVs --external-audio-scope long --external-audio-clip-adjust "DJI_0003:-0.4,DJI_0007:0.8" ~/Videos/  # 클립별 수동 오프셋 보정
 uv run tubearchive --external-audio ~/Audio/mic.wav --external-audio-mode mix --camera-audio-volume 0.1 video.mp4  # 외부 오디오+카메라 오디오 믹스
 uv run tubearchive --external-audio ~/Audio/mic.wav --sync-audio-clap video.mp4  # 박수/피크 기반 자동 싱크
 uv run tubearchive --external-audio ~/Audio/mic.wav --sync-audio-clap --external-audio-drift-correction video.mp4  # 시작/끝 기준음 drift 보정
+uv run tubearchive --external-audio-dir ~/Audio/Takes --external-audio-min-confidence 0.7 --external-audio-match-window 600 video.mp4  # 후보 매칭 신뢰도/시간창 조절
 
 # 영상 안정화 (vidstab 2-pass)
 uv run tubearchive --stabilize ~/Videos/                             # 기본 안정화 (medium strength, crop)
@@ -290,6 +294,10 @@ scan_videos() → group_sequences() → reorder_with_groups()
   - `--external-audio-dir`: 디렉토리의 지원 오디오 파일 중 영상 길이/파일 시각 기반 최고 점수 후보 선택
   - `--external-audio-scope=single`: 외부 오디오 파일 1개를 영상 1개에 적용
   - `--external-audio-scope=long`: 긴 외부 녹음 1개를 여러 영상 클립에 클립별 구간 매칭
+  - `--external-audio-dir` + `scope=long`: WAV 디렉토리의 BEXT `time_reference`(녹음 시작 UTC)와 클립 creation_time을 비교해 클립별 WAV+오프셋 자동 매핑 (`scan_wav_dir_bext`/`calculate_external_audio_segments_from_wav_dir`). 경계 걸침 시 임시 concat WAV 생성
+  - `--external-audio-wav-offset`: BEXT/타임스탬프 기반 매핑에서 WAV 시작 보정(초, 양수=WAV가 클립보다 먼저 시작). 미지정 시 BEXT로 자동 감지
+  - `--external-audio-clip-adjust "패턴:초,..."`: 클립별 수동 오프셋 보정 (파일명 부분 매칭)
+  - `--external-audio-min-confidence` / `--external-audio-match-window`: 후보/구간 매칭 신뢰도 하한과 파일 시각 매칭 시간창(초)
   - `external_audio_mode=replace`: 외부 오디오를 `1:a:0`으로 매핑하여 내장 오디오 교체
   - `external_audio_mode=mix`: 외부 오디오와 `volume={camera_audio_volume}` 처리한 카메라 오디오를 `amix`로 합성
   - `--sync-audio-clap`: `calculate_clap_sync_offset()` 결과와 `--external-audio-offset`을 합산해 FFmpeg `-itsoffset` 적용
@@ -307,6 +315,11 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - `estimate_clap_sync_with_drift()` / `calculate_clap_sync_drift()`: 시작/끝 기준음 등 2개 이상 transient로 offset과 `atempo` 비율 산출
 - `select_external_audio_candidate()`: 지원 오디오 확장자를 스캔하고 영상 길이/파일 시각 점수로 최적 후보 선택
 - `estimate_external_audio_segment()` / `calculate_external_audio_segments()`: 카메라 내장 오디오 energy envelope와 긴 외부 녹음의 envelope 상관관계로 클립별 시작 구간 산출
+- `calculate_external_audio_segments_from_timestamps()`: 클립 촬영 시각(creation_time) 차이로 WAV 위치를 계산(오디오 분석 없이). `wav_start_offset_seconds`로 WAV가 먼저/늦게 시작한 경우 보정(`--external-audio-wav-offset`)
+- BEXT 타임스탬프 WAV 디렉토리 매핑 (`--external-audio-dir` + `--external-audio-scope long`):
+  - `scan_wav_dir_bext()`: WAV 디렉토리에서 BEXT `time_reference`(녹음 시작 UTC)가 있는 파일만 추출해 시작 시각 순 정렬 (ffmpeg concat 결과물 등 BEXT 없는 파일 제외)
+  - `calculate_external_audio_segments_from_wav_dir()`: 각 WAV의 BEXT 시작 UTC와 DJI 클립 creation_time(UTC)을 비교해 클립별 WAV+오프셋 결정. 클립이 두 WAV 경계에 걸치면 임시 concat WAV 생성. 카메라/레코더 시계 오차 `_CLOCK_TOLERANCE_SECONDS`(15초) 허용
+  - `fine_tune_bext_offset_by_correlation()`: DJI creation_time이 초 단위라 실제 시작과 수 초 오차가 있을 수 있어, raw PCM cross-correlation으로 BEXT 오프셋을 ±range 내에서 정밀화 (confidence 낮으면 원래 오프셋 유지)
 - `ExternalAudioSegment`: 긴 외부 녹음 파일 경로, 시작 시점, 클립 길이, confidence, tempo_ratio를 담는 클립별 매칭 결과
 - 주의: 음역대/스펙트럼 유사도는 후보 매칭 보조 지표이고, 싱크 확정은 transient 또는 envelope cross-correlation 같은 시간축 검증이 필요
 
@@ -431,6 +444,9 @@ scan_videos() → group_sequences() → reorder_with_groups()
 - exiftool을 통한 GPS 좌표 파싱 (ISO6709 / lat-lon 태그 형식 지원)
 - 기기 모델 감지: iPhone/GoPro/DJI는 ffprobe 태그로, Nikon·Canon·Sony 등은 exiftool MakerNote로 추출
 - `get_device_model()`: exiftool로 카메라 기기 모델 추출 (exiftool 미설치 시 경고 1회 후 None 반환)
+- `get_video_creation_time()`: ffprobe `creation_time` 태그를 UTC-aware datetime으로 파싱 (외부 오디오 타임스탬프 매핑용). naive 파싱 시 UTC로 간주
+- `get_audio_bext_start_utc()`: WAV의 BWF BEXT `time_reference`(자정 이후 sample count) + 녹음 로컬 날짜로 녹음 시작 UTC datetime 산출
+- `detect_local_timezone_offset()`: DJI 파일명 패턴(`DJI_yyyymmddhhmmss_...`)으로 레코더 로컬 타임존 오프셋(초) 추정 (비-DJI는 None → 호출부에서 시스템 로컬 폴백)
 
 **domain/media/backup.py**: 클라우드 백업 실행
 - `BackupExecutor`: `rclone copy` 래퍼 — 실패해도 파이프라인 전체를 중단하지 않음
