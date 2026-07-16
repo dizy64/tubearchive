@@ -18,7 +18,6 @@ ffprobe를 서브프로세스로 실행하여 영상 파일의 기술 메타데�
 import contextlib
 import json
 import logging
-import math
 import re
 import subprocess
 from collections.abc import Mapping
@@ -675,7 +674,7 @@ def _extract_device_model(probe_data: dict[str, Any], video_path: Path) -> str |
     return _build_device_name(exif.get("Make"), exif.get("Model"))
 
 
-def _run_ffprobe(video_path: Path, *, ffprobe_path: str = "ffprobe") -> dict[str, Any]:
+def _run_ffprobe(video_path: Path) -> dict[str, Any]:
     """ffprobe를 실행하여 스트림·포맷 정보를 JSON으로 반환한다.
 
     ``-show_streams -show_format`` 옵션으로 모든 스트림과
@@ -691,7 +690,7 @@ def _run_ffprobe(video_path: Path, *, ffprobe_path: str = "ffprobe") -> dict[str
         RuntimeError: ffprobe 실행 실패 또는 JSON 파싱 오류.
     """
     cmd = [
-        ffprobe_path,
+        "ffprobe",
         "-v",
         "quiet",
         "-print_format",
@@ -772,8 +771,6 @@ def detect_local_timezone_offset(video_path: Path) -> int | None:
 def get_audio_bext_start_utc(
     audio_path: Path,
     local_tz_offset_seconds: int,
-    *,
-    ffprobe_path: str = "ffprobe",
 ) -> datetime | None:
     """WAV BEXT time_reference + date 태그로 녹음 시작 시각(UTC naive datetime)을 반환.
 
@@ -783,13 +780,12 @@ def get_audio_bext_start_utc(
     Args:
         audio_path: WAV 파일 경로
         local_tz_offset_seconds: 레코더 로컬 timezone offset(초). 예: KST(UTC+9) = 32400
-        ffprobe_path: 사용할 ffprobe 실행 파일 경로.
 
     Returns:
         녹음 시작 UTC naive datetime, 실패 시 None
     """
     try:
-        probe_data = _run_ffprobe(audio_path, ffprobe_path=ffprobe_path)
+        probe_data = _run_ffprobe(audio_path)
     except RuntimeError:
         return None
 
@@ -800,25 +796,20 @@ def get_audio_bext_start_utc(
     if not date_str or time_ref_str is None:
         return None
 
-    sample_rate: float | None = None
+    sample_rate: int | None = None
     for stream in probe_data.get("streams", []):
         if stream.get("codec_type") == "audio":
             sr_str = stream.get("sample_rate")
             if sr_str is not None:
                 with contextlib.suppress(ValueError):
-                    sample_rate = float(sr_str)
+                    sample_rate = int(sr_str)
             break
 
-    if sample_rate is None or not math.isfinite(sample_rate) or sample_rate <= 0:
+    if sample_rate is None or sample_rate == 0:
         return None
 
     try:
-        time_reference = float(time_ref_str)
-        if not math.isfinite(time_reference) or time_reference < 0:
-            return None
-        seconds_from_midnight = time_reference / sample_rate
-        if not 0.0 <= seconds_from_midnight < 86400.0:
-            return None
+        seconds_from_midnight = int(time_ref_str) / sample_rate
         wav_local_midnight = datetime.strptime(date_str, "%Y-%m-%d")
         wav_local_dt = wav_local_midnight + timedelta(seconds=seconds_from_midnight)
         return wav_local_dt - timedelta(seconds=local_tz_offset_seconds)

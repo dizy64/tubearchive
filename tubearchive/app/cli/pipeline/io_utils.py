@@ -10,7 +10,7 @@ import logging
 import shutil
 import subprocess
 import sys
-import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -48,10 +48,13 @@ def _emit_progress(
 def get_temp_dir() -> Path:
     """실행별 고유 임시 디렉토리 생성 및 반환.
 
-    시스템 임시 디렉토리 아래에 실행별 디렉토리를 원자적으로 생성한다.
-    각 실행을 격리하여 동시 실행 간 경로 충돌과 cleanup 간섭을 막는다.
+    공유 디렉토리(/tmp/tubearchive/)를 사용하면 동시 실행 중
+    한 쪽이 cleanup할 때 나머지의 임시 파일도 삭제되는 문제가 발생한다.
+    UUID 서브디렉토리로 격리하여 각 실행이 독립적인 트랜잭션을 갖도록 한다.
     """
-    return Path(tempfile.mkdtemp(prefix="tubearchive-"))
+    temp_base = Path("/tmp/tubearchive") / uuid.uuid4().hex[:8]  # noqa: S108
+    temp_base.mkdir(parents=True, exist_ok=True)
+    return temp_base
 
 
 def check_output_disk_space(output_dir: Path, required_bytes: int) -> bool:
@@ -141,22 +144,25 @@ def _has_audio_stream(media_path: Path) -> bool:
     Returns:
         오디오 스트림 존재 여부
     """
-    probe_result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_streams",
-            "-select_streams",
-            "a",
-            str(media_path),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    info = json.loads(probe_result.stdout)
-    streams = info.get("streams", [])
-    return isinstance(streams, list) and bool(streams)
+    try:
+        probe_result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                "-select_streams",
+                "a",
+                str(media_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        info = json.loads(probe_result.stdout)
+        streams = info.get("streams", [])
+        return len(streams) > 0
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        return False

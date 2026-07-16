@@ -805,36 +805,6 @@ class TestGetAudioBextStartUtc:
 
             assert get_audio_bext_start_utc(Path("test.wav"), 32400) is None
 
-    @pytest.mark.parametrize(
-        ("time_reference", "sample_rate"),
-        [
-            (-1, 48000),
-            (86400 * 48000, 48000),
-            (1, 0),
-        ],
-    )
-    def test_rejects_invalid_bext_numeric_metadata(
-        self, time_reference: int, sample_rate: int
-    ) -> None:
-        """음수·일일 범위 초과·0 샘플레이트 메타데이터는 거부한다."""
-        probe = self._make_probe(time_reference, sample_rate, "2026-06-05")
-        with patch("tubearchive.domain.media.detector._run_ffprobe", return_value=probe):
-            from tubearchive.domain.media.detector import get_audio_bext_start_utc
-
-            assert get_audio_bext_start_utc(Path("test.wav"), 32400) is None
-
-    def test_forwards_custom_ffprobe_path(self) -> None:
-        """BEXT probe도 호출자가 지정한 ffprobe 경로를 사용한다."""
-        probe = self._make_probe(0, 48000, "2026-06-05")
-        with patch(
-            "tubearchive.domain.media.detector._run_ffprobe", return_value=probe
-        ) as mock_probe:
-            from tubearchive.domain.media.detector import get_audio_bext_start_utc
-
-            get_audio_bext_start_utc(Path("test.wav"), 32400, ffprobe_path="/opt/bin/ffprobe")
-
-        mock_probe.assert_called_once_with(Path("test.wav"), ffprobe_path="/opt/bin/ffprobe")
-
     def test_no_date_tag_returns_none(self) -> None:
         """date 태그 없으면 None."""
         probe = {

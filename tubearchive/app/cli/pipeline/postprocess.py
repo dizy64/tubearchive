@@ -89,7 +89,8 @@ def _apply_post_merge_processing(
                 subtitle_path=subtitle_path,
             )
             # 원본을 burned 파일로 교체하여 --output 경로를 유지
-            burned_path.replace(final_path)
+            final_path.unlink(missing_ok=True)
+            burned_path.rename(final_path)
 
     # 화질 리포트 출력 (선택)
     if validated_args.quality_report:
@@ -355,43 +356,36 @@ def _apply_subtitle_burn(
     output_path = input_path.with_name(f"{input_path.stem}_subtitled{input_path.suffix}")
     subtitle_filter = build_subtitle_filter(subtitle_path)
 
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vf",
+        subtitle_filter,
+        "-c:a",
+        "copy",
+        "-c:v",
+        "libx265",
+        str(output_path),
+    ]
     logger.info("Applying hardcoded subtitle: %s", output_path.name)
-    last_stderr = ""
-    for codec in ("hevc_videotoolbox", "libx265"):
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(input_path),
-            "-vf",
-            subtitle_filter,
-            "-c:a",
-            "copy",
-            "-c:v",
-            codec,
-            str(output_path),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            return output_path
-        last_stderr = result.stderr
-        output_path.unlink(missing_ok=True)
-        if codec == "hevc_videotoolbox":
-            logger.warning("VideoToolbox subtitle burn failed; trying libx265 fallback")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        from tubearchive.infra.ffmpeg.executor import FFmpegError
 
-    from tubearchive.infra.ffmpeg.executor import FFmpegError
-
-    logger.error("Subtitle burn failed: %s", last_stderr)
-    context = (
-        f"input_path={input_path!s}, "
-        f"subtitle_path={subtitle_path!s}, "
-        f"output_path={output_path!s}, "
-        f"stderr={last_stderr}"
-    )
-    raise FFmpegError(
-        f"Failed to burn subtitles ({context})",
-        last_stderr,
-    )
+        logger.error("Subtitle burn failed: %s", result.stderr)
+        context = (
+            f"input_path={input_path!s}, "
+            f"subtitle_path={subtitle_path!s}, "
+            f"output_path={output_path!s}, "
+            f"stderr={result.stderr}"
+        )
+        raise FFmpegError(
+            f"Failed to burn subtitles ({context})",
+            result.stderr,
+        )
+    return output_path
 
 
 def _print_quality_report(
