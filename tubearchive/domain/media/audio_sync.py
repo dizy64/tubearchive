@@ -314,12 +314,27 @@ def _raw_pcm_correlation_offset(
     ref: list[float],
     cand: list[float],
     search_range_frames: int,
+    *,
+    center_frames: int | None = None,
+    min_lag_frames: int | None = None,
+    max_lag_frames: int | None = None,
 ) -> tuple[int, float]:
     """ref를 cand에서 찾아 최적 lag (frames)와 normalized correlation을 반환.
 
-    lag > 0: cand의 뒤쪽에서 ref와 더 잘 매치됨 → cand 시작을 lag/sr초 늦춰야 함
+    ``center_frames``는 후보 탐색의 기준 위치이고 ``min_lag_frames`` /
+    ``max_lag_frames``는 그 기준에서 허용하는 비대칭 lag 범위다. 기본값은
+    기존 동작과 같은 ``[-search_range_frames, +search_range_frames]``다.
     """
-    n = min(len(ref), max(0, len(cand) - search_range_frames * 2))
+    if search_range_frames < 0:
+        raise ValueError("search_range_frames must be non-negative")
+    center = search_range_frames if center_frames is None else center_frames
+    min_lag = -search_range_frames if min_lag_frames is None else min_lag_frames
+    max_lag = search_range_frames if max_lag_frames is None else max_lag_frames
+    if min_lag > max_lag or center + min_lag < 0:
+        return 0, 0.0
+
+    last_offset = center + max_lag
+    n = min(len(ref), max(0, len(cand) - last_offset))
     if n < max(1, len(ref) // 10):
         return 0, 0.0
 
@@ -328,9 +343,9 @@ def _raw_pcm_correlation_offset(
     if ref_power == 0.0:
         return 0, 0.0
 
-    best_lag, best_corr = 0, -1e18
-    for lag in range(-search_range_frames, search_range_frames + 1):
-        offset = lag + search_range_frames
+    best_lag, best_corr = min_lag, -1e18
+    for lag in range(min_lag, max_lag + 1):
+        offset = center + lag
         end = offset + n
         if end > len(cand):
             continue
@@ -339,7 +354,7 @@ def _raw_pcm_correlation_offset(
             best_corr = corr
             best_lag = lag
 
-    offset = best_lag + search_range_frames
+    offset = center + best_lag
     cand_slice = cand[offset : offset + n]
     cand_power = sum(map(operator.mul, cand_slice, cand_slice))
     denom = (ref_power * cand_power) ** 0.5
@@ -369,8 +384,20 @@ def fine_tune_bext_offset_by_correlation(
     Returns:
         (refined_offset_seconds, confidence) 튜플
     """
+    if (
+        not math.isfinite(bext_offset_seconds)
+        or bext_offset_seconds < 0
+        or search_range_seconds < 0
+        or sample_duration_seconds <= 0
+        or sample_rate <= 0
+    ):
+        raise ValueError("BEXT offset and correlation parameters must be valid")
+
     wav_start = max(0.0, bext_offset_seconds - search_range_seconds)
-    wav_duration = sample_duration_seconds + 2 * search_range_seconds
+    center_seconds = bext_offset_seconds - wav_start
+    search_range_frames = int(search_range_seconds * sample_rate)
+    center_frames = int(center_seconds * sample_rate)
+    wav_duration = sample_duration_seconds + (center_frames + search_range_frames) / sample_rate
 
     clip_samples = _extract_mono_pcm_segment(
         clip_path,
@@ -390,9 +417,13 @@ def fine_tune_bext_offset_by_correlation(
     if not clip_samples or not wav_samples:
         return bext_offset_seconds, 0.0
 
-    search_range_frames = int(search_range_seconds * sample_rate)
     lag_frames, confidence = _raw_pcm_correlation_offset(
-        clip_samples, wav_samples, search_range_frames
+        clip_samples,
+        wav_samples,
+        search_range_frames,
+        center_frames=center_frames,
+        min_lag_frames=-center_frames,
+        max_lag_frames=search_range_frames,
     )
 
     if confidence < min_confidence:
@@ -404,7 +435,7 @@ def fine_tune_bext_offset_by_correlation(
         )
         return bext_offset_seconds, confidence
 
-    refined_offset = wav_start + search_range_seconds + lag_frames / sample_rate
+    refined_offset = bext_offset_seconds + lag_frames / sample_rate
     logger.debug(
         "BEXT fine-tuning: %.3fs → %.3fs (delta=%+.3fs, conf=%.3f)",
         bext_offset_seconds,
@@ -882,6 +913,7 @@ def calculate_external_audio_segments_from_timestamps(
     if not reference_paths:
         return {}
 
+    external_duration = probe_media_duration(external_path)
     sorted_paths = sorted(reference_paths, key=lambda p: reference_timestamps[p])
     base_time = reference_timestamps[sorted_paths[0]]
 
@@ -894,6 +926,14 @@ def calculate_external_audio_segments_from_timestamps(
                 f"WAV 시작 오프셋({wav_start_offset_seconds:.1f}초)이 너무 작아 "
                 f"{path.name}의 WAV 시작 위치({wav_start:.1f}초)가 음수가 됩니다. "
                 "양수 값(WAV가 클립보다 먼저 시작)을 사용하거나 0으로 설정하세요."
+            )
+        duration = reference_durations[path]
+        if not math.isfinite(duration) or duration <= 0:
+            raise AudioSyncError(f"{path.name}: 클립 길이가 유효하지 않습니다: {duration!r}")
+        if wav_start + duration > external_duration + 1e-6:
+            raise AudioSyncError(
+                f"{path.name}: 외부 오디오 coverage가 부족합니다 "
+                f"(필요 {wav_start + duration:.3f}초, 실제 {external_duration:.3f}초)."
             )
         segments[path] = ExternalAudioSegment(
             path=external_path,
@@ -1061,7 +1101,7 @@ def scan_wav_dir_bext(
     results: list[WavInfo] = []
     missing_bext: list[Path] = []
     for path in wav_paths:
-        start_utc = get_audio_bext_start_utc(path, tz_offset_seconds)
+        start_utc = get_audio_bext_start_utc(path, tz_offset_seconds, ffprobe_path=ffprobe_path)
         if start_utc is None:
             missing_bext.append(path)
             continue
@@ -1148,12 +1188,14 @@ def calculate_external_audio_segments_from_wav_dir(
     fine_tune: bool = True,
     ffprobe_path: str = "ffprobe",
     ffmpeg_path: str = "ffmpeg",
+    clip_adjustments: dict[str, float] | None = None,
 ) -> dict[Path, ExternalAudioSegment]:
     """BEXT 타임라인으로 분할 WAV 폴더에서 클립별 구간을 만든다.
 
     ``wav_start_offset_seconds``는 BEXT 타임라인에 추가하는 수동 보정값이다.
     양수면 클립 오디오를 WAV에서 뒤로 이동한다. 클립이 파일 경계를 넘으면
     필요한 WAV 조각을 concat하며, gap/coverage 부족은 무음으로 채우지 않고 실패한다.
+    ``clip_adjustments``가 있으면 임시 concat 전에 source timeline에서 보정한다.
     """
     if not math.isfinite(wav_start_offset_seconds):
         raise ValueError("wav_start_offset_seconds must be finite")
@@ -1177,6 +1219,20 @@ def calculate_external_audio_segments_from_wav_dir(
     segments: dict[Path, ExternalAudioSegment] = {}
     for clip_path in clip_paths:
         clip_utc = reference_timestamps[clip_path] + timedelta(seconds=wav_start_offset_seconds)
+        if clip_adjustments:
+            for pattern, delta in clip_adjustments.items():
+                if pattern in clip_path.name:
+                    if not math.isfinite(delta):
+                        raise AudioSyncError(
+                            f"{clip_path.name}: 클립 보정값이 유효하지 않습니다: {delta!r}"
+                        )
+                    clip_utc += timedelta(seconds=delta)
+                    logger.info(
+                        "%s: source timeline 오프셋 보정 %+.3fs 적용",
+                        clip_path.name,
+                        delta,
+                    )
+                    break
         clip_dur = reference_durations[clip_path]
         if not math.isfinite(clip_dur) or clip_dur <= 0:
             raise AudioSyncError(f"{clip_path.name}: 클립 길이가 유효하지 않습니다: {clip_dur!r}")
@@ -1202,10 +1258,12 @@ def calculate_external_audio_segments_from_wav_dir(
                 f"{wav_infos[-1].end_utc.strftime('%H:%M:%S')} UTC)"
             )
 
-        wav_ss = _clamp_wav_ss(
-            (clip_utc - start_wav.start_utc).total_seconds(),
-            start_wav.duration_seconds,
-        )
+        wav_ss = (clip_utc - start_wav.start_utc).total_seconds()
+        if not 0.0 <= wav_ss <= start_wav.duration_seconds:
+            raise AudioSyncError(
+                f"{clip_path.name}: WAV coverage 밖의 시작 시각을 tolerance로 보정하지 않습니다 "
+                f"(offset={wav_ss:.3f}초, 파일={start_wav.path.name})."
+            )
         conf = 1.0
         method = "bext"
         if fine_tune:
@@ -1215,7 +1273,8 @@ def calculate_external_audio_segments_from_wav_dir(
                 wav_ss,
                 ffmpeg_path=ffmpeg_path,
             )
-            method = "bext+correlation"
+            if conf >= 0.10:
+                method = "bext+correlation"
 
         # Fine-tune 이후 실제 absolute start를 다시 계산한다. 보정값 때문에
         # 다음 WAV로 넘어갔는데도 이전 파일의 단일 구간으로 처리하면 경계가 잘린다.

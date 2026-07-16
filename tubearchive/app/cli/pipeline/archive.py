@@ -90,19 +90,24 @@ def _run_backup(
 
     from tubearchive.app.cli.main import database_session  # lazy: avoids circular import
 
-    with database_session() as conn:
-        from tubearchive.infra.db.repository import BackupHistoryRepository
+    try:
+        with database_session() as conn:
+            from tubearchive.infra.db.repository import BackupHistoryRepository
 
-        backup_repo = BackupHistoryRepository(conn)
-        for source_path, source_type, result in results:
-            backup_repo.insert_history(
-                merge_job_id=merge_job_id,
-                source_path=source_path,
-                remote=remote,
-                source_type=source_type,
-                success=result.success,
-                error_message=result.message,
-            )
+            backup_repo = BackupHistoryRepository(conn)
+            for source_path, source_type, result in results:
+                backup_repo.insert_history(
+                    merge_job_id=merge_job_id,
+                    source_path=source_path,
+                    remote=remote,
+                    source_type=source_type,
+                    success=result.success,
+                    error_message=result.message,
+                )
+    except Exception:
+        # 백업 이력 저장은 이미 완료된 백업 결과를 되돌릴 수 없으므로
+        # 파이프라인 전체를 실패시키지 않고 원인만 기록한다.
+        logger.warning("Failed to save backup history", exc_info=True)
 
 
 def _archive_originals(
