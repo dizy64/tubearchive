@@ -690,6 +690,26 @@ def _select_wav_for_clip_start(
     )
 
 
+def _find_wav_gap(
+    wav_infos: Sequence[WavInfo],
+    timestamp: datetime,
+) -> tuple[WavInfo, WavInfo, float] | None:
+    """Return the WAV boundary gap containing ``timestamp``, if any.
+
+    A tolerance fallback may compensate for a rounded or slightly inaccurate
+    timestamp at a real WAV boundary, but it must never turn a timestamp that
+    is actually inside a missing interval into the next file's first sample.
+    """
+    for previous, current in pairwise(wav_infos):
+        if previous.end_utc <= timestamp < current.start_utc:
+            return (
+                previous,
+                current,
+                (current.start_utc - previous.end_utc).total_seconds(),
+            )
+    return None
+
+
 def _validate_wav_timeline(wav_infos: Sequence[WavInfo]) -> None:
     """연속 녹음 세션의 material gap/overlap을 사전 검증한다.
 
@@ -701,8 +721,7 @@ def _validate_wav_timeline(wav_infos: Sequence[WavInfo]) -> None:
     for wav in wav_infos:
         if not math.isfinite(wav.duration_seconds) or wav.duration_seconds <= 0:
             raise AudioSyncError(
-                f"WAV 길이가 유효하지 않습니다: {wav.path.name} "
-                f"({wav.duration_seconds!r}초)"
+                f"WAV 길이가 유효하지 않습니다: {wav.path.name} ({wav.duration_seconds!r}초)"
             )
 
     for previous, current in pairwise(wav_infos):
@@ -722,8 +741,7 @@ def _validate_wav_timeline(wav_infos: Sequence[WavInfo]) -> None:
             )
         if delta_seconds != 0.0:
             logger.warning(
-                "WAV 경계 메타데이터 차이 %.3fs 허용: %s → %s "
-                "(클립이 이 gap을 사용하면 실패)",
+                "WAV 경계 메타데이터 차이 %.3fs 허용: %s → %s (클립이 이 gap을 사용하면 실패)",
                 delta_seconds,
                 previous.path.name,
                 current.path.name,
@@ -1051,8 +1069,7 @@ def scan_wav_dir_bext(
             duration = probe_media_duration(path, ffprobe_path=ffprobe_path)
         except AudioSyncError as exc:
             raise AudioSyncError(
-                f"WAV 길이를 읽지 못했습니다: {path.name}. "
-                "손상되지 않은 원본 WAV인지 확인하세요."
+                f"WAV 길이를 읽지 못했습니다: {path.name}. 손상되지 않은 원본 WAV인지 확인하세요."
             ) from exc
         results.append(WavInfo(path=path, start_utc=start_utc, duration_seconds=duration))
 
@@ -1159,13 +1176,18 @@ def calculate_external_audio_segments_from_wav_dir(
 
     segments: dict[Path, ExternalAudioSegment] = {}
     for clip_path in clip_paths:
-        clip_utc = reference_timestamps[clip_path] + timedelta(
-            seconds=wav_start_offset_seconds
-        )
+        clip_utc = reference_timestamps[clip_path] + timedelta(seconds=wav_start_offset_seconds)
         clip_dur = reference_durations[clip_path]
         if not math.isfinite(clip_dur) or clip_dur <= 0:
+            raise AudioSyncError(f"{clip_path.name}: 클립 길이가 유효하지 않습니다: {clip_dur!r}")
+        gap = _find_wav_gap(wav_infos, clip_utc)
+        if gap is not None:
+            previous, current, gap_seconds = gap
             raise AudioSyncError(
-                f"{clip_path.name}: 클립 길이가 유효하지 않습니다: {clip_dur!r}"
+                f"{clip_path.name}: 시작 시각이 WAV 파일 사이 {gap_seconds:.3f}초 gap에 있습니다 "
+                f"({previous.path.name} 종료 {previous.end_utc.isoformat()} → "
+                f"{current.path.name} 시작 {current.start_utc.isoformat()}). "
+                "연속 녹음의 누락 파일을 포함하거나 클립 시각을 확인하세요."
             )
         start_wav = _select_wav_for_clip_start(
             wav_infos,

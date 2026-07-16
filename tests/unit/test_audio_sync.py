@@ -698,6 +698,32 @@ class TestCalculateExternalAudioSegmentsFromWavDir:
                 fine_tune=False,
             )
 
+    def test_clip_start_inside_gap_is_rejected_before_tolerance_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        """gap 안의 시작 시각을 다음 WAV 시작으로 조용히 밀지 않는다."""
+        clip = Path("clip.mp4")
+        wav_infos = [
+            WavInfo(Path("/wav/a.wav"), datetime(2026, 1, 1, 0, 0, 0), 10.0),
+            WavInfo(Path("/wav/b.wav"), datetime(2026, 1, 1, 0, 0, 10, 500000), 10.0),
+        ]
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+                return_value=wav_infos,
+            ),
+            pytest.raises(AudioSyncError, match=r"시작 시각이 WAV 파일 사이 .*gap"),
+        ):
+            calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps={clip: datetime(2026, 1, 1, 0, 0, 10, 400000)},
+                reference_durations={clip: 1.0},
+                tz_offset_seconds=0,
+                temp_dir=tmp_path,
+                fine_tune=False,
+            )
+
     def test_material_overlap_is_rejected_before_mapping(self, tmp_path: Path) -> None:
         """material overlap은 중복 제거로 숨기지 않고 실패시킨다."""
         clip = Path("clip.mp4")
@@ -746,9 +772,7 @@ class TestCalculateExternalAudioSegmentsFromWavDir:
         assert result[clip].path == Path("/wav/b.wav")
         assert result[clip].start_seconds == pytest.approx(0.0)
 
-    def test_fine_tune_confidence_and_boundary_are_preserved(
-        self, tmp_path: Path
-    ) -> None:
+    def test_fine_tune_confidence_and_boundary_are_preserved(self, tmp_path: Path) -> None:
         """fine-tune 결과 confidence를 보존하고 경계 이동 후 span을 재평가한다."""
         clip = Path("clip.mp4")
         wav_infos = [

@@ -213,6 +213,7 @@ class PipelinePane(Widget):
             message = f"외부 오디오 후보 폴더 적용: {event.path}"
 
         self.query_one("#pipeline-status", Label).update(message)
+        self._refresh_analyze_button(self.query_one(FileBrowserPane).get_selected_targets())
 
     # ------------------------------------------------------------------
     # 버튼 이벤트

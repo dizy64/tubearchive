@@ -255,6 +255,34 @@ async def test_pipeline_audio_browser_long_directory_selection_sets_long_scope(
 
 
 @pytest.mark.asyncio
+async def test_pipeline_long_directory_selection_refreshes_analyze_button(
+    tmp_path: Path,
+) -> None:
+    """영상 선택 후 긴 녹음 폴더를 고르면 사전 분석 버튼이 활성화된다."""
+    from unittest.mock import patch
+
+    from textual.widgets import Button
+
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.audio_browser import AudioBrowserPane
+    from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
+
+    app = TubeArchiveApp(initial_path=tmp_path)
+
+    async with app.run_test(headless=True, size=(120, 40)):
+        pane = app.query_one(PipelinePane)
+        browser = pane.query_one(FileBrowserPane)
+        analyze = pane.query_one("#analyze-button", Button)
+
+        with patch.object(browser, "get_selected_targets", return_value=[tmp_path / "clip.mp4"]):
+            pane.on_audio_browser_pane_audio_selected(
+                AudioBrowserPane.AudioSelected(tmp_path.resolve(), "long-dir"),
+            )
+
+        assert analyze.disabled is False
+
+
+@pytest.mark.asyncio
 async def test_pipeline_audio_browser_directory_selection_updates_options(tmp_path: Path) -> None:
     """후보 폴더 선택은 external_audio_dir에 반영하고 파일 경로를 비운다."""
     from tubearchive.app.tui.app import TubeArchiveApp
