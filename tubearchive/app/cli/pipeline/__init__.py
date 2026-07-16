@@ -372,6 +372,7 @@ def _prepare_video_assembly(
                 main_video_files,
                 validated_args.external_audio_dir,
                 temp_dir,
+                wav_start_offset_seconds=validated_args.external_audio_wav_offset,
             )
 
         if external_audio_segments and validated_args.external_audio_clip_adjustments:

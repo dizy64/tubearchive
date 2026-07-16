@@ -90,9 +90,11 @@ class AudioBrowserPane(Widget):
             with Horizontal(id="audio-action-row"):
                 yield Button("단일 파일", id="audio-use-single", variant="primary")
                 yield Button("긴 녹음", id="audio-use-long", variant="default")
+                yield Button("긴 녹음 폴더", id="audio-use-long-dir", variant="default")
                 yield Button("후보 폴더", id="audio-use-dir", variant="default")
             yield Label(
-                "단일 파일=영상 1개, 긴 녹음=여러 클립 자동 구간 매칭, 후보 폴더=자동 선택",
+                "단일 파일=영상 1개, 긴 녹음=여러 클립 자동 구간 매칭, "
+                "긴 녹음 폴더=2GB 분할 WAV 세션, 후보 폴더=자동 선택",
                 id="audio-browser-hint",
             )
 
@@ -111,6 +113,7 @@ class AudioBrowserPane(Widget):
         target_by_id = {
             "audio-use-single": "single",
             "audio-use-long": "long",
+            "audio-use-long-dir": "long-dir",
             "audio-use-dir": "dir",
         }
         target = target_by_id.get(event.button.id or "")
@@ -132,7 +135,7 @@ class AudioBrowserPane(Widget):
             if path.suffix.lower() not in SUPPORTED_EXTERNAL_AUDIO_EXTENSIONS:
                 self.app.notify("지원되는 오디오 파일을 선택하세요.", severity="warning", timeout=2)
                 return
-        elif target == "dir" and not path.is_dir():
+        elif target in {"dir", "long-dir"} and not path.is_dir():
             self.app.notify("오디오 후보 디렉토리를 선택하세요.", severity="warning", timeout=2)
             return
         self.post_message(self.AudioSelected(path.resolve(), target))
