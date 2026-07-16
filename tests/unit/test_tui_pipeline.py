@@ -230,6 +230,31 @@ async def test_pipeline_audio_browser_long_selection_updates_options(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_pipeline_audio_browser_long_directory_selection_sets_long_scope(
+    tmp_path: Path,
+) -> None:
+    """긴 녹음 폴더 선택은 external_audio_dir와 scope=long을 함께 설정한다."""
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.audio_browser import AudioBrowserPane
+    from tubearchive.app.tui.widgets.option_panels import OptionsPane
+
+    app = TubeArchiveApp(initial_path=tmp_path)
+
+    async with app.run_test(headless=True, size=(120, 40)):
+        pane = app.query_one(PipelinePane)
+        options = pane.query_one(OptionsPane)
+
+        pane.on_audio_browser_pane_audio_selected(
+            AudioBrowserPane.AudioSelected(tmp_path.resolve(), "long-dir"),
+        )
+
+        state = options.collect_state()
+        assert state.external_audio_path == ""
+        assert state.external_audio_dir == str(tmp_path.resolve())
+        assert state.external_audio_scope == "long"
+
+
+@pytest.mark.asyncio
 async def test_pipeline_audio_browser_directory_selection_updates_options(tmp_path: Path) -> None:
     """후보 폴더 선택은 external_audio_dir에 반영하고 파일 경로를 비운다."""
     from tubearchive.app.tui.app import TubeArchiveApp

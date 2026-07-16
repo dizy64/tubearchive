@@ -183,6 +183,7 @@ def analyze_long_external_audio_from_dir(
     wav_dir: Path,
     temp_dir: Path,
     metadata_cache: dict[Path, VideoMetadata] | None = None,
+    wav_start_offset_seconds: float = 0.0,
 ) -> dict[Path, ExternalAudioSegment]:
     """WAV 디렉토리의 BEXT 메타데이터로 각 클립에 맞는 WAV 구간을 자동 매핑한다.
 
@@ -192,6 +193,7 @@ def analyze_long_external_audio_from_dir(
     - DJI 파일명으로 타임존 오프셋 자동 감지 (비-DJI 카메라는 시스템 로컬 폴백)
 
     ``metadata_cache`` 가 주어지면 포함된 파일은 ``detect_metadata`` 를 재호출하지 않는다.
+    ``wav_start_offset_seconds`` 는 BEXT 타임라인에 추가하는 수동 보정값이다.
     """
     if not video_files:
         raise AudioSyncError("분석할 영상 파일이 없습니다.")
@@ -232,6 +234,7 @@ def analyze_long_external_audio_from_dir(
         reference_durations=reference_durations,
         tz_offset_seconds=tz_offset,
         temp_dir=temp_dir,
+        wav_start_offset_seconds=wav_start_offset_seconds,
     )
 
     for video_file in video_files:
@@ -277,6 +280,7 @@ def analyze_long_audio_segments(
     *,
     exclude_patterns: list[str] | None = None,
     include_only_patterns: list[str] | None = None,
+    wav_start_offset_seconds: float = 0.0,
 ) -> dict[Path, ExternalAudioSegment]:
     """TUI 사전 분석 전용: 파이프라인 실행 없이 오디오 세그먼트 매핑만 수행한다.
 
@@ -300,4 +304,9 @@ def analyze_long_audio_segments(
             raise AudioSyncError("필터 적용 후 분석 대상 영상이 없습니다.")
     groups = group_sequences(all_files)
     ordered = reorder_with_groups(all_files, groups)
-    return analyze_long_external_audio_from_dir(ordered, wav_dir, temp_dir)
+    return analyze_long_external_audio_from_dir(
+        ordered,
+        wav_dir,
+        temp_dir,
+        wav_start_offset_seconds=wav_start_offset_seconds,
+    )

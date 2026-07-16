@@ -201,6 +201,11 @@ class PipelinePane(Widget):
             options.set_field_value("external_audio_scope", "long")
             options.set_field_value("sync_audio_clap", False)
             message = f"긴 외부 녹음 적용: {event.path.name}"
+        elif event.target == "long-dir":
+            options.set_field_value("external_audio_path", "")
+            options.set_field_value("external_audio_dir", str(event.path))
+            options.set_field_value("external_audio_scope", "long")
+            message = f"긴 외부 오디오 폴더 적용: {event.path.name}"
         else:
             options.set_field_value("external_audio_path", "")
             options.set_field_value("external_audio_dir", str(event.path))
@@ -277,7 +282,12 @@ class PipelinePane(Widget):
         status.update("오디오 사전 분석 중…")
         self.query_one("#analyze-button", Button).disabled = True
         self._run_audio_analysis_worker(
-            targets, wav_dir, temp_dir, exclude_patterns, include_only_patterns
+            targets,
+            wav_dir,
+            temp_dir,
+            exclude_patterns,
+            include_only_patterns,
+            state.external_audio_wav_offset,
         )
 
     @work(thread=True)
@@ -288,6 +298,7 @@ class PipelinePane(Widget):
         temp_dir: Path,
         exclude_patterns: list[str],
         include_only_patterns: list[str],
+        wav_start_offset_seconds: float,
     ) -> None:
         """worker 스레드에서 외부 오디오 세그먼트 분석 실행."""
         try:
@@ -297,6 +308,7 @@ class PipelinePane(Widget):
                 temp_dir,
                 exclude_patterns=exclude_patterns or None,
                 include_only_patterns=include_only_patterns or None,
+                wav_start_offset_seconds=wav_start_offset_seconds,
             )
             self.app.call_from_thread(self._on_analysis_done, segments)
         except Exception as exc:

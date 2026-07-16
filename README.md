@@ -240,7 +240,7 @@ tubearchive --external-audio ~/Audio/mic.wav --sync-audio-clap --external-audio-
 
 > `--external-audio-scope long`은 긴 외부 녹음 1개를 여러 영상 클립에 자동 구간 매칭합니다. 각 영상에는 매칭 기준이 되는 카메라 내장 오디오가 필요합니다.
 >
-> `--external-audio-dir`을 `--external-audio-scope long`과 함께 쓰면, WAV 파일의 BEXT `time_reference`(녹음 시작 시각)와 영상 촬영 시각을 비교해 클립별로 알맞은 WAV 구간을 자동 매핑합니다. 클립이 두 WAV 경계에 걸치면 자동으로 이어 붙입니다. 시계 오차가 있으면 `--external-audio-wav-offset`(초)로 보정하세요.
+> `--external-audio-dir`을 `--external-audio-scope long`과 함께 쓰면, WAV 파일의 BEXT `time_reference`(녹음 시작 시각)와 영상 촬영 시각을 비교해 클립별로 알맞은 WAV 구간을 자동 매핑합니다. 클립이 두 WAV 경계에 걸치면 자동으로 이어 붙입니다. 시계 오차가 있으면 `--external-audio-wav-offset`(초)로 보정하세요. 선택한 세션 폴더의 WAV 중 BEXT가 없거나 material gap/overlap이 있으면 누락·무음 padding을 막기 위해 실패합니다.
 
 TUI에서는 Pipeline 탭 오른쪽의 **외부 오디오 선택** 패널에서 오디오 파일이나 후보 폴더를 바로 적용할 수 있습니다.
 
@@ -248,6 +248,7 @@ TUI에서는 Pipeline 탭 오른쪽의 **외부 오디오 선택** 패널에서 
 |----------|-----------|------|
 | 단일 파일 | `--external-audio ... --external-audio-scope single` | 영상 1개에 외부 오디오 파일 1개를 적용합니다. |
 | 긴 녹음 | `--external-audio ... --external-audio-scope long` | 긴 외부 녹음 1개에서 여러 영상 클립의 구간을 자동으로 찾아 적용합니다. |
+| 긴 녹음 폴더 | `--external-audio-dir ... --external-audio-scope long` | 2GB 단위로 분할된 BEXT WAV 세션을 타임라인으로 이어 여러 클립에 적용합니다. |
 | 후보 폴더 | `--external-audio-dir ...` | 폴더 안의 오디오 파일 중 길이/시각이 가까운 후보를 자동 선택합니다. |
 
 Audio 옵션 섹션에서 `replace`/`mix`, 카메라 오디오 볼륨, clap sync, drift 보정, 수동 offset, 최소 신뢰도, 후보 매칭 창을 조정할 수 있습니다.
@@ -309,6 +310,7 @@ Audio 옵션 섹션에서 `replace`/`mix`, 카메라 오디오 볼륨, clap sync
 |------|------|------|
 | `long` 모드에서 매칭 실패 | 카메라 내장 오디오가 없거나 무음에 가까움 | 해당 클립은 외부 녹음 자동 구간 매칭이 불가능합니다. 카메라 오디오가 있는 원본을 사용하세요. |
 | 잘못된 외부 구간이 선택됨 | 비슷한 박수/소리 패턴이 여러 번 반복됨 | 클립 시작부마다 서로 구분되는 기준음을 넣거나 `--external-audio-min-confidence`를 높입니다. |
+| BEXT/세션 연속성 오류 | 분할 WAV 일부의 BEXT가 없거나 파일 사이 gap/overlap이 큼 | 원본 WAV 전체를 같은 폴더에 두고 BEXT를 보존합니다. 실제 gap/coverage 부족은 자동 무음 padding하지 않고 중단합니다. |
 | 긴 촬영 후반부 싱크가 조금 밀림 | 카메라와 외부 레코더의 클럭 차이 | 단일 긴 클립에는 `--external-audio-drift-correction`을 사용하고, 여러 클립은 클립별 구간 매칭으로 누적 drift를 줄입니다. |
 | 출력이 너무 일찍 끝남 | 외부 오디오가 영상보다 짧음 | `replace` 경로는 짧은 외부 오디오를 패딩해 영상 길이를 보존합니다. 계속 재현되면 원본 길이를 `ffprobe`로 확인하세요. |
 
