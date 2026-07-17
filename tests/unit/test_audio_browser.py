@@ -83,8 +83,23 @@ async def test_audio_browser_posts_long_recording_selection(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_audio_browser_posts_long_recording_directory_selection(tmp_path: Path) -> None:
+    """긴 녹음 폴더 버튼은 scope=long에 대응하는 메시지를 보낸다."""
+    app = _AudioBrowserTestApp(tmp_path)
+
+    async with app.run_test(headless=True, size=(100, 24)) as pilot:
+        pane = app.query_one(AudioBrowserPane)
+        app.query_one("#audio-path-input", Input).value = str(tmp_path)
+
+        pane._post_selected("long-dir")
+        await pilot.pause()
+
+    assert app.selected == [(tmp_path.resolve(), "long-dir")]
+
+
+@pytest.mark.asyncio
 async def test_audio_browser_posts_directory_selection(tmp_path: Path) -> None:
-    """후보 폴더 버튼은 external_audio_dir에 넣을 디렉토리 선택 메시지를 보낸다."""
+    """후보 폴더 버튼은 external_audio_dir에 넣을 디렉토리를 선택한다."""
     app = _AudioBrowserTestApp(tmp_path)
 
     async with app.run_test(headless=True, size=(100, 24)) as pilot:

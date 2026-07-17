@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import operator
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from array import array
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from statistics import median
 
@@ -89,6 +91,7 @@ class ExternalAudioSegment:
     duration_seconds: float
     confidence: float
     tempo_ratio: float = 1.0
+    method: str = "unknown"
 
 
 def find_transient_candidates(
@@ -311,12 +314,27 @@ def _raw_pcm_correlation_offset(
     ref: list[float],
     cand: list[float],
     search_range_frames: int,
+    *,
+    center_frames: int | None = None,
+    min_lag_frames: int | None = None,
+    max_lag_frames: int | None = None,
 ) -> tuple[int, float]:
     """ref를 cand에서 찾아 최적 lag (frames)와 normalized correlation을 반환.
 
-    lag > 0: cand의 뒤쪽에서 ref와 더 잘 매치됨 → cand 시작을 lag/sr초 늦춰야 함
+    ``center_frames``는 후보 탐색의 기준 위치이고 ``min_lag_frames`` /
+    ``max_lag_frames``는 그 기준에서 허용하는 비대칭 lag 범위다. 기본값은
+    기존 동작과 같은 ``[-search_range_frames, +search_range_frames]``다.
     """
-    n = min(len(ref), max(0, len(cand) - search_range_frames * 2))
+    if search_range_frames < 0:
+        raise ValueError("search_range_frames must be non-negative")
+    center = search_range_frames if center_frames is None else center_frames
+    min_lag = -search_range_frames if min_lag_frames is None else min_lag_frames
+    max_lag = search_range_frames if max_lag_frames is None else max_lag_frames
+    if min_lag > max_lag or center + min_lag < 0:
+        return 0, 0.0
+
+    last_offset = center + max_lag
+    n = min(len(ref), max(0, len(cand) - last_offset))
     if n < max(1, len(ref) // 10):
         return 0, 0.0
 
@@ -325,9 +343,9 @@ def _raw_pcm_correlation_offset(
     if ref_power == 0.0:
         return 0, 0.0
 
-    best_lag, best_corr = 0, -1e18
-    for lag in range(-search_range_frames, search_range_frames + 1):
-        offset = lag + search_range_frames
+    best_lag, best_corr = min_lag, -1e18
+    for lag in range(min_lag, max_lag + 1):
+        offset = center + lag
         end = offset + n
         if end > len(cand):
             continue
@@ -336,7 +354,7 @@ def _raw_pcm_correlation_offset(
             best_corr = corr
             best_lag = lag
 
-    offset = best_lag + search_range_frames
+    offset = center + best_lag
     cand_slice = cand[offset : offset + n]
     cand_power = sum(map(operator.mul, cand_slice, cand_slice))
     denom = (ref_power * cand_power) ** 0.5
@@ -366,8 +384,20 @@ def fine_tune_bext_offset_by_correlation(
     Returns:
         (refined_offset_seconds, confidence) 튜플
     """
+    if (
+        not math.isfinite(bext_offset_seconds)
+        or bext_offset_seconds < 0
+        or search_range_seconds < 0
+        or sample_duration_seconds <= 0
+        or sample_rate <= 0
+    ):
+        raise ValueError("BEXT offset and correlation parameters must be valid")
+
     wav_start = max(0.0, bext_offset_seconds - search_range_seconds)
-    wav_duration = sample_duration_seconds + 2 * search_range_seconds
+    center_seconds = bext_offset_seconds - wav_start
+    search_range_frames = int(search_range_seconds * sample_rate)
+    center_frames = int(center_seconds * sample_rate)
+    wav_duration = sample_duration_seconds + (center_frames + search_range_frames) / sample_rate
 
     clip_samples = _extract_mono_pcm_segment(
         clip_path,
@@ -387,9 +417,13 @@ def fine_tune_bext_offset_by_correlation(
     if not clip_samples or not wav_samples:
         return bext_offset_seconds, 0.0
 
-    search_range_frames = int(search_range_seconds * sample_rate)
     lag_frames, confidence = _raw_pcm_correlation_offset(
-        clip_samples, wav_samples, search_range_frames
+        clip_samples,
+        wav_samples,
+        search_range_frames,
+        center_frames=center_frames,
+        min_lag_frames=-center_frames,
+        max_lag_frames=search_range_frames,
     )
 
     if confidence < min_confidence:
@@ -401,7 +435,7 @@ def fine_tune_bext_offset_by_correlation(
         )
         return bext_offset_seconds, confidence
 
-    refined_offset = wav_start + search_range_seconds + lag_frames / sample_rate
+    refined_offset = bext_offset_seconds + lag_frames / sample_rate
     logger.debug(
         "BEXT fine-tuning: %.3fs → %.3fs (delta=%+.3fs, conf=%.3f)",
         bext_offset_seconds,
@@ -545,6 +579,7 @@ def estimate_segment_by_transient(
         start_seconds=segment_start,
         duration_seconds=reference_duration_seconds,
         confidence=confidence,
+        method="transient",
     )
 
 
@@ -618,6 +653,7 @@ def estimate_external_audio_segment(
         start_seconds=best_index * frame_seconds,
         duration_seconds=reference_duration_seconds,
         confidence=confidence,
+        method="envelope",
     )
 
 
@@ -628,6 +664,11 @@ _SEGMENT_SEARCH_SLACK_SECONDS = 120.0
 _CLOCK_TOLERANCE_SECONDS: float = 15.0
 _CLOCK_TOLERANCE = timedelta(seconds=_CLOCK_TOLERANCE_SECONDS)
 
+# BEXT time_reference/duration 값은 장비·컨테이너에 따라 정수 초 단위로
+# 반올림될 수 있다. 이 값 이내의 세션 경계 차이는 전체 세션에서 허용하되,
+# 실제 클립이 그 gap을 사용하면 오디오를 임의로 패딩하지 않고 실패시킨다.
+_WAV_TIMELINE_TOLERANCE_SECONDS: float = 1.0
+
 
 def _clamp_wav_ss(wav_ss: float, upper: float) -> float:
     """WAV seek 위치를 [0, upper] 범위로 클램핑한다.
@@ -637,6 +678,157 @@ def _clamp_wav_ss(wav_ss: float, upper: float) -> float:
     span 케이스는 ``upper = wav_duration`` 을 전달해 시작점만 클램핑한다.
     """
     return max(0.0, min(wav_ss, upper))
+
+
+def _select_wav_for_clip_start(
+    wav_infos: Sequence[WavInfo],
+    clip_utc: datetime,
+    *,
+    allow_tolerance: bool,
+) -> WavInfo | None:
+    """클립 시작 시각에 대응하는 WAV를 고른다.
+
+    정확히 ``[start, end)`` 안에 들어가는 파일을 먼저 고른다. 파일이
+    겹치는 경우에는 더 늦게 시작한 파일을 선택해 경계에서 이전 파일을
+    모호하게 재사용하지 않는다. 정확한 구간이 없을 때만 작은 시계 오차
+    허용 범위로 fallback한다.
+    """
+    exact = [w for w in wav_infos if w.start_utc <= clip_utc < w.end_utc]
+    if exact:
+        return max(exact, key=lambda w: w.start_utc)
+    if not allow_tolerance:
+        return None
+
+    near = [
+        w
+        for w in wav_infos
+        if (w.start_utc - _CLOCK_TOLERANCE) <= clip_utc < (w.end_utc + _CLOCK_TOLERANCE)
+    ]
+    if not near:
+        return None
+
+    def distance_from_interval(wav: WavInfo) -> float:
+        if clip_utc < wav.start_utc:
+            return (wav.start_utc - clip_utc).total_seconds()
+        if clip_utc >= wav.end_utc:
+            return (clip_utc - wav.end_utc).total_seconds()
+        return 0.0
+
+    # 거리 동률이면 미래(더 늦은 start)를 우선한다.
+    return min(
+        near,
+        key=lambda w: (distance_from_interval(w), -w.start_utc.timestamp()),
+    )
+
+
+def _find_wav_gap(
+    wav_infos: Sequence[WavInfo],
+    timestamp: datetime,
+) -> tuple[WavInfo, WavInfo, float] | None:
+    """Return the WAV boundary gap containing ``timestamp``, if any.
+
+    A tolerance fallback may compensate for a rounded or slightly inaccurate
+    timestamp at a real WAV boundary, but it must never turn a timestamp that
+    is actually inside a missing interval into the next file's first sample.
+    """
+    for previous, current in pairwise(wav_infos):
+        if previous.end_utc <= timestamp < current.start_utc:
+            return (
+                previous,
+                current,
+                (current.start_utc - previous.end_utc).total_seconds(),
+            )
+    return None
+
+
+def _validate_wav_timeline(wav_infos: Sequence[WavInfo]) -> None:
+    """연속 녹음 세션의 material gap/overlap을 사전 검증한다.
+
+    1초 이하의 경계 차이는 장비 메타데이터 반올림 오차로 허용하지만,
+    실제 클립이 그 작은 gap을 지나가면 ``_build_spanning_wav_segments``가
+    명시적으로 실패시킨다. 따라서 조용한 부분 오디오나 무음 padding은
+    절대 생성하지 않는다.
+    """
+    for wav in wav_infos:
+        if not math.isfinite(wav.duration_seconds) or wav.duration_seconds <= 0:
+            raise AudioSyncError(
+                f"WAV 길이가 유효하지 않습니다: {wav.path.name} ({wav.duration_seconds!r}초)"
+            )
+
+    for previous, current in pairwise(wav_infos):
+        delta_seconds = (current.start_utc - previous.end_utc).total_seconds()
+        if delta_seconds > _WAV_TIMELINE_TOLERANCE_SECONDS:
+            raise AudioSyncError(
+                "WAV 연속 녹음 세션에 material gap이 있습니다: "
+                f"{previous.path.name} 종료 {previous.end_utc.isoformat()} → "
+                f"{current.path.name} 시작 {current.start_utc.isoformat()} "
+                f"({delta_seconds:.3f}초). 모든 분할 WAV가 같은 연속 녹음인지 확인하세요."
+            )
+        if delta_seconds < -_WAV_TIMELINE_TOLERANCE_SECONDS:
+            raise AudioSyncError(
+                "WAV 연속 녹음 세션에 material overlap이 있습니다: "
+                f"{previous.path.name} / {current.path.name} "
+                f"({-delta_seconds:.3f}초). 중복 구간을 임의로 제거하지 않습니다."
+            )
+        if delta_seconds != 0.0:
+            logger.warning(
+                "WAV 경계 메타데이터 차이 %.3fs 허용: %s → %s (클립이 이 gap을 사용하면 실패)",
+                delta_seconds,
+                previous.path.name,
+                current.path.name,
+            )
+
+
+def _build_spanning_wav_segments(
+    start_utc: datetime,
+    duration_seconds: float,
+    wav_infos: Sequence[WavInfo],
+    *,
+    clip_name: str,
+) -> list[tuple[Path, float, float]]:
+    """타임라인 구간을 WAV 조각 목록으로 변환한다.
+
+    overlap은 중복 구간만 잘라내지만, gap 또는 끝 coverage 부족은
+    무음/padding으로 보정하지 않고 실패시킨다.
+    """
+    if duration_seconds <= 0 or not math.isfinite(duration_seconds):
+        raise AudioSyncError(f"{clip_name}: 클립 길이가 유효하지 않습니다: {duration_seconds!r}")
+
+    segments: list[tuple[Path, float, float]] = []
+    cursor = start_utc
+    remaining = duration_seconds
+    for wav in wav_infos:
+        if remaining <= 1e-6:
+            break
+        if wav.end_utc <= cursor:
+            continue
+        if wav.start_utc > cursor:
+            gap_seconds = (wav.start_utc - cursor).total_seconds()
+            raise AudioSyncError(
+                f"{clip_name}: WAV 파일 사이 {gap_seconds:.3f}초 gap이 클립 구간에 포함됩니다. "
+                "부분 오디오/무음 padding을 만들지 않으므로 연속 녹음 파일을 확인하세요."
+            )
+
+        start_seconds = max(0.0, (cursor - wav.start_utc).total_seconds())
+        available = wav.duration_seconds - start_seconds
+        if available <= 0:
+            continue
+        use_duration = min(remaining, available)
+        segments.append((wav.path, start_seconds, use_duration))
+        cursor += timedelta(seconds=use_duration)
+        remaining -= use_duration
+
+    if remaining > 1e-3:
+        raise AudioSyncError(
+            f"{clip_name}: WAV 타임라인 coverage가 {remaining:.3f}초 부족합니다. "
+            "클립 전체를 덮는 원본 WAV 파일을 선택하세요."
+        )
+    if not segments:
+        raise AudioSyncError(
+            f"{clip_name}: WAV 파일에서 유효한 오디오 구간을 찾지 못했습니다. "
+            "WAV 파일이 클립 촬영 시각과 겹치는지 확인하세요."
+        )
+    return segments
 
 
 def calculate_external_audio_segments(
@@ -721,6 +913,7 @@ def calculate_external_audio_segments_from_timestamps(
     if not reference_paths:
         return {}
 
+    external_duration = probe_media_duration(external_path)
     sorted_paths = sorted(reference_paths, key=lambda p: reference_timestamps[p])
     base_time = reference_timestamps[sorted_paths[0]]
 
@@ -734,11 +927,20 @@ def calculate_external_audio_segments_from_timestamps(
                 f"{path.name}의 WAV 시작 위치({wav_start:.1f}초)가 음수가 됩니다. "
                 "양수 값(WAV가 클립보다 먼저 시작)을 사용하거나 0으로 설정하세요."
             )
+        duration = reference_durations[path]
+        if not math.isfinite(duration) or duration <= 0:
+            raise AudioSyncError(f"{path.name}: 클립 길이가 유효하지 않습니다: {duration!r}")
+        if wav_start + duration > external_duration + 1e-6:
+            raise AudioSyncError(
+                f"{path.name}: 외부 오디오 coverage가 부족합니다 "
+                f"(필요 {wav_start + duration:.3f}초, 실제 {external_duration:.3f}초)."
+            )
         segments[path] = ExternalAudioSegment(
             path=external_path,
             start_seconds=wav_start,
             duration_seconds=reference_durations[path],
             confidence=1.0,
+            method="timestamp",
         )
     return segments
 
@@ -882,24 +1084,41 @@ def scan_wav_dir_bext(
     *,
     ffprobe_path: str = "ffprobe",
 ) -> list[WavInfo]:
-    """WAV 디렉토리에서 BEXT time_reference가 있는 파일만 추출해 시작 시각 순으로 반환.
+    """연속 녹음 WAV 디렉토리를 BEXT 시작 시각 순으로 스캔한다.
 
-    BEXT가 없는 파일(ffmpeg concat 결과물 등)은 제외한다.
+    선택한 장시간 녹음 폴더의 WAV 분할 파일 하나라도 BEXT가 없으면
+    조용히 제외하지 않고 즉시 실패한다. 그렇지 않으면 2GB 경계의 한 조각이
+    누락된 채 잘못된 오디오가 합성될 수 있다.
     """
     if not wav_dir.is_dir():
         raise AudioSyncError(f"WAV 디렉토리가 존재하지 않거나 디렉토리가 아닙니다: {wav_dir}")
+
+    wav_paths = sorted(
+        path
+        for path in wav_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".wav", ".wave"}
+    )
     results: list[WavInfo] = []
-    for path in wav_dir.iterdir():
-        if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTERNAL_AUDIO_EXTENSIONS:
-            continue
-        start_utc = get_audio_bext_start_utc(path, tz_offset_seconds)
+    missing_bext: list[Path] = []
+    for path in wav_paths:
+        start_utc = get_audio_bext_start_utc(path, tz_offset_seconds, ffprobe_path=ffprobe_path)
         if start_utc is None:
+            missing_bext.append(path)
             continue
         try:
             duration = probe_media_duration(path, ffprobe_path=ffprobe_path)
-        except AudioSyncError:
-            continue
+        except AudioSyncError as exc:
+            raise AudioSyncError(
+                f"WAV 길이를 읽지 못했습니다: {path.name}. 손상되지 않은 원본 WAV인지 확인하세요."
+            ) from exc
         results.append(WavInfo(path=path, start_utc=start_utc, duration_seconds=duration))
+
+    if missing_bext:
+        names = ", ".join(path.name for path in missing_bext)
+        raise AudioSyncError(
+            "선택한 연속 녹음 폴더에 BEXT time_reference가 없는 WAV가 있습니다: "
+            f"{names}. 2GB 분할 원본 전체를 포함하고 각 파일의 BEXT 메타데이터를 유지하세요."
+        )
 
     results.sort(key=lambda w: w.start_utc)
     return results
@@ -965,47 +1184,72 @@ def calculate_external_audio_segments_from_wav_dir(
     reference_durations: dict[Path, float],
     tz_offset_seconds: int,
     temp_dir: Path,
+    wav_start_offset_seconds: float = 0.0,
     fine_tune: bool = True,
     ffprobe_path: str = "ffprobe",
     ffmpeg_path: str = "ffmpeg",
+    clip_adjustments: dict[str, float] | None = None,
 ) -> dict[Path, ExternalAudioSegment]:
-    """WAV 디렉토리의 BEXT 메타데이터로 각 클립에 맞는 WAV 구간을 자동 매핑한다.
+    """BEXT 타임라인으로 분할 WAV 폴더에서 클립별 구간을 만든다.
 
-    각 WAV 파일의 BEXT time_reference(녹음 시작 UTC)와 DJI 클립의 creation_time(UTC)을
-    비교해 클립별 WAV 파일 + 시작 오프셋을 결정한다.
-
-    클립이 두 WAV 파일 경계에 걸치는 경우 임시 concat WAV를 생성한다.
-    fine_tune=True이면 raw PCM cross-correlation으로 BEXT 오프셋을 정밀화한다.
-    DJI creation_time은 초 단위이므로 실제 시작과 수 초 오차가 있을 수 있다.
+    ``wav_start_offset_seconds``는 BEXT 타임라인에 추가하는 수동 보정값이다.
+    양수면 클립 오디오를 WAV에서 뒤로 이동한다. 클립이 파일 경계를 넘으면
+    필요한 WAV 조각을 concat하며, gap/coverage 부족은 무음으로 채우지 않고 실패한다.
+    ``clip_adjustments``가 있으면 임시 concat 전에 source timeline에서 보정한다.
     """
+    if not math.isfinite(wav_start_offset_seconds):
+        raise ValueError("wav_start_offset_seconds must be finite")
+
     wav_infos = scan_wav_dir_bext(wav_dir, tz_offset_seconds, ffprobe_path=ffprobe_path)
     if not wav_infos:
         raise AudioSyncError(
             f"BEXT time_reference가 있는 WAV 파일을 찾지 못했습니다: {wav_dir}\n"
             "ffmpeg concat으로 만든 파일은 BEXT가 제거됩니다. 원본 WAV 파일 디렉토리를 지정하세요."
         )
+    _validate_wav_timeline(wav_infos)
 
     logger.info(
-        "WAV 타임라인 구축: %d개 파일 (%s ~ %s UTC)",
+        "WAV 타임라인 구축: %d개 파일 (%s ~ %s UTC, offset=%+.3fs)",
         len(wav_infos),
         wav_infos[0].start_utc.strftime("%H:%M:%S"),
         wav_infos[-1].end_utc.strftime("%H:%M:%S"),
+        wav_start_offset_seconds,
     )
 
     segments: dict[Path, ExternalAudioSegment] = {}
     for clip_path in clip_paths:
-        clip_utc = reference_timestamps[clip_path]
+        clip_utc = reference_timestamps[clip_path] + timedelta(seconds=wav_start_offset_seconds)
+        if clip_adjustments:
+            for pattern, delta in clip_adjustments.items():
+                if pattern in clip_path.name:
+                    if not math.isfinite(delta):
+                        raise AudioSyncError(
+                            f"{clip_path.name}: 클립 보정값이 유효하지 않습니다: {delta!r}"
+                        )
+                    clip_utc += timedelta(seconds=delta)
+                    logger.info(
+                        "%s: source timeline 오프셋 보정 %+.3fs 적용",
+                        clip_path.name,
+                        delta,
+                    )
+                    break
         clip_dur = reference_durations[clip_path]
-        clip_end_utc = clip_utc + timedelta(seconds=clip_dur)
-
-        # 클립 시작 시각이 속하는 WAV 찾기
-        # (카메라/레코더 시계 오차 최대 _CLOCK_TOLERANCE_SECONDS초 허용)
-        start_wav: WavInfo | None = None
-        for w in wav_infos:
-            if (w.start_utc - _CLOCK_TOLERANCE) <= clip_utc < (w.end_utc + _CLOCK_TOLERANCE):
-                start_wav = w
-                break
-
+        if not math.isfinite(clip_dur) or clip_dur <= 0:
+            raise AudioSyncError(f"{clip_path.name}: 클립 길이가 유효하지 않습니다: {clip_dur!r}")
+        gap = _find_wav_gap(wav_infos, clip_utc)
+        if gap is not None:
+            previous, current, gap_seconds = gap
+            raise AudioSyncError(
+                f"{clip_path.name}: 시작 시각이 WAV 파일 사이 {gap_seconds:.3f}초 gap에 있습니다 "
+                f"({previous.path.name} 종료 {previous.end_utc.isoformat()} → "
+                f"{current.path.name} 시작 {current.start_utc.isoformat()}). "
+                "연속 녹음의 누락 파일을 포함하거나 클립 시각을 확인하세요."
+            )
+        start_wav = _select_wav_for_clip_start(
+            wav_infos,
+            clip_utc,
+            allow_tolerance=True,
+        )
         if start_wav is None:
             raise AudioSyncError(
                 f"{clip_path.name}: WAV 타임라인에 포함되지 않음 "
@@ -1015,9 +1259,13 @@ def calculate_external_audio_segments_from_wav_dir(
             )
 
         wav_ss = (clip_utc - start_wav.start_utc).total_seconds()
-        # DJI creation_time은 초 단위이므로 raw PCM correlation으로 실제 시작을 정밀화.
-        # 단일/span 두 경로 모두 동일한 fine-tune 입력을 쓰므로 분기 전에 1회만 호출한다.
+        if not 0.0 <= wav_ss <= start_wav.duration_seconds:
+            raise AudioSyncError(
+                f"{clip_path.name}: WAV coverage 밖의 시작 시각을 tolerance로 보정하지 않습니다 "
+                f"(offset={wav_ss:.3f}초, 파일={start_wav.path.name})."
+            )
         conf = 1.0
+        method = "bext"
         if fine_tune:
             wav_ss, conf = fine_tune_bext_offset_by_correlation(
                 clip_path,
@@ -1025,92 +1273,69 @@ def calculate_external_audio_segments_from_wav_dir(
                 wav_ss,
                 ffmpeg_path=ffmpeg_path,
             )
+            if conf >= 0.10:
+                method = "bext+correlation"
+
+        # Fine-tune 이후 실제 absolute start를 다시 계산한다. 보정값 때문에
+        # 다음 WAV로 넘어갔는데도 이전 파일의 단일 구간으로 처리하면 경계가 잘린다.
+        effective_start_utc = start_wav.start_utc + timedelta(seconds=wav_ss)
+        tuned_wav = _select_wav_for_clip_start(
+            wav_infos,
+            effective_start_utc,
+            allow_tolerance=False,
+        )
+        if tuned_wav is None:
+            raise AudioSyncError(
+                f"{clip_path.name}: waveform fine-tune 결과가 WAV 파일 사이 gap 또는 "
+                "세션 범위를 벗어났습니다. 자동으로 보정하지 않습니다."
+            )
+        start_wav = tuned_wav
+        wav_ss = (effective_start_utc - start_wav.start_utc).total_seconds()
+        wav_ss = _clamp_wav_ss(wav_ss, start_wav.duration_seconds)
+        clip_end_utc = effective_start_utc + timedelta(seconds=clip_dur)
 
         if clip_end_utc <= start_wav.end_utc:
-            # 단일 WAV 안에 완전히 포함
-            if fine_tune:
-                logger.info(
-                    "%s: BEXT fine-tune → WAV ss=%.3fs (conf=%.3f)",
-                    clip_path.name,
-                    wav_ss,
-                    conf,
-                )
-            # fine_tune 여부와 무관하게 WAV 경계 초과 방지
+            logger.info(
+                "%s: BEXT mapping → %s ss=%.3fs duration=%.3fs confidence=%.3f method=%s",
+                clip_path.name,
+                start_wav.path.name,
+                wav_ss,
+                clip_dur,
+                conf,
+                method,
+            )
             wav_ss = _clamp_wav_ss(wav_ss, start_wav.duration_seconds - clip_dur)
             segments[clip_path] = ExternalAudioSegment(
                 path=start_wav.path,
                 start_seconds=wav_ss,
                 duration_seconds=clip_dur,
-                confidence=1.0,
+                confidence=conf,
+                method=method,
             )
-        else:
-            # 두 WAV 이상에 걸쳐 있음 → 첫 WAV 오프셋 클램핑 후 임시 concat WAV 생성
-            if fine_tune:
-                # span 케이스: 첫 WAV 경계 초과 방지 (clip_dur 제한 없이 시작점만 클램핑)
-                wav_ss = _clamp_wav_ss(wav_ss, start_wav.duration_seconds)
-                logger.info(
-                    "%s: BEXT fine-tune (span) → WAV ss=%.3fs (conf=%.3f)",
-                    clip_path.name,
-                    wav_ss,
-                    conf,
-                )
+            continue
 
-            span_segments: list[tuple[Path, float, float]] = []
-            # fine-tune된 wav_ss로 실제 시작 epoch(초)를 역산해 span_segments 재구성.
-            # timedelta 객체 대신 float 산술로 처리해 루프 내 allocation을 줄인다.
-            epoch = start_wav.start_utc.timestamp()
-            remaining_start_epoch = epoch + wav_ss
-            remaining_dur = clip_dur
-
-            for w in wav_infos:
-                if remaining_dur <= 0:
-                    break
-                w_end_epoch = w.end_utc.timestamp()
-                if w_end_epoch <= remaining_start_epoch:
-                    continue
-                w_start_epoch = w.start_utc.timestamp()
-                if w_start_epoch > remaining_start_epoch:
-                    # WAV 파일 사이에 gap 존재
-                    gap = w_start_epoch - remaining_start_epoch
-                    logger.warning(
-                        "%s: WAV 파일 간 %.1fs gap 감지 — 해당 구간 오디오 없음",
-                        clip_path.name,
-                        gap,
-                    )
-                    break
-                seg_start_in_wav = remaining_start_epoch - w_start_epoch
-                available = w.duration_seconds - seg_start_in_wav
-                use_dur = min(remaining_dur, available)
-                if use_dur > 0:
-                    span_segments.append((w.path, seg_start_in_wav, use_dur))
-                    remaining_start_epoch += use_dur
-                    remaining_dur -= use_dur
-
-            if not span_segments:
-                raise AudioSyncError(
-                    f"{clip_path.name}: WAV 파일에서 유효한 오디오 구간을 찾지 못했습니다. "
-                    "WAV 파일이 클립 촬영 시각과 겹치는지 확인하세요."
-                )
-            if remaining_dur > 1e-3:
-                logger.warning(
-                    "%s: WAV 커버리지 부족 — %.3fs 미포함 (클립 끝 오디오 없음)",
-                    clip_path.name,
-                    remaining_dur,
-                )
-
-            concat_path = temp_dir / f"span_{uuid.uuid4().hex[:8]}.wav"
-            logger.info(
-                "%s: WAV 경계 걸침 → %d개 WAV concat → %s",
-                clip_path.name,
-                len(span_segments),
-                concat_path.name,
-            )
-            _create_spanning_wav(span_segments, concat_path, ffmpeg_path=ffmpeg_path)
-            segments[clip_path] = ExternalAudioSegment(
-                path=concat_path,
-                start_seconds=0.0,
-                duration_seconds=clip_dur,
-                confidence=1.0,
-            )
+        span_segments = _build_spanning_wav_segments(
+            effective_start_utc,
+            clip_dur,
+            wav_infos,
+            clip_name=clip_path.name,
+        )
+        concat_path = temp_dir / f"span_{uuid.uuid4().hex[:8]}.wav"
+        logger.info(
+            "%s: WAV 경계 걸침 → %d개 WAV concat → %s confidence=%.3f method=%s",
+            clip_path.name,
+            len(span_segments),
+            concat_path.name,
+            conf,
+            method,
+        )
+        _create_spanning_wav(span_segments, concat_path, ffmpeg_path=ffmpeg_path)
+        segments[clip_path] = ExternalAudioSegment(
+            path=concat_path,
+            start_seconds=0.0,
+            duration_seconds=clip_dur,
+            confidence=conf,
+            method=method,
+        )
 
     return segments

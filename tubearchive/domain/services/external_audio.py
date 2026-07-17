@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace as dc_replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from tubearchive.domain.media.audio_sync import (
@@ -127,16 +127,13 @@ def analyze_long_external_audio(
             break
         reference_timestamps[video_file.path] = ts
 
-    # 타임스탬프 품질 검사(중복/역행) → 신뢰할 수 없으면 envelope 폴백
+    # 타임스탬프 품질 검사(중복) → 신뢰할 수 없으면 envelope 폴백
+    # 매핑 함수가 내부에서 시간순으로 정렬하므로 입력 클립 목록의 순서는
+    # 품질 문제가 아니다. 동일 시각만 타임라인 기준을 모호하게 만든다.
     if reference_timestamps:
         ordered_ts = [reference_timestamps[v.path] for v in video_files]
-        has_duplicate = len(set(ordered_ts)) < len(ordered_ts)
-        has_non_monotonic = any(
-            (ordered_ts[i + 1] - ordered_ts[i]).total_seconds() <= 0
-            for i in range(len(ordered_ts) - 1)
-        )
-        if has_duplicate or has_non_monotonic:
-            logger.warning("타임스탬프 중복/역행 감지 → envelope/transient 매칭으로 폴백")
+        if len(set(ordered_ts)) < len(ordered_ts):
+            logger.warning("타임스탬프 중복 감지 → envelope/transient 매칭으로 폴백")
             reference_timestamps = {}
 
     if reference_timestamps:
@@ -183,15 +180,18 @@ def analyze_long_external_audio_from_dir(
     wav_dir: Path,
     temp_dir: Path,
     metadata_cache: dict[Path, VideoMetadata] | None = None,
+    wav_start_offset_seconds: float = 0.0,
+    clip_adjustments: dict[str, float] | None = None,
 ) -> dict[Path, ExternalAudioSegment]:
     """WAV 디렉토리의 BEXT 메타데이터로 각 클립에 맞는 WAV 구간을 자동 매핑한다.
 
     - 각 WAV의 BEXT time_reference → 녹음 시작 UTC
     - 각 DJI 클립의 creation_time UTC와 비교
     - 클립이 WAV 경계에 걸치면 임시 concat WAV 생성
-    - DJI 파일명으로 타임존 오프셋 자동 감지 (비-DJI 카메라는 시스템 로컬 폴백)
+    - DJI 파일명으로 타임존 오프셋 자동 감지 (비-DJI 카메라는 촬영일 기준 시스템 로컬 폴백)
 
     ``metadata_cache`` 가 주어지면 포함된 파일은 ``detect_metadata`` 를 재호출하지 않는다.
+    ``wav_start_offset_seconds`` 는 BEXT 타임라인에 추가하는 수동 보정값이다.
     """
     if not video_files:
         raise AudioSyncError("분석할 영상 파일이 없습니다.")
@@ -208,7 +208,8 @@ def analyze_long_external_audio_from_dir(
 
     tz_offset = detect_local_timezone_offset(video_files[0].path)
     if tz_offset is None:
-        utc_delta = datetime.now().astimezone().utcoffset()
+        earliest_recording = min(reference_timestamps.values())
+        utc_delta = earliest_recording.replace(tzinfo=UTC).astimezone().utcoffset()
         system_offset = int(utc_delta.total_seconds()) if utc_delta is not None else 0
         logger.warning(
             "타임존 오프셋 자동 감지 실패 (DJI 파일명 패턴이 아님). "
@@ -232,6 +233,8 @@ def analyze_long_external_audio_from_dir(
         reference_durations=reference_durations,
         tz_offset_seconds=tz_offset,
         temp_dir=temp_dir,
+        wav_start_offset_seconds=wav_start_offset_seconds,
+        clip_adjustments=clip_adjustments,
     )
 
     for video_file in video_files:
@@ -277,6 +280,7 @@ def analyze_long_audio_segments(
     *,
     exclude_patterns: list[str] | None = None,
     include_only_patterns: list[str] | None = None,
+    wav_start_offset_seconds: float = 0.0,
 ) -> dict[Path, ExternalAudioSegment]:
     """TUI 사전 분석 전용: 파이프라인 실행 없이 오디오 세그먼트 매핑만 수행한다.
 
@@ -300,4 +304,9 @@ def analyze_long_audio_segments(
             raise AudioSyncError("필터 적용 후 분석 대상 영상이 없습니다.")
     groups = group_sequences(all_files)
     ordered = reorder_with_groups(all_files, groups)
-    return analyze_long_external_audio_from_dir(ordered, wav_dir, temp_dir)
+    return analyze_long_external_audio_from_dir(
+        ordered,
+        wav_dir,
+        temp_dir,
+        wav_start_offset_seconds=wav_start_offset_seconds,
+    )
