@@ -311,6 +311,8 @@ def validate_args(
         external_audio_dir = Path(external_audio_dir_arg).expanduser()
         if not external_audio_dir.is_dir():
             raise FileNotFoundError(f"External audio directory not found: {external_audio_dir_arg}")
+    if external_audio_path is not None and external_audio_dir is not None:
+        raise ValueError("--external-audio and --external-audio-dir cannot both be specified")
 
     external_audio_scope = str(getattr(args, "external_audio_scope", "single") or "single")
     if external_audio_scope not in {"single", "long"}:
@@ -372,6 +374,13 @@ def validate_args(
         list(getattr(args, "external_audio_clip_adjust", None) or []),
         context="--external-audio-clip-adjust",
     )
+    if external_audio_scope == "single" and (
+        external_audio_wav_offset != 0.0 or external_audio_clip_adjustments
+    ):
+        raise ValueError(
+            "--external-audio-wav-offset and --external-audio-clip-adjust "
+            "require --external-audio-scope long"
+        )
 
     # 그룹핑 설정 (CLI 인자 > 환경 변수 > 기본값)
     group_flag = bool(getattr(args, "group", False))

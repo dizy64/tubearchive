@@ -766,6 +766,62 @@ class TestValidateArgs:
         assert result.external_audio_path == external_audio
         assert result.external_audio_scope == "long"
 
+    def test_external_audio_long_scope_rejects_both_sources(self, tmp_path: Path) -> None:
+        """long 범위에서 파일과 디렉터리를 동시에 지정할 수 없다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        external_audio = tmp_path / "recorder.wav"
+        external_audio.touch()
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                "--external-audio",
+                str(external_audio),
+                "--external-audio-dir",
+                str(audio_dir),
+                "--external-audio-scope",
+                "long",
+                str(video_file),
+            ]
+        )
+
+        with pytest.raises(ValueError, match="both"):
+            validate_args(args)
+
+    @pytest.mark.parametrize(
+        ("option", "value"),
+        [
+            ("--external-audio-wav-offset", "1.0"),
+            ("--external-audio-clip-adjust", "video:1.0"),
+        ],
+    )
+    def test_external_audio_single_scope_rejects_long_only_adjustments(
+        self,
+        tmp_path: Path,
+        option: str,
+        value: str,
+    ) -> None:
+        """single 범위에서 무시되는 긴 녹음 전용 옵션을 거부한다."""
+        video_file = tmp_path / "video.mp4"
+        video_file.touch()
+        external_audio = tmp_path / "recorder.wav"
+        external_audio.touch()
+        parser = create_parser()
+        args = parser.parse_args(
+            [
+                "--external-audio",
+                str(external_audio),
+                option,
+                value,
+                str(video_file),
+            ]
+        )
+
+        with pytest.raises(ValueError, match="long"):
+            validate_args(args)
+
     def test_sync_audio_clap_requires_external_audio(self, tmp_path: Path) -> None:
         """clap sync는 외부 오디오 파일 없이 사용할 수 없다."""
         video_file = tmp_path / "video.mp4"

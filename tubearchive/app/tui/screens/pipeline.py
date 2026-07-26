@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import logging
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -314,6 +315,15 @@ class PipelinePane(Widget):
             self.app.call_from_thread(self._on_analysis_done, segments)
         except Exception as exc:
             self.app.call_from_thread(self._on_analysis_error, str(exc))
+        finally:
+            try:
+                shutil.rmtree(temp_dir)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                logger.warning(
+                    "오디오 사전 분석 임시 디렉터리 정리 실패: %s", temp_dir, exc_info=True
+                )
 
     def _on_analysis_done(self, segments: object) -> None:
         from tubearchive.domain.media.audio_sync import ExternalAudioSegment
@@ -330,7 +340,7 @@ class PipelinePane(Widget):
         }
 
         def _apply(result: str | None) -> None:
-            if result:
+            if result is not None:
                 options = self.query_one(OptionsPane)
                 options.set_field_value("external_audio_clip_adjustments_raw", result)
                 self.query_one("#pipeline-status", Label).update(f"보정값 적용됨: {result}")

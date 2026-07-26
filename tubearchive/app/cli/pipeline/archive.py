@@ -90,19 +90,22 @@ def _run_backup(
 
     from tubearchive.app.cli.main import database_session  # lazy: avoids circular import
 
-    with database_session() as conn:
-        from tubearchive.infra.db.repository import BackupHistoryRepository
+    try:
+        with database_session() as conn:
+            from tubearchive.infra.db.repository import BackupHistoryRepository
 
-        backup_repo = BackupHistoryRepository(conn)
-        for source_path, source_type, result in results:
-            backup_repo.insert_history(
-                merge_job_id=merge_job_id,
-                source_path=source_path,
-                remote=remote,
-                source_type=source_type,
-                success=result.success,
-                error_message=result.message,
-            )
+            backup_repo = BackupHistoryRepository(conn)
+            for source_path, source_type, result in results:
+                backup_repo.insert_history(
+                    merge_job_id=merge_job_id,
+                    source_path=source_path,
+                    remote=remote,
+                    source_type=source_type,
+                    success=result.success,
+                    error_message=result.message,
+                )
+    except Exception:
+        logger.warning("Failed to save backup history", exc_info=True)
 
 
 def _archive_originals(

@@ -71,6 +71,10 @@ def build_validated_args(
     # NaN/inf가 타임스탬프 정렬 계산에 전파되면 동작이 정의되지 않는다.
     if not math.isfinite(state.external_audio_wav_offset):
         raise ValueError("WAV 시작 보정 값이 유한한 수여야 합니다.")
+    if state.external_audio_scope == "single" and (
+        state.external_audio_wav_offset != 0.0 or external_audio_clip_adjustments
+    ):
+        raise ValueError("WAV 시작 보정과 클립별 수동 보정은 long 범위에서만 사용할 수 있습니다.")
 
     exclude_patterns: list[str] | None = None
     if state.exclude_patterns.strip():
@@ -190,6 +194,8 @@ def _validate_external_audio_options(
     """TUI에서 조합 가능한 외부 오디오 옵션을 CLI 검증 규칙과 맞춘다."""
     if external_audio_scope not in {"single", "long"}:
         raise ValueError("외부 오디오 범위는 single 또는 long이어야 합니다.")
+    if external_audio_path is not None and external_audio_dir is not None:
+        raise ValueError("외부 오디오 파일과 디렉터리는 동시에 지정할 수 없습니다.")
     has_external = external_audio_path is not None or external_audio_dir is not None
     if external_audio_scope == "long" and not has_external:
         raise ValueError("긴 녹음 범위는 외부 오디오 파일 또는 WAV 디렉토리가 필요합니다.")

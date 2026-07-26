@@ -795,6 +795,8 @@ def get_audio_bext_start_utc(
 
     tags = probe_data.get("format", {}).get("tags", {})
     date_str = tags.get("date")
+    if isinstance(date_str, str):
+        date_str = date_str.strip()
     time_ref_str = tags.get("time_reference")
 
     if not date_str or time_ref_str is None:

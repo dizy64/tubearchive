@@ -794,6 +794,18 @@ class TestGetAudioBextStartUtc:
         assert result is not None
         assert result == datetime(2026, 6, 5, 10, 3, 36)
 
+    def test_strips_padded_date(self) -> None:
+        """장비가 공백 padding한 BEXT date도 정상 파싱한다."""
+        probe = self._make_probe(0, 48000, " 2026-06-05 ")
+        with patch("tubearchive.domain.media.detector._run_ffprobe", return_value=probe):
+            from datetime import datetime
+
+            from tubearchive.domain.media.detector import get_audio_bext_start_utc
+
+            result = get_audio_bext_start_utc(Path("test.wav"), 32400)
+
+        assert result == datetime(2026, 6, 4, 15, 0, 0)
+
     def test_no_time_reference_returns_none(self) -> None:
         """time_reference 태그 없으면 None."""
         probe = {

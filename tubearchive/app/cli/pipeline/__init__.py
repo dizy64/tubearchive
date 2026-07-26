@@ -222,6 +222,7 @@ def _cleanup_temp(
     ``temp_dir`` 하위의 파일만 삭제하도록 제한한다.
     """
     logger.info("Cleaning up temporary files...")
+    has_in_use_file = False
     for r in results:
         if (
             r.output_path.exists()
@@ -229,6 +230,7 @@ def _cleanup_temp(
             and temp_dir in r.output_path.parents
         ):
             if _is_file_in_use(r.output_path):
+                has_in_use_file = True
                 logger.warning(f"  Skipping (in use by another process): {r.output_path}")
             else:
                 r.output_path.unlink()
@@ -236,6 +238,9 @@ def _cleanup_temp(
 
     # 임시 폴더 삭제
     if temp_dir.exists():
+        if has_in_use_file:
+            logger.warning("Preserving temp directory because a file is still in use: %s", temp_dir)
+            return
         try:
             shutil.rmtree(temp_dir)
             logger.info(f"Removed temp directory: {temp_dir}")

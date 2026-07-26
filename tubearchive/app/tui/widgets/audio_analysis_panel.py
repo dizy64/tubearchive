@@ -89,18 +89,15 @@ class _SegmentRow(Horizontal):
         raw = inp.value.strip()
         if not raw:
             return None
-        try:
-            val = parse_finite_float(raw, "보정값")
-        except ValueError:
-            return None
+        val = parse_finite_float(raw, "보정값")
         return self._filename, val
 
 
-class AudioAnalysisPanel(ModalScreen[str]):
+class AudioAnalysisPanel(ModalScreen[str | None]):
     """외부 오디오 사전 분석 결과를 표시하고 수동 보정값을 입력받는 모달 화면.
 
     dismiss(result)로 닫힐 때 result는 "패턴:초, ..." 형식의 문자열.
-    취소 시 빈 문자열을 반환한다.
+    취소 시 None, 빈 보정값 적용 시 빈 문자열을 반환한다.
     """
 
     DEFAULT_CSS = """
@@ -191,10 +188,15 @@ class AudioAnalysisPanel(ModalScreen[str]):
         if event.button.id == "apply-btn":
             parts: list[str] = []
             for row in self.query(_SegmentRow):
-                adj = row.get_adjustment()
+                try:
+                    adj = row.get_adjustment()
+                except ValueError as exc:
+                    row.query_one(Input).focus()
+                    self.notify(str(exc), severity="error")
+                    return
                 if adj is not None:
                     pattern, delta = adj
                     parts.append(f"{pattern}:{delta:g}")
             self.dismiss(", ".join(parts))
         elif event.button.id == "cancel-btn":
-            self.dismiss("")
+            self.dismiss(None)
