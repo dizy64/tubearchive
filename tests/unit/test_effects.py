@@ -710,7 +710,7 @@ class TestParseLoudnormStats:
             '\t"target_offset" : "inf"\n'
             "}"
         )
-        with pytest.raises(ValueError, match="silent audio"):
+        with pytest.raises(ValueError, match=r"silent or degenerate|non-finite"):
             parse_loudnorm_stats(output)
 
     def test_raises_on_partial_inf_measured_i(self) -> None:
@@ -730,7 +730,32 @@ class TestParseLoudnormStats:
             '\t"target_offset" : "0.00"\n'
             "}"
         )
-        with pytest.raises(ValueError, match="silent audio"):
+        with pytest.raises(ValueError, match=r"silent or degenerate|non-finite"):
+            parse_loudnorm_stats(output)
+
+    def test_raises_on_inf_target_offset_with_finite_measures(self) -> None:
+        """오디오+무음 혼합 시 input_i/tp는 유한하지만 target_offset만 inf가 될 수 있다.
+
+        이 경우 2nd pass loudnorm 필터가 offset=inf를 거부([-99, 99] 범위 밖)하므로
+        parse 단계에서 ValueError로 차단해 graceful skip되어야 한다. (실제 병합에서
+        무음 클립 anullsrc + 오디오 클립 혼합 시 재현됨)
+        """
+        output = (
+            "[Parsed_loudnorm_0 @ 0x000]\n"
+            "{\n"
+            '\t"input_i" : "-23.00",\n'
+            '\t"input_tp" : "-6.00",\n'
+            '\t"input_lra" : "7.00",\n'
+            '\t"input_thresh" : "-33.00",\n'
+            '\t"output_i" : "-14.00",\n'
+            '\t"output_tp" : "-1.50",\n'
+            '\t"output_lra" : "3.00",\n'
+            '\t"output_thresh" : "-24.00",\n'
+            '\t"normalization_type" : "dynamic",\n'
+            '\t"target_offset" : "inf"\n'
+            "}"
+        )
+        with pytest.raises(ValueError, match=r"non-finite|silent"):
             parse_loudnorm_stats(output)
 
 

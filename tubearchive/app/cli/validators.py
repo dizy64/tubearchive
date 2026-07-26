@@ -49,7 +49,11 @@ from tubearchive.domain.media.subtitle import (
 )
 from tubearchive.infra.ffmpeg.constants import WB_PRESETS
 from tubearchive.infra.ffmpeg.effects import LUT_SUPPORTED_EXTENSIONS
-from tubearchive.shared.validators import ValidationError
+from tubearchive.shared.validators import (
+    ValidationError,
+    parse_clip_adjust_list,
+    parse_finite_float,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +87,8 @@ class ValidatedArgs:
     camera_audio_volume: float = 0.1
     external_audio_min_confidence: float = 0.6
     external_audio_match_window: float = 300.0
+    external_audio_wav_offset: float = 0.0
+    external_audio_clip_adjustments: dict[str, float] = field(default_factory=dict)
     group_sequences: bool = True
     fade_duration: float = 0.5
     upload: bool = False
@@ -305,14 +311,17 @@ def validate_args(
         external_audio_dir = Path(external_audio_dir_arg).expanduser()
         if not external_audio_dir.is_dir():
             raise FileNotFoundError(f"External audio directory not found: {external_audio_dir_arg}")
+    if external_audio_path is not None and external_audio_dir is not None:
+        raise ValueError("--external-audio and --external-audio-dir cannot both be specified")
 
     external_audio_scope = str(getattr(args, "external_audio_scope", "single") or "single")
     if external_audio_scope not in {"single", "long"}:
         raise ValueError("--external-audio-scope must be one of: single, long")
-    if external_audio_scope == "long" and external_audio_path is None:
-        raise ValueError("--external-audio-scope long requires --external-audio")
-    if external_audio_scope == "long" and external_audio_dir is not None:
-        raise ValueError("--external-audio-scope long does not support --external-audio-dir")
+    has_external = external_audio_path is not None or external_audio_dir is not None
+    if external_audio_scope == "long" and not has_external:
+        raise ValueError(
+            "--external-audio-scope long requires --external-audio or --external-audio-dir"
+        )
 
     sync_audio_clap = bool(getattr(args, "sync_audio_clap", False))
     if sync_audio_clap and external_audio_path is None and external_audio_dir is None:
@@ -356,6 +365,21 @@ def validate_args(
     if external_audio_match_window <= 0:
         raise ValueError(
             f"--external-audio-match-window must be > 0, got: {external_audio_match_window}"
+        )
+
+    _wav_offset_raw = str(getattr(args, "external_audio_wav_offset", 0.0) or 0.0)
+    external_audio_wav_offset = parse_finite_float(_wav_offset_raw, "--external-audio-wav-offset")
+
+    external_audio_clip_adjustments = parse_clip_adjust_list(
+        list(getattr(args, "external_audio_clip_adjust", None) or []),
+        context="--external-audio-clip-adjust",
+    )
+    if external_audio_scope == "single" and (
+        external_audio_wav_offset != 0.0 or external_audio_clip_adjustments
+    ):
+        raise ValueError(
+            "--external-audio-wav-offset and --external-audio-clip-adjust "
+            "require --external-audio-scope long"
         )
 
     # 그룹핑 설정 (CLI 인자 > 환경 변수 > 기본값)
@@ -653,6 +677,8 @@ def validate_args(
         camera_audio_volume=camera_audio_volume,
         external_audio_min_confidence=external_audio_min_confidence,
         external_audio_match_window=external_audio_match_window,
+        external_audio_wav_offset=external_audio_wav_offset,
+        external_audio_clip_adjustments=external_audio_clip_adjustments,
         group_sequences=group_sequences,
         fade_duration=fade_duration,
         upload=upload,

@@ -115,17 +115,53 @@ def test_build_external_audio_drift_requires_clap_sync() -> None:
         build_validated_args(targets, state)
 
 
-def test_build_external_audio_long_scope_rejects_directory() -> None:
-    """긴 녹음 범위는 후보 디렉토리 자동 선택과 동시에 사용할 수 없다."""
-    targets = [Path("/tmp/test")]
+def test_build_external_audio_long_scope_accepts_directory(tmp_path: Path) -> None:
+    """긴 녹음 범위에서 WAV 디렉토리 지정은 BEXT 기반 매핑이므로 허용된다."""
+    target = tmp_path / "test.mp4"
+    target.touch()
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    targets = [target]
     state = TuiOptionState(
-        external_audio_path="/tmp/mic.wav",
+        external_audio_dir=str(audio_dir),
+        external_audio_scope="long",
+    )
+
+    result = build_validated_args(targets, state)
+
+    assert result.external_audio_scope == "long"
+    assert result.external_audio_dir == audio_dir
+
+
+def test_build_external_audio_rejects_both_sources() -> None:
+    """파일과 디렉터리를 함께 지정해 한쪽이 조용히 무시되지 않게 한다."""
+    state = TuiOptionState(
+        external_audio_path="/tmp/recorder.wav",
         external_audio_dir="/tmp/audio",
         external_audio_scope="long",
     )
 
-    with pytest.raises(ValueError, match="후보 디렉토리"):
-        build_validated_args(targets, state)
+    with pytest.raises(ValueError, match="동시에"):
+        build_validated_args([Path("/tmp/test.mp4")], state)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        TuiOptionState(
+            external_audio_path="/tmp/recorder.wav",
+            external_audio_wav_offset=1.0,
+        ),
+        TuiOptionState(
+            external_audio_path="/tmp/recorder.wav",
+            external_audio_clip_adjustments_raw="clip:1.0",
+        ),
+    ],
+)
+def test_build_single_scope_rejects_long_only_adjustments(state: TuiOptionState) -> None:
+    """single 범위에서 무시되는 긴 녹음 전용 보정값을 거부한다."""
+    with pytest.raises(ValueError, match="long"):
+        build_validated_args([Path("/tmp/test.mp4")], state)
 
 
 def test_build_external_audio_rejects_invalid_zero_confidence() -> None:

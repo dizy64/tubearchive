@@ -179,12 +179,18 @@ class FFmpegExecutor:
         cmd.extend(["-i", str(input_path)])
 
         if external_audio_path is not None:
-            if external_audio_start is not None:
-                cmd.extend(["-ss", f"{external_audio_start:g}"])
+            # resume 시 카메라가 seek_start만큼 건너뛰므로 WAV 입력도 동일하게 보정한다.
+            # external_audio_start(긴 녹음 구간)와 seek_start(resume)를 합산해 시작점을,
+            # duration은 seek_start만큼 줄여 싱크를 유지한다. 1:1 매칭(start=None)도 동일.
+            seek = seek_start or 0.0
+            if external_audio_start is not None or seek_start:
+                start = (external_audio_start or 0.0) + seek
+                cmd.extend(["-ss", f"{start:.15g}"])
             if external_audio_duration is not None:
-                cmd.extend(["-t", f"{external_audio_duration:g}"])
+                duration = max(0.0, external_audio_duration - seek)
+                cmd.extend(["-t", f"{duration:.15g}"])
             if external_audio_offset:
-                cmd.extend(["-itsoffset", f"{external_audio_offset:g}"])
+                cmd.extend(["-itsoffset", f"{external_audio_offset:.15g}"])
             cmd.extend(["-i", str(external_audio_path)])
 
         # 오디오 스트림이 없으면 lavfi 무음 입력 추가 (concat 호환성)

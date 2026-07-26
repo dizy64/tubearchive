@@ -11,13 +11,21 @@ import pytest
 
 from tubearchive.domain.media.audio_sync import (
     AudioSyncError,
+    ExternalAudioSegment,
+    WavInfo,
     _score_external_audio_candidate,
+    calculate_external_audio_segments,
+    calculate_external_audio_segments_from_timestamps,
+    calculate_external_audio_segments_from_wav_dir,
     estimate_clap_sync_offset,
     estimate_clap_sync_with_drift,
     estimate_external_audio_segment,
+    estimate_segment_by_transient,
     extract_mono_pcm_samples,
     find_transient_candidates,
+    fine_tune_bext_offset_by_correlation,
     probe_media_duration,
+    scan_wav_dir_bext,
     select_external_audio_candidate,
 )
 
@@ -84,6 +92,8 @@ def test_estimate_clap_sync_with_drift_returns_tempo_ratio() -> None:
 
 def test_score_external_audio_candidate_prefers_duration_and_time_match() -> None:
     """외부 오디오 후보는 영상 길이와 촬영 시각에 가까울수록 높은 점수를 받는다."""
+    # VideoFile.creation_time(scanner st_birthtime)은 naive local datetime이므로
+    # 실제 호출 경로와 동일하게 naive로 검증한다 (naive/aware 혼합 회귀 방지).
     video_time = datetime(2026, 1, 1, 12, 0, 0)
 
     good = _score_external_audio_candidate(
@@ -118,6 +128,8 @@ def test_select_external_audio_candidate_chooses_best_match(
     poor.touch()
     best.touch()
 
+    # VideoFile.creation_time(scanner st_birthtime)은 naive local datetime이므로
+    # 실제 호출 경로와 동일하게 naive로 검증한다 (naive/aware 혼합 회귀 방지).
     video_time = datetime(2026, 1, 1, 12, 0, 0)
     (tmp_path / "video.mp4").touch()
     poor_mtime = (video_time + timedelta(hours=1)).timestamp()
@@ -225,3 +237,928 @@ def test_estimate_external_audio_segment_respects_search_start() -> None:
     )
 
     assert segment.start_seconds == pytest.approx(4.0, abs=0.15)
+
+
+def test_estimate_segment_by_transient_finds_start_from_peak() -> None:
+    """외부 오디오 검색창 내에서 가장 강한 transient로 시작점을 계산한다."""
+    # reference: 1초 지점에 강한 피크
+    reference = [0.01] * 2000
+    reference[1000] = 5.0
+    reference[1001] = 3.5
+
+    # external: 3초 지점에 같은 강도 피크 (reference 피크가 1초에 있으므로 segment_start = 2.0s)
+    external = [0.01] * 8000
+    external[3000] = 5.0
+    external[3001] = 3.5
+
+    segment = estimate_segment_by_transient(
+        reference,
+        external,
+        sample_rate=1000,
+        external_path=Path("recorder.wav"),
+        reference_duration_seconds=2.0,
+    )
+
+    assert segment.path == Path("recorder.wav")
+    assert segment.start_seconds == pytest.approx(2.0, abs=0.1)
+    assert segment.duration_seconds == pytest.approx(2.0)
+    assert segment.confidence > 0.35
+
+
+def test_estimate_segment_by_transient_respects_search_start() -> None:
+    """search_start_seconds 이후 slack 창에서만 transient를 찾는다."""
+    reference = [0.01] * 1000
+    reference[100] = 6.0
+
+    # 1초에도 피크, 5초에도 피크 — search_start=3s, slack=4s → 5초 피크가 창 내 있음
+    external = [0.01] * 10000
+    external[1000] = 6.0  # 창 밖 (search_start=3s 이전)
+    external[5000] = 6.0  # 창 내 (3~7s)
+
+    segment = estimate_segment_by_transient(
+        reference,
+        external,
+        sample_rate=1000,
+        external_path=Path("recorder.wav"),
+        reference_duration_seconds=1.0,
+        search_start_seconds=3.0,
+        search_slack_seconds=4.0,
+    )
+
+    # external 피크 = 5초, reference 피크 = 0.1초 → segment_start ≈ 4.9s
+    assert segment.start_seconds == pytest.approx(4.9, abs=0.15)
+
+
+def test_estimate_segment_by_transient_raises_when_no_transient_in_reference() -> None:
+    """reference에 transient가 없으면 AudioSyncError가 발생한다."""
+    reference = [0.01] * 1000  # 모두 균일한 노이즈, 피크 없음
+    external = [0.01] * 3000
+    external[1500] = 5.0
+
+    with pytest.raises(AudioSyncError, match="transients"):
+        estimate_segment_by_transient(
+            reference,
+            external,
+            sample_rate=1000,
+            external_path=Path("recorder.wav"),
+            reference_duration_seconds=1.0,
+        )
+
+
+def test_calculate_external_audio_segments_uses_clap_fallback_on_low_confidence() -> None:
+    """envelope 신뢰도가 낮을 때 clap_sync_fallback=True이면 transient 매칭으로 재시도한다."""
+    # envelope 분석은 항상 실패, transient 매칭은 성공 시나리오
+    fake_segment = ExternalAudioSegment(
+        path=Path("ext.wav"),
+        start_seconds=5.0,
+        duration_seconds=2.0,
+        confidence=0.7,
+    )
+    with (
+        patch(
+            "tubearchive.domain.media.audio_sync.extract_mono_pcm_samples",
+            return_value=[0.0] * 400,
+        ),
+        patch(
+            "tubearchive.domain.media.audio_sync.estimate_external_audio_segment",
+            side_effect=AudioSyncError("low confidence"),
+        ),
+        patch(
+            "tubearchive.domain.media.audio_sync.estimate_segment_by_transient",
+            return_value=fake_segment,
+        ) as mock_transient,
+    ):
+        result = calculate_external_audio_segments(
+            [Path("clip.mp4")],
+            Path("ext.wav"),
+            reference_durations={Path("clip.mp4"): 2.0},
+            clap_sync_fallback=True,
+        )
+
+    mock_transient.assert_called_once()
+    assert result[Path("clip.mp4")] == fake_segment
+
+
+def test_calculate_external_audio_segments_raises_without_clap_fallback() -> None:
+    """clap_sync_fallback=False이면 envelope 실패 시 예외가 전파된다."""
+    with (
+        patch(
+            "tubearchive.domain.media.audio_sync.extract_mono_pcm_samples",
+            return_value=[0.0] * 400,
+        ),
+        patch(
+            "tubearchive.domain.media.audio_sync.estimate_external_audio_segment",
+            side_effect=AudioSyncError("low confidence"),
+        ),
+        pytest.raises(AudioSyncError),
+    ):
+        calculate_external_audio_segments(
+            [Path("clip.mp4")],
+            Path("ext.wav"),
+            reference_durations={Path("clip.mp4"): 2.0},
+            clap_sync_fallback=False,
+        )
+
+
+def test_calculate_external_audio_segments_from_timestamps_basic() -> None:
+    """타임스탬프 기반으로 WAV 위치가 클립 간 시각 차이로 계산된다."""
+    base = datetime(2026, 6, 5, 10, 8, 10)
+    clips = [Path("clip1.mp4"), Path("clip2.mp4"), Path("clip3.mp4")]
+    timestamps = {
+        clips[0]: base,
+        clips[1]: datetime(2026, 6, 5, 10, 10, 14),  # +124s
+        clips[2]: datetime(2026, 6, 5, 10, 50, 39),  # +2549s
+    }
+    durations = {clips[0]: 62.0, clips[1]: 2423.0, clips[2]: 2424.0}
+
+    with patch("tubearchive.domain.media.audio_sync.probe_media_duration", return_value=6000.0):
+        result = calculate_external_audio_segments_from_timestamps(
+            clips,
+            Path("recorder.wav"),
+            reference_durations=durations,
+            reference_timestamps=timestamps,
+        )
+
+    assert result[clips[0]].start_seconds == pytest.approx(0.0)
+    assert result[clips[1]].start_seconds == pytest.approx(124.0)
+    assert result[clips[2]].start_seconds == pytest.approx(2549.0)
+    assert all(seg.confidence == 1.0 for seg in result.values())
+
+
+def test_calculate_external_audio_segments_from_timestamps_wav_offset() -> None:
+    """wav_start_offset_seconds가 양수이면 WAV가 클립1보다 먼저 시작한 만큼 보정된다."""
+    base = datetime(2026, 6, 5, 10, 0, 0)
+    clips = [Path("clip1.mp4"), Path("clip2.mp4")]
+    timestamps = {
+        clips[0]: base,
+        clips[1]: datetime(2026, 6, 5, 10, 1, 0),  # +60s
+    }
+    durations = {clips[0]: 60.0, clips[1]: 60.0}
+
+    with patch("tubearchive.domain.media.audio_sync.probe_media_duration", return_value=6000.0):
+        result = calculate_external_audio_segments_from_timestamps(
+            clips,
+            Path("recorder.wav"),
+            reference_durations=durations,
+            reference_timestamps=timestamps,
+            wav_start_offset_seconds=10.0,  # WAV가 10초 먼저 시작
+        )
+
+    assert result[clips[0]].start_seconds == pytest.approx(10.0)
+    assert result[clips[1]].start_seconds == pytest.approx(70.0)
+
+
+def test_calculate_external_audio_segments_from_timestamps_negative_offset_raises() -> None:
+    """wav_start_offset_seconds가 음수여서 첫 클립의 WAV 시작 위치가 음수가 되면 AudioSyncError."""
+    base = datetime(2026, 6, 5, 10, 0, 0)
+    clips = [Path("clip1.mp4")]
+    timestamps = {clips[0]: base}
+    durations = {clips[0]: 60.0}
+
+    with (
+        patch("tubearchive.domain.media.audio_sync.probe_media_duration", return_value=6000.0),
+        pytest.raises(AudioSyncError, match="음수"),
+    ):
+        calculate_external_audio_segments_from_timestamps(
+            clips,
+            Path("recorder.wav"),
+            reference_durations=durations,
+            reference_timestamps=timestamps,
+            wav_start_offset_seconds=-5.0,
+        )
+
+
+def test_calculate_external_audio_segments_from_timestamps_rejects_short_external_audio() -> None:
+    """타임스탬프 구간이 외부 녹음 길이를 넘으면 실패한다."""
+    clip = Path("clip.mp4")
+    with (
+        patch("tubearchive.domain.media.audio_sync.probe_media_duration", return_value=100.0),
+        pytest.raises(AudioSyncError, match="coverage가 부족합니다"),
+    ):
+        calculate_external_audio_segments_from_timestamps(
+            [clip],
+            Path("recorder.wav"),
+            reference_durations={clip: 20.0},
+            reference_timestamps={clip: datetime(2026, 1, 1, 0, 0, 0)},
+            wav_start_offset_seconds=90.0,
+        )
+
+
+def test_long_external_audio_sorts_unsorted_video_inputs_by_timestamp() -> None:
+    """영상 입력 목록이 촬영 시각순이 아니어도 timestamp 매핑을 유지한다."""
+    from tubearchive.domain.services.external_audio import analyze_long_external_audio
+
+    early = Path("early.mp4")
+    late = Path("late.mp4")
+    video_files = [MagicMock(path=late), MagicMock(path=early)]
+    timestamps = {
+        early: datetime(2026, 1, 1, 0, 0, 0),
+        late: datetime(2026, 1, 1, 0, 1, 0),
+    }
+    segments = {
+        early: ExternalAudioSegment(Path("rec.wav"), 0.0, 10.0, 1.0),
+        late: ExternalAudioSegment(Path("rec.wav"), 60.0, 10.0, 1.0),
+    }
+
+    with (
+        patch(
+            "tubearchive.domain.services.external_audio._build_reference_durations",
+            return_value={early: 10.0, late: 10.0},
+        ),
+        patch(
+            "tubearchive.domain.services.external_audio.get_video_creation_time",
+            side_effect=lambda path: timestamps[path],
+        ),
+        patch(
+            "tubearchive.domain.services.external_audio._auto_detect_wav_offset",
+            return_value=0.0,
+        ),
+        patch(
+            "tubearchive.domain.services.external_audio.calculate_external_audio_segments_from_timestamps",
+            return_value=segments,
+        ) as timestamp_mapper,
+        patch(
+            "tubearchive.domain.services.external_audio.calculate_external_audio_segments"
+        ) as envelope_mapper,
+    ):
+        result = analyze_long_external_audio(
+            video_files,
+            Path("rec.wav"),
+            min_confidence=0.35,
+        )
+
+    assert result == segments
+    timestamp_mapper.assert_called_once()
+    envelope_mapper.assert_not_called()
+
+
+def test_timestamp_long_external_audio_allows_video_without_camera_audio() -> None:
+    """타임스탬프 정렬은 카메라 오디오가 없는 영상도 허용한다."""
+    from tubearchive.domain.services.external_audio import analyze_long_external_audio
+
+    video_path = Path("silent.mp4")
+    video_file = MagicMock(path=video_path)
+    metadata = MagicMock(duration_seconds=10.0, has_audio=False)
+    segment = ExternalAudioSegment(Path("rec.wav"), 0.0, 10.0, 1.0)
+
+    with (
+        patch(
+            "tubearchive.domain.services.external_audio.get_video_creation_time",
+            return_value=datetime(2026, 1, 1, 0, 0, 0),
+        ),
+        patch(
+            "tubearchive.domain.services.external_audio._auto_detect_wav_offset",
+            return_value=0.0,
+        ),
+        patch(
+            "tubearchive.domain.services.external_audio.calculate_external_audio_segments_from_timestamps",
+            return_value={video_path: segment},
+        ) as timestamp_mapper,
+        patch(
+            "tubearchive.domain.services.external_audio.calculate_external_audio_segments"
+        ) as envelope_mapper,
+    ):
+        result = analyze_long_external_audio(
+            [video_file],
+            Path("rec.wav"),
+            min_confidence=0.35,
+            metadata_cache={video_path: metadata},
+        )
+
+    assert result == {video_path: segment}
+    timestamp_mapper.assert_called_once()
+    envelope_mapper.assert_not_called()
+
+
+def test_external_audio_dir_service_forwards_wav_offset() -> None:
+    """서비스 경로가 external-audio-dir의 WAV 보정값을 매퍼에 전달한다."""
+    from tubearchive.domain.services.external_audio import analyze_long_external_audio_from_dir
+
+    video_path = Path("clip.mp4")
+    video_file = MagicMock(path=video_path)
+    segment = ExternalAudioSegment(
+        path=Path("/wav/part.wav"),
+        start_seconds=4.0,
+        duration_seconds=2.0,
+        confidence=1.0,
+        method="bext",
+    )
+    with (
+        patch(
+            "tubearchive.domain.services.external_audio.get_video_creation_time",
+            return_value=datetime(2026, 1, 1, 0, 0, 0),
+        ),
+        patch(
+            "tubearchive.domain.services.external_audio.detect_local_timezone_offset",
+            return_value=0,
+        ),
+        patch(
+            "tubearchive.domain.services.external_audio._build_reference_durations",
+            return_value={video_path: 2.0},
+        ),
+        patch(
+            "tubearchive.domain.services.external_audio.calculate_external_audio_segments_from_wav_dir",
+            return_value={video_path: segment},
+        ) as mapper,
+    ):
+        result = analyze_long_external_audio_from_dir(
+            [video_file],
+            Path("/wav"),
+            Path("/tmp"),
+            wav_start_offset_seconds=4.5,
+        )
+
+    assert result == {video_path: segment}
+    assert mapper.call_args.kwargs["wav_start_offset_seconds"] == pytest.approx(4.5)
+
+
+# ---------------------------------------------------------------------------
+# WavInfo / scan_wav_dir_bext / calculate_external_audio_segments_from_wav_dir
+# ---------------------------------------------------------------------------
+
+
+class TestScanWavDirBext:
+    def test_returns_sorted_by_start_utc(self, tmp_path: Path) -> None:
+        """BEXT가 있는 WAV 2개를 시작 시각 오름차순으로 반환한다."""
+        wav_a = tmp_path / "0006.wav"
+        wav_b = tmp_path / "0007.wav"
+        wav_a.touch()
+        wav_b.touch()
+
+        utc_a = datetime(2026, 6, 5, 10, 3, 36)  # 19:03:36 KST
+        utc_b = datetime(2026, 6, 5, 11, 36, 46)  # 20:36:46 KST
+
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.get_audio_bext_start_utc",
+                side_effect=lambda p, tz, **_: utc_b if "0007" in p.name else utc_a,
+            ),
+            patch(
+                "tubearchive.domain.media.audio_sync.probe_media_duration",
+                side_effect=lambda p, **_: 841.0 if "0007" in p.name else 5589.0,
+            ),
+        ):
+            result = scan_wav_dir_bext(tmp_path, tz_offset_seconds=32400)
+
+        assert len(result) == 2
+        assert result[0].path == wav_a
+        assert result[0].start_utc == utc_a
+        assert result[1].path == wav_b
+
+    def test_rejects_files_without_bext(self, tmp_path: Path) -> None:
+        """연속 녹음 폴더의 BEXT 누락 WAV는 조용히 제외하지 않고 실패시킨다."""
+        missing = tmp_path / "no_bext.wav"
+        missing.touch()
+
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.get_audio_bext_start_utc",
+                return_value=None,
+            ),
+            pytest.raises(AudioSyncError, match=r"BEXT time_reference가 없는 WAV.*no_bext\.wav"),
+        ):
+            scan_wav_dir_bext(tmp_path, tz_offset_seconds=32400)
+
+    def test_skips_non_wav_files(self, tmp_path: Path) -> None:
+        """WAV 이외 파일은 스캔 대상에서 제외된다."""
+        (tmp_path / "video.mp4").touch()
+        (tmp_path / "readme.txt").touch()
+
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.get_audio_bext_start_utc",
+                return_value=datetime(2026, 6, 5, 10, 0, 0),
+            ),
+            patch(
+                "tubearchive.domain.media.audio_sync.probe_media_duration",
+                return_value=100.0,
+            ),
+        ):
+            result = scan_wav_dir_bext(tmp_path, tz_offset_seconds=32400)
+
+        assert result == []
+
+
+class TestCalculateExternalAudioSegmentsFromWavDir:
+    """calculate_external_audio_segments_from_wav_dir 단위 테스트."""
+
+    def _make_wav_infos(self) -> list[WavInfo]:
+        """0006(19:03:36~20:36:45) + 0007(20:36:45~20:50:49) 타임라인."""
+        utc_a = datetime(2026, 6, 5, 10, 3, 36)  # 19:03:36 KST → UTC+9
+        utc_b = datetime(2026, 6, 5, 11, 36, 45)  # 20:36:45 KST
+        return [
+            WavInfo(path=Path("/wav/0006.wav"), start_utc=utc_a, duration_seconds=5589.0),
+            WavInfo(path=Path("/wav/0007.wav"), start_utc=utc_b, duration_seconds=841.0),
+        ]
+
+    def test_each_clip_in_single_wav(self, tmp_path: Path) -> None:
+        """클립 0001~0003이 단일 WAV(0006) 안에 있을 때 올바른 ss를 반환한다."""
+        clip0001 = Path("DJI_20260605190810_0001_D.MP4")
+        clip0002 = Path("DJI_20260605191013_0002_D.MP4")
+        clip0003 = Path("DJI_20260605195039_0003_D.MP4")
+
+        # DJI 파일명 UTC: KST - 9h
+        ts = {
+            clip0001: datetime(2026, 6, 5, 10, 8, 10),  # 19:08:10 KST
+            clip0002: datetime(2026, 6, 5, 10, 10, 13),  # 19:10:13 KST
+            clip0003: datetime(2026, 6, 5, 10, 50, 39),  # 19:50:39 KST
+        }
+        durations = {clip0001: 62.0, clip0002: 2423.0, clip0003: 2424.0}
+        wav_infos = self._make_wav_infos()
+
+        with patch(
+            "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+            return_value=wav_infos,
+        ):
+            result = calculate_external_audio_segments_from_wav_dir(
+                list(ts.keys()),
+                Path("/wav"),
+                reference_timestamps=ts,
+                reference_durations=durations,
+                tz_offset_seconds=32400,
+                temp_dir=tmp_path,
+                fine_tune=False,  # 단위 테스트에서는 BEXT 계산만 검증
+            )
+
+        # 0001: (10:08:10 - 10:03:36) = 274s
+        assert result[clip0001].path == Path("/wav/0006.wav")
+        assert result[clip0001].start_seconds == pytest.approx(274.0, abs=0.01)
+        # 0002: (10:10:13 - 10:03:36) = 397s
+        assert result[clip0002].start_seconds == pytest.approx(397.0, abs=0.01)
+        # 0003: (10:50:39 - 10:03:36) = 2823s
+        assert result[clip0003].start_seconds == pytest.approx(2823.0, abs=0.01)
+
+    def test_clip_spanning_two_wavs_creates_temp_file(self, tmp_path: Path) -> None:
+        """클립이 두 WAV 파일 경계를 넘을 때 임시 concat WAV를 생성한다."""
+        clip0004 = Path("DJI_20260605203103_0004_D.MP4")
+        # 0004: 20:31:03 KST = 11:31:03 UTC, 길이 1009s → 종료 20:47:52 KST (0007에 걸침)
+        ts = {clip0004: datetime(2026, 6, 5, 11, 31, 3)}
+        durations = {clip0004: 1009.0}
+        wav_infos = self._make_wav_infos()
+
+        captured_cmd: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_: object) -> MagicMock:
+            captured_cmd.append(cmd)
+            m = MagicMock()
+            m.returncode = 0
+            m.stderr = ""
+            return m
+
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+                return_value=wav_infos,
+            ),
+            patch("subprocess.run", side_effect=fake_run),
+        ):
+            result = calculate_external_audio_segments_from_wav_dir(
+                [clip0004],
+                Path("/wav"),
+                reference_timestamps=ts,
+                reference_durations=durations,
+                tz_offset_seconds=32400,
+                temp_dir=tmp_path,
+                fine_tune=False,  # subprocess.run mock과 충돌 방지
+            )
+
+        # 결과 path는 tmp_path 아래 임시 파일
+        assert result[clip0004].path.parent == tmp_path
+        assert result[clip0004].start_seconds == pytest.approx(0.0)
+        assert result[clip0004].duration_seconds == pytest.approx(1009.0)
+        assert result[clip0004].confidence == pytest.approx(1.0)
+        assert result[clip0004].method == "bext"
+        # FFmpeg가 concat 명령으로 호출됐는지 확인
+        assert any("ffmpeg" in " ".join(cmd) for cmd in captured_cmd)
+
+    def test_clip_adjustment_is_applied_before_wav_span_materialization(
+        self, tmp_path: Path
+    ) -> None:
+        """수동 보정은 임시 concat 파일 생성 전에 source timeline에 적용한다."""
+        clip = Path("clip_0004.mp4")
+        wav_infos = [
+            WavInfo(Path("/wav/a.wav"), datetime(2026, 1, 1, 0, 0, 0), 10.0),
+            WavInfo(Path("/wav/b.wav"), datetime(2026, 1, 1, 0, 0, 10), 10.0),
+        ]
+        with patch(
+            "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+            return_value=wav_infos,
+        ):
+            result = calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps={clip: datetime(2026, 1, 1, 0, 0, 8)},
+                reference_durations={clip: 2.0},
+                tz_offset_seconds=0,
+                temp_dir=tmp_path,
+                fine_tune=False,
+                clip_adjustments={"0004": 2.0},
+            )
+
+        assert result[clip].path == Path("/wav/b.wav")
+        assert result[clip].start_seconds == pytest.approx(0.0)
+
+    def test_wav_offset_applies_to_directory_mapping(self, tmp_path: Path) -> None:
+        """external-audio-dir long 모드에도 WAV 시작 보정이 적용된다."""
+        clip = Path("clip.mp4")
+        ts = {clip: datetime(2026, 6, 5, 10, 10, 0)}
+        durations = {clip: 20.0}
+        wav_infos = self._make_wav_infos()
+
+        with patch(
+            "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+            return_value=wav_infos,
+        ):
+            result = calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps=ts,
+                reference_durations=durations,
+                tz_offset_seconds=32400,
+                temp_dir=tmp_path,
+                wav_start_offset_seconds=4.5,
+                fine_tune=False,
+            )
+
+        assert result[clip].path == Path("/wav/0006.wav")
+        assert result[clip].start_seconds == pytest.approx(388.5)
+        assert result[clip].method == "bext"
+
+    def test_material_gap_is_rejected_before_mapping(self, tmp_path: Path) -> None:
+        """연속 세션 파일 사이 material gap은 부분 오디오를 만들지 않고 실패시킨다."""
+        clip = Path("clip.mp4")
+        wav_infos = [
+            WavInfo(Path("/wav/a.wav"), datetime(2026, 1, 1, 0, 0, 0), 10.0),
+            WavInfo(Path("/wav/b.wav"), datetime(2026, 1, 1, 0, 0, 20), 10.0),
+        ]
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+                return_value=wav_infos,
+            ),
+            pytest.raises(AudioSyncError, match="material gap"),
+        ):
+            calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps={clip: datetime(2026, 1, 1, 0, 0, 5)},
+                reference_durations={clip: 20.0},
+                tz_offset_seconds=0,
+                temp_dir=tmp_path,
+                fine_tune=False,
+            )
+
+    def test_small_gap_used_by_clip_is_rejected_without_padding(self, tmp_path: Path) -> None:
+        """허용 오차 이내 gap도 클립이 사용하면 무음 padding 없이 실패시킨다."""
+        clip = Path("clip.mp4")
+        wav_infos = [
+            WavInfo(Path("/wav/a.wav"), datetime(2026, 1, 1, 0, 0, 0), 10.0),
+            WavInfo(Path("/wav/b.wav"), datetime(2026, 1, 1, 0, 0, 10, 500000), 10.0),
+        ]
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+                return_value=wav_infos,
+            ),
+            pytest.raises(AudioSyncError, match="gap이 클립 구간에 포함"),
+        ):
+            calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps={clip: datetime(2026, 1, 1, 0, 0, 5)},
+                reference_durations={clip: 10.0},
+                tz_offset_seconds=0,
+                temp_dir=tmp_path,
+                fine_tune=False,
+            )
+
+    def test_clip_start_inside_gap_is_rejected_before_tolerance_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        """gap 안의 시작 시각을 다음 WAV 시작으로 조용히 밀지 않는다."""
+        clip = Path("clip.mp4")
+        wav_infos = [
+            WavInfo(Path("/wav/a.wav"), datetime(2026, 1, 1, 0, 0, 0), 10.0),
+            WavInfo(Path("/wav/b.wav"), datetime(2026, 1, 1, 0, 0, 10, 500000), 10.0),
+        ]
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+                return_value=wav_infos,
+            ),
+            pytest.raises(AudioSyncError, match=r"시작 시각이 WAV 파일 사이 .*gap"),
+        ):
+            calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps={clip: datetime(2026, 1, 1, 0, 0, 10, 400000)},
+                reference_durations={clip: 1.0},
+                tz_offset_seconds=0,
+                temp_dir=tmp_path,
+                fine_tune=False,
+            )
+
+    def test_material_overlap_is_rejected_before_mapping(self, tmp_path: Path) -> None:
+        """material overlap은 중복 제거로 숨기지 않고 실패시킨다."""
+        clip = Path("clip.mp4")
+        wav_infos = [
+            WavInfo(Path("/wav/a.wav"), datetime(2026, 1, 1, 0, 0, 0), 20.0),
+            WavInfo(Path("/wav/b.wav"), datetime(2026, 1, 1, 0, 0, 5), 20.0),
+        ]
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+                return_value=wav_infos,
+            ),
+            pytest.raises(AudioSyncError, match="material overlap"),
+        ):
+            calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps={clip: datetime(2026, 1, 1, 0, 0, 1)},
+                reference_durations={clip: 2.0},
+                tz_offset_seconds=0,
+                temp_dir=tmp_path,
+                fine_tune=False,
+            )
+
+    def test_overlap_boundary_prefers_later_wav(self, tmp_path: Path) -> None:
+        """겹치는 경계의 정확한 구간은 이전 파일 대신 늦게 시작한 WAV를 고른다."""
+        clip = Path("clip.mp4")
+        wav_infos = [
+            WavInfo(Path("/wav/a.wav"), datetime(2026, 1, 1, 0, 0, 0), 10.0),
+            WavInfo(Path("/wav/b.wav"), datetime(2026, 1, 1, 0, 0, 9), 10.0),
+        ]
+        with patch(
+            "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+            return_value=wav_infos,
+        ):
+            result = calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps={clip: datetime(2026, 1, 1, 0, 0, 9)},
+                reference_durations={clip: 0.5},
+                tz_offset_seconds=0,
+                temp_dir=tmp_path,
+                fine_tune=False,
+            )
+
+        assert result[clip].path == Path("/wav/b.wav")
+        assert result[clip].start_seconds == pytest.approx(0.0)
+
+    def test_fine_tune_confidence_and_boundary_are_preserved(self, tmp_path: Path) -> None:
+        """fine-tune 결과 confidence를 보존하고 경계 이동 후 span을 재평가한다."""
+        clip = Path("clip.mp4")
+        wav_infos = [
+            WavInfo(Path("/wav/a.wav"), datetime(2026, 1, 1, 0, 0, 0), 10.0),
+            WavInfo(Path("/wav/b.wav"), datetime(2026, 1, 1, 0, 0, 10), 10.0),
+        ]
+        captured_cmd: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_: object) -> MagicMock:
+            captured_cmd.append(cmd)
+            result = MagicMock()
+            result.returncode = 0
+            result.stderr = ""
+            return result
+
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+                return_value=wav_infos,
+            ),
+            patch(
+                "tubearchive.domain.media.audio_sync.fine_tune_bext_offset_by_correlation",
+                return_value=(9.5, 0.42),
+            ),
+            patch("subprocess.run", side_effect=fake_run),
+        ):
+            result = calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps={clip: datetime(2026, 1, 1, 0, 0, 5)},
+                reference_durations={clip: 2.0},
+                tz_offset_seconds=0,
+                temp_dir=tmp_path,
+                fine_tune=True,
+            )
+
+        assert result[clip].path.parent == tmp_path
+        assert result[clip].confidence == pytest.approx(0.42)
+        assert result[clip].method == "bext+correlation"
+        assert any("/wav/a.wav" in " ".join(cmd) for cmd in captured_cmd)
+        assert any("/wav/b.wav" in " ".join(cmd) for cmd in captured_cmd)
+
+    def test_tolerance_does_not_clamp_clip_before_first_wav(self, tmp_path: Path) -> None:
+        """첫 WAV보다 이른 클립을 tolerance로 파일 시작점에 밀지 않는다."""
+        clip = Path("clip_before.wav")
+        wav_infos = [
+            WavInfo(Path("/wav/a.wav"), datetime(2026, 1, 1, 0, 0, 10), 20.0),
+        ]
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+                return_value=wav_infos,
+            ),
+            pytest.raises(AudioSyncError, match="coverage 밖의 시작 시각"),
+        ):
+            calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps={clip: datetime(2026, 1, 1, 0, 0, 5)},
+                reference_durations={clip: 1.0},
+                tz_offset_seconds=0,
+                temp_dir=tmp_path,
+                fine_tune=False,
+            )
+
+    def test_low_confidence_fine_tune_keeps_bext_provenance(self, tmp_path: Path) -> None:
+        """상관관계가 거부되면 method는 bext로 남는다."""
+        clip = Path("clip.mp4")
+        wav_infos = [
+            WavInfo(Path("/wav/a.wav"), datetime(2026, 1, 1, 0, 0, 0), 30.0),
+        ]
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+                return_value=wav_infos,
+            ),
+            patch(
+                "tubearchive.domain.media.audio_sync.fine_tune_bext_offset_by_correlation",
+                return_value=(5.0, 0.0),
+            ),
+        ):
+            result = calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps={clip: datetime(2026, 1, 1, 0, 0, 5)},
+                reference_durations={clip: 1.0},
+                tz_offset_seconds=0,
+                temp_dir=tmp_path,
+                fine_tune=True,
+            )
+
+        assert result[clip].method == "bext"
+        assert result[clip].confidence == pytest.approx(0.0)
+
+    def test_clip_not_covered_by_any_wav_raises(self, tmp_path: Path) -> None:
+        """어느 WAV에도 없는 시각의 클립은 AudioSyncError를 발생시킨다."""
+        clip = Path("clip_outside.mp4")
+        ts = {clip: datetime(2025, 1, 1, 0, 0, 0)}  # WAV 타임라인 밖
+        durations = {clip: 60.0}
+
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync.scan_wav_dir_bext",
+                return_value=self._make_wav_infos(),
+            ),
+            pytest.raises(AudioSyncError, match="WAV 타임라인에 포함되지 않음"),
+        ):
+            calculate_external_audio_segments_from_wav_dir(
+                [clip],
+                Path("/wav"),
+                reference_timestamps=ts,
+                reference_durations=durations,
+                tz_offset_seconds=32400,
+                temp_dir=tmp_path,
+            )
+
+
+class TestFineTuneBextOffsetByCorrelation:
+    """fine_tune_bext_offset_by_correlation 단위 테스트."""
+
+    def _make_signal(self, length: int, peak_index: int, amplitude: float = 1.0) -> list[float]:
+        samples = [0.02] * length
+        samples[peak_index] = amplitude
+        samples[peak_index + 1] = amplitude * 0.7
+        samples[peak_index + 2] = amplitude * 0.4
+        return samples
+
+    def test_finds_known_offset_within_search_range(self) -> None:
+        """합성 신호에서 2초 오차를 보정해 실제 오프셋을 찾는다.
+
+        BEXT offset=20s, search_range=8s, 실제 offset=22s(2초 오차).
+        클립 peak(0.1s)가 WAV 22s 위치와 매치 → refined ≈ 21.9s
+        """
+        sample_rate = 100
+        sample_duration = 30
+        search_range = 8
+        # 클립 오디오: 30s * 100 = 3000 샘플, 피크는 처음 0.1s에
+        clip_audio = self._make_signal(3000, peak_index=10)
+        # WAV 구간(12~58s, 46s): 4600 샘플, WAV 22s = 구간 내 10s → index=1000
+        wav_audio = self._make_signal(4600, peak_index=10 * sample_rate)
+
+        with patch(
+            "tubearchive.domain.media.audio_sync._extract_mono_pcm_segment",
+            # 클립 먼저 추출, WAV 나중 추출 (코드 호출 순서와 일치)
+            side_effect=[clip_audio, wav_audio],
+        ):
+            refined, confidence = fine_tune_bext_offset_by_correlation(
+                clip_path=Path("clip.mp4"),
+                wav_path=Path("wav.wav"),
+                bext_offset_seconds=20.0,
+                search_range_seconds=float(search_range),
+                sample_duration_seconds=float(sample_duration),
+                sample_rate=sample_rate,
+            )
+
+        # wav_start=12, lag≈+1.9 → refined≈21.9 (clip peak at 0.1s → WAV 22s)
+        assert abs(refined - 22.0) < 1.0
+        assert confidence > 0.0
+
+    def test_zero_bext_offset_stays_within_search_range(self) -> None:
+        """WAV 시작점이 0이면 fine-tune 결과가 음수로 내려가거나 범위를 넘지 않는다."""
+        with (
+            patch(
+                "tubearchive.domain.media.audio_sync._extract_mono_pcm_segment",
+                side_effect=[[1.0] * 3000, [1.0] * 3800],
+            ),
+            patch(
+                "tubearchive.domain.media.audio_sync._raw_pcm_correlation_offset",
+                return_value=(800, 1.0),
+            ) as correlate,
+        ):
+            refined, confidence = fine_tune_bext_offset_by_correlation(
+                clip_path=Path("clip.mp4"),
+                wav_path=Path("wav.wav"),
+                bext_offset_seconds=0.0,
+                search_range_seconds=8.0,
+                sample_duration_seconds=30.0,
+                sample_rate=100,
+            )
+
+        assert refined == pytest.approx(8.0)
+        assert confidence == pytest.approx(1.0)
+        assert correlate.call_args.kwargs["min_lag_frames"] == 0
+        assert correlate.call_args.kwargs["max_lag_frames"] == 800
+
+    def test_returns_bext_offset_on_empty_samples(self) -> None:
+        """오디오 추출에 실패하면 원래 BEXT 오프셋과 confidence=0을 반환한다."""
+        with patch(
+            "tubearchive.domain.media.audio_sync._extract_mono_pcm_segment",
+            return_value=[],
+        ):
+            refined, confidence = fine_tune_bext_offset_by_correlation(
+                clip_path=Path("clip.mp4"),
+                wav_path=Path("wav.wav"),
+                bext_offset_seconds=275.0,
+            )
+
+        assert refined == pytest.approx(275.0)
+        assert confidence == pytest.approx(0.0)
+
+    def test_returns_bext_offset_on_low_confidence(self) -> None:
+        """모든 샘플이 동일(무음)이면 correlation이 낮아 BEXT 오프셋을 유지한다."""
+        flat_signal = [0.0] * 3000
+
+        with patch(
+            "tubearchive.domain.media.audio_sync._extract_mono_pcm_segment",
+            side_effect=[flat_signal, flat_signal * 2],
+        ):
+            refined, _confidence = fine_tune_bext_offset_by_correlation(
+                clip_path=Path("clip.mp4"),
+                wav_path=Path("wav.wav"),
+                bext_offset_seconds=100.0,
+                min_confidence=0.25,
+            )
+
+        # 무음 신호는 correlation이 낮으므로 BEXT 오프셋 유지
+        assert refined == pytest.approx(100.0)
+
+
+class TestApplyClipAdjustments:
+    """apply_clip_adjustments 단위 테스트."""
+
+    def _seg(self, start: float) -> ExternalAudioSegment:
+        return ExternalAudioSegment(
+            path=Path("dummy.wav"),
+            start_seconds=start,
+            duration_seconds=100.0,
+            confidence=0.5,
+            tempo_ratio=1.0,
+        )
+
+    def test_pattern_matches_filename(self) -> None:
+        from tubearchive.domain.services.external_audio import apply_clip_adjustments
+
+        clips = {
+            Path("/a/DJI_0001.MP4"): self._seg(10.0),
+            Path("/a/DJI_0004.MP4"): self._seg(50.0),
+        }
+        result = apply_clip_adjustments(clips, {"0004": 4.0})
+        assert result[Path("/a/DJI_0001.MP4")].start_seconds == pytest.approx(10.0)
+        assert result[Path("/a/DJI_0004.MP4")].start_seconds == pytest.approx(54.0)
+
+    def test_negative_adjustment_clamped_to_zero(self) -> None:
+        from tubearchive.domain.services.external_audio import apply_clip_adjustments
+
+        clips = {Path("/a/clip.MP4"): self._seg(1.0)}
+        result = apply_clip_adjustments(clips, {"clip": -5.0})
+        assert result[Path("/a/clip.MP4")].start_seconds == pytest.approx(0.0)
+
+    def test_no_match_leaves_segment_unchanged(self) -> None:
+        from tubearchive.domain.services.external_audio import apply_clip_adjustments
+
+        clips = {Path("/a/DJI_0001.MP4"): self._seg(10.0)}
+        result = apply_clip_adjustments(clips, {"0004": 4.0})
+        assert result[Path("/a/DJI_0001.MP4")].start_seconds == pytest.approx(10.0)

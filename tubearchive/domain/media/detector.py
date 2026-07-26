@@ -15,11 +15,14 @@ ffprobe를 서브프로세스로 실행하여 영상 파일의 기술 메타데�
     :class:`~tubearchive.domain.models.video.VideoMetadata` 데이터클래스
 """
 
+import contextlib
 import json
 import logging
+import math
 import re
 import subprocess
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -672,7 +675,7 @@ def _extract_device_model(probe_data: dict[str, Any], video_path: Path) -> str |
     return _build_device_name(exif.get("Make"), exif.get("Model"))
 
 
-def _run_ffprobe(video_path: Path) -> dict[str, Any]:
+def _run_ffprobe(video_path: Path, *, ffprobe_path: str = "ffprobe") -> dict[str, Any]:
     """ffprobe를 실행하여 스트림·포맷 정보를 JSON으로 반환한다.
 
     ``-show_streams -show_format`` 옵션으로 모든 스트림과
@@ -688,7 +691,7 @@ def _run_ffprobe(video_path: Path) -> dict[str, Any]:
         RuntimeError: ffprobe 실행 실패 또는 JSON 파싱 오류.
     """
     cmd = [
-        "ffprobe",
+        ffprobe_path,
         "-v",
         "quiet",
         "-print_format",
@@ -711,6 +714,118 @@ def _run_ffprobe(video_path: Path) -> dict[str, Any]:
         raise RuntimeError(f"ffprobe failed: {e.stderr}") from e
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Failed to parse ffprobe output: {e}") from e
+
+
+def get_video_creation_time(video_path: Path) -> datetime | None:
+    """영상 파일의 촬영 시각을 UTC datetime으로 반환한다.
+
+    ffprobe ``format.tags.creation_time`` 을 우선 사용하고,
+    실패 시 ``None`` 을 반환한다.
+    """
+    try:
+        probe_data = _run_ffprobe(video_path)
+    except RuntimeError:
+        return None
+    creation_time_str = probe_data.get("format", {}).get("tags", {}).get("creation_time")
+    if not creation_time_str:
+        return None
+    try:
+        # ISO 8601: "2026-06-05T10:08:11.000000Z"
+        dt = datetime.fromisoformat(creation_time_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            # 타임존 정보가 없으면 ffprobe 표준에 따라 UTC로 간주
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+_DJI_FILENAME_TS_PATTERN = re.compile(r"^DJI_(\d{14})_\d{4}_\w\.\w+$", re.IGNORECASE)
+
+
+def detect_local_timezone_offset(video_path: Path) -> int | None:
+    """DJI 파일명(로컬 시각)과 ffprobe UTC creation_time 비교로 timezone offset(초) 반환.
+
+    DJI 파일명에는 로컬 촬영 시각이, ffprobe ``creation_time`` 태그에는 UTC가
+    저장된다. 두 값의 차이를 15분 단위로 반올림해 timezone offset을 구한다.
+
+    Returns:
+        UTC+9(KST)이면 32400, 감지 실패 시 None
+    """
+    match = _DJI_FILENAME_TS_PATTERN.match(video_path.name)
+    if not match:
+        return None
+    try:
+        local_dt = datetime.strptime(match.group(1), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
+    utc_dt = get_video_creation_time(video_path)
+    if utc_dt is None:
+        return None
+
+    diff_seconds = (local_dt - utc_dt).total_seconds()
+    # 15분(900초) 단위로 반올림해 clock drift 노이즈 제거
+    return round(diff_seconds / 900) * 900
+
+
+def get_audio_bext_start_utc(
+    audio_path: Path,
+    local_tz_offset_seconds: int,
+    *,
+    ffprobe_path: str = "ffprobe",
+) -> datetime | None:
+    """WAV BEXT time_reference + date 태그로 녹음 시작 시각(UTC naive datetime)을 반환.
+
+    TASCAM 등 필드 레코더의 BWF BEXT 청크에서 ``time_reference`` (자정부터 샘플 수)와
+    ``date`` 태그(YYYY-MM-DD)를 읽어 UTC datetime으로 변환한다.
+
+    Args:
+        audio_path: WAV 파일 경로
+        local_tz_offset_seconds: 레코더 로컬 timezone offset(초). 예: KST(UTC+9) = 32400
+        ffprobe_path: 사용할 ffprobe 실행 파일 경로.
+
+    Returns:
+        녹음 시작 UTC naive datetime, 실패 시 None
+    """
+    try:
+        probe_data = _run_ffprobe(audio_path, ffprobe_path=ffprobe_path)
+    except RuntimeError:
+        return None
+
+    tags = probe_data.get("format", {}).get("tags", {})
+    date_str = tags.get("date")
+    if isinstance(date_str, str):
+        date_str = date_str.strip()
+    time_ref_str = tags.get("time_reference")
+
+    if not date_str or time_ref_str is None:
+        return None
+
+    sample_rate: float | None = None
+    for stream in probe_data.get("streams", []):
+        if stream.get("codec_type") == "audio":
+            sr_str = stream.get("sample_rate")
+            if sr_str is not None:
+                with contextlib.suppress(ValueError):
+                    sample_rate = float(sr_str)
+            break
+
+    if sample_rate is None or not math.isfinite(sample_rate) or sample_rate <= 0:
+        return None
+
+    try:
+        time_reference = float(time_ref_str)
+        if not math.isfinite(time_reference) or time_reference < 0:
+            return None
+        seconds_from_midnight = time_reference / sample_rate
+        if not 0.0 <= seconds_from_midnight < 86400.0:
+            return None
+        wav_local_midnight = datetime.strptime(date_str, "%Y-%m-%d")
+        wav_local_dt = wav_local_midnight + timedelta(seconds=seconds_from_midnight)
+        return wav_local_dt - timedelta(seconds=local_tz_offset_seconds)
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def _parse_frame_rate(frame_rate_str: str) -> float:

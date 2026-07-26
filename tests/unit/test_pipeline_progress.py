@@ -195,10 +195,11 @@ def test_transcode_sequential_emits_start_and_done_events(tmp_path: Path) -> Non
     opts = TranscodeOptions()
 
     with (
-        patch("tubearchive.app.cli.pipeline.Transcoder") as mock_tc_cls,
-        patch("tubearchive.app.cli.pipeline.detect_metadata"),
+        patch("tubearchive.app.cli.pipeline.transcode.Transcoder") as mock_tc_cls,
+        patch("tubearchive.app.cli.pipeline.transcode.detect_metadata"),
         patch(
-            "tubearchive.app.cli.pipeline._collect_clip_info", return_value=fake_result.clip_info
+            "tubearchive.app.cli.pipeline.transcode._collect_clip_info",
+            return_value=fake_result.clip_info,
         ),
     ):
         mock_tc = MagicMock()
@@ -242,9 +243,12 @@ def test_transcode_parallel_emits_start_and_done_events(tmp_path: Path) -> None:
 
     # _transcode_single이 실제로 실행되어야 FileStartEvent가 워커 내부에서 emit된다.
     with (
-        patch("tubearchive.app.cli.pipeline.Transcoder") as mock_tc_cls,
-        patch("tubearchive.app.cli.pipeline.detect_metadata"),
-        patch("tubearchive.app.cli.pipeline._collect_clip_info", return_value=fake_result_clip),
+        patch("tubearchive.app.cli.pipeline.transcode.Transcoder") as mock_tc_cls,
+        patch("tubearchive.app.cli.pipeline.transcode.detect_metadata"),
+        patch(
+            "tubearchive.app.cli.pipeline.transcode._collect_clip_info",
+            return_value=fake_result_clip,
+        ),
     ):
         mock_tc = MagicMock()
         mock_tc_cls.return_value.__enter__ = MagicMock(return_value=mock_tc)
@@ -292,10 +296,10 @@ def test_transcode_parallel_emits_done_for_all_files_on_partial_failure(
         return clip_a if call_count == 1 else clip_b
 
     with (
-        patch("tubearchive.app.cli.pipeline.Transcoder") as mock_tc_cls,
-        patch("tubearchive.app.cli.pipeline.detect_metadata"),
+        patch("tubearchive.app.cli.pipeline.transcode.Transcoder") as mock_tc_cls,
+        patch("tubearchive.app.cli.pipeline.transcode.detect_metadata"),
         patch(
-            "tubearchive.app.cli.pipeline._collect_clip_info",
+            "tubearchive.app.cli.pipeline.transcode._collect_clip_info",
             side_effect=fake_collect_clip_info,
         ),
     ):

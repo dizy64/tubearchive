@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 from array import array
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -141,6 +142,91 @@ def create_pulse_video(path: Path, *, duration: float, pulses: tuple[float, ...]
         "aac",
         "-b:a",
         "128k",
+        str(path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {result.stderr}")
+    return path
+
+
+def create_bext_wav_part(
+    path: Path,
+    source: Path,
+    *,
+    source_start: float,
+    duration: float,
+    start_utc: datetime,
+    sample_rate: int = 48000,
+    local_tz_offset_seconds: int = 32400,
+) -> Path:
+    """실제 BWF BEXT date/time_reference를 가진 분할 WAV를 만든다."""
+    local_start = start_utc + timedelta(seconds=local_tz_offset_seconds)
+    local_midnight = datetime.combine(local_start.date(), datetime.min.time())
+    time_reference = int((local_start - local_midnight).total_seconds() * sample_rate)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        str(source_start),
+        "-i",
+        str(source),
+        "-t",
+        str(duration),
+        "-map",
+        "0:a:0",
+        "-c:a",
+        "pcm_s16le",
+        "-write_bext",
+        "1",
+        "-metadata",
+        f"date={local_start:%Y-%m-%d}",
+        "-metadata",
+        f"time_reference={time_reference}",
+        str(path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {result.stderr}")
+    return path
+
+
+def create_video_from_audio_segment(
+    path: Path,
+    audio_source: Path,
+    *,
+    source_start: float,
+    duration: float,
+    creation_time_utc: datetime,
+) -> Path:
+    """보이스레코더 구간과 같은 오디오 및 촬영 시각 메타데이터를 가진 클립을 만든다."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=duration={duration}:size=320x240:rate=30",
+        "-ss",
+        str(source_start),
+        "-i",
+        str(audio_source),
+        "-t",
+        str(duration),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-metadata",
+        f"creation_time={creation_time_utc.isoformat(timespec='milliseconds')}Z",
         str(path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -325,3 +411,60 @@ class TestExternalAudio:
         assert result_path.stat().st_size > 0
         assert get_audio_stream_count(result_path) >= 1
         assert abs(get_video_duration(result_path) - 4.0) < 1.0
+
+    def test_external_audio_dir_long_scope_spans_split_bext_wavs(
+        self,
+        e2e_video_dir: Path,
+        e2e_output_dir: Path,
+        e2e_db: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """BEXT 분할 WAV 폴더를 실제 long 파이프라인에서 경계 걸침까지 처리한다."""
+        recording_start = datetime(2026, 7, 16, 1, 0, 0)
+        clip_start = recording_start + timedelta(seconds=1.5)
+        full_recording = create_pulse_audio(
+            e2e_output_dir / "full_recorder.wav",
+            duration=4.5,
+            pulses=(0.4, 1.6, 2.8, 3.9),
+        )
+        wav_dir = e2e_output_dir / "split_recorder"
+        wav_dir.mkdir()
+        create_bext_wav_part(
+            wav_dir / "rec_001.wav",
+            full_recording,
+            source_start=0.0,
+            duration=2.0,
+            start_utc=recording_start,
+        )
+        create_bext_wav_part(
+            wav_dir / "rec_002.wav",
+            full_recording,
+            source_start=2.0,
+            duration=2.5,
+            start_utc=recording_start + timedelta(seconds=2.0),
+        )
+        clip = create_video_from_audio_segment(
+            e2e_video_dir / "DJI_20260716100001_0001_D.MOV",
+            full_recording,
+            source_start=1.5,
+            duration=2.0,
+            creation_time_utc=clip_start,
+        )
+
+        output = e2e_output_dir / "external_split_long_output.mp4"
+        args = make_pipeline_args(
+            [clip],
+            output,
+            db_path=e2e_db,
+            monkeypatch=monkeypatch,
+            external_audio_dir=wav_dir,
+            external_audio_scope="long",
+            external_audio_mode="replace",
+        )
+
+        result_path = run_pipeline(args)
+
+        assert result_path.exists()
+        assert result_path.stat().st_size > 0
+        assert get_audio_stream_count(result_path) >= 1
+        assert abs(get_video_duration(result_path) - 2.0) < 1.0

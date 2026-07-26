@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from tubearchive.app.cli.validators import ValidatedArgs
 from tubearchive.app.tui.models import TuiOptionState
+from tubearchive.shared.validators import parse_clip_adjust_list
 
 
 def build_validated_args(
@@ -60,6 +62,20 @@ def build_validated_args(
 
     timelapse_resolution: str | None = state.timelapse_resolution or None
 
+    external_audio_clip_adjustments = parse_clip_adjust_list(
+        [item for item in state.external_audio_clip_adjustments_raw.split(",") if item.strip()],
+        context="클립별 수동 보정",
+    )
+
+    # TUI 입력은 CLI validator를 우회하므로 wav offset의 유한성을 여기서 보장한다.
+    # NaN/inf가 타임스탬프 정렬 계산에 전파되면 동작이 정의되지 않는다.
+    if not math.isfinite(state.external_audio_wav_offset):
+        raise ValueError("WAV 시작 보정 값이 유한한 수여야 합니다.")
+    if state.external_audio_scope == "single" and (
+        state.external_audio_wav_offset != 0.0 or external_audio_clip_adjustments
+    ):
+        raise ValueError("WAV 시작 보정과 클립별 수동 보정은 long 범위에서만 사용할 수 있습니다.")
+
     exclude_patterns: list[str] | None = None
     if state.exclude_patterns.strip():
         exclude_patterns = [p.strip() for p in state.exclude_patterns.split(",") if p.strip()]
@@ -85,10 +101,12 @@ def build_validated_args(
         sync_audio_clap=state.sync_audio_clap,
         external_audio_drift_correction=state.external_audio_drift_correction,
         external_audio_offset=state.external_audio_offset,
+        external_audio_wav_offset=state.external_audio_wav_offset,
         external_audio_mode=state.external_audio_mode,
         camera_audio_volume=state.camera_audio_volume,
         external_audio_min_confidence=state.external_audio_min_confidence,
         external_audio_match_window=state.external_audio_match_window,
+        external_audio_clip_adjustments=external_audio_clip_adjustments,
         # BGM
         bgm_path=bgm_path,
         bgm_volume=state.bgm_volume,
@@ -176,10 +194,11 @@ def _validate_external_audio_options(
     """TUI에서 조합 가능한 외부 오디오 옵션을 CLI 검증 규칙과 맞춘다."""
     if external_audio_scope not in {"single", "long"}:
         raise ValueError("외부 오디오 범위는 single 또는 long이어야 합니다.")
-    if external_audio_scope == "long" and external_audio_path is None:
-        raise ValueError("긴 녹음 범위는 외부 오디오 파일이 필요합니다.")
-    if external_audio_scope == "long" and external_audio_dir is not None:
-        raise ValueError("긴 녹음 범위는 외부 오디오 후보 디렉토리와 함께 사용할 수 없습니다.")
+    if external_audio_path is not None and external_audio_dir is not None:
+        raise ValueError("외부 오디오 파일과 디렉터리는 동시에 지정할 수 없습니다.")
+    has_external = external_audio_path is not None or external_audio_dir is not None
+    if external_audio_scope == "long" and not has_external:
+        raise ValueError("긴 녹음 범위는 외부 오디오 파일 또는 WAV 디렉토리가 필요합니다.")
     if sync_audio_clap and external_audio_path is None and external_audio_dir is None:
         raise ValueError("박수/피크 자동 싱크는 외부 오디오 파일 또는 후보 디렉토리가 필요합니다.")
     if (

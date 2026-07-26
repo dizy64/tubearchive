@@ -200,6 +200,92 @@ async def test_pipeline_uses_audio_browser_panel() -> None:
 
 
 @pytest.mark.asyncio
+async def test_audio_analysis_invalid_adjustment_keeps_modal_open(tmp_path: Path) -> None:
+    """잘못된 수동 보정값은 조용히 무시하지 않고 수정할 수 있게 모달을 유지한다."""
+    from textual.widgets import Input
+
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.audio_analysis_panel import AudioAnalysisPanel
+    from tubearchive.domain.media.audio_sync import ExternalAudioSegment
+
+    app = TubeArchiveApp()
+    panel = AudioAnalysisPanel(
+        {
+            Path("DJI_0001.MP4"): ExternalAudioSegment(
+                path=tmp_path / "audio.wav",
+                start_seconds=0.0,
+                duration_seconds=1.0,
+                confidence=1.0,
+            )
+        }
+    )
+    async with app.run_test(headless=True, size=(120, 40)) as pilot:
+        app.push_screen(panel)
+        await pilot.pause()
+        app.screen.query_one(Input).value = "5.o"
+
+        await pilot.click("#apply-btn")
+        await pilot.pause()
+
+        assert app.screen is panel
+
+
+@pytest.mark.asyncio
+async def test_audio_analysis_cancel_returns_none(tmp_path: Path) -> None:
+    """취소와 빈 보정값 적용을 구분한다."""
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.audio_analysis_panel import AudioAnalysisPanel
+
+    results: list[str | None] = []
+    app = TubeArchiveApp()
+    panel = AudioAnalysisPanel({})
+    async with app.run_test(headless=True, size=(120, 40)) as pilot:
+        app.push_screen(panel, results.append)
+        await pilot.pause()
+
+        await pilot.click("#cancel-btn")
+        await pilot.pause()
+
+    assert results == [None]
+
+
+@pytest.mark.parametrize("analysis_fails", [False, True])
+def test_audio_analysis_worker_always_removes_temp_dir(
+    tmp_path: Path,
+    analysis_fails: bool,
+) -> None:
+    """사전 분석 성공·실패 모두 실행별 임시 디렉터리를 제거한다."""
+    from unittest.mock import MagicMock, patch
+
+    from tubearchive.app.tui.screens.pipeline import PipelinePane
+
+    temp_dir = tmp_path / "analysis"
+    temp_dir.mkdir()
+    (temp_dir / "span.wav").write_bytes(b"temporary")
+    pane = MagicMock()
+    pane.app = MagicMock()
+    worker = PipelinePane.__dict__["_run_audio_analysis_worker"].__wrapped__
+    outcome: object = RuntimeError("analysis failed") if analysis_fails else {}
+
+    with patch(
+        "tubearchive.app.tui.screens.pipeline.analyze_long_audio_segments",
+        side_effect=outcome if isinstance(outcome, Exception) else None,
+        return_value=outcome,
+    ):
+        worker(
+            pane,
+            [],
+            tmp_path,
+            temp_dir,
+            [],
+            [],
+            0.0,
+        )
+
+    assert not temp_dir.exists()
+
+
+@pytest.mark.asyncio
 async def test_pipeline_audio_browser_long_selection_updates_options(tmp_path: Path) -> None:
     """긴 외부 녹음 선택은 경로와 scope=long을 옵션 패널에 반영한다."""
     from textual.widgets import Label
@@ -227,6 +313,59 @@ async def test_pipeline_audio_browser_long_selection_updates_options(tmp_path: P
         assert state.external_audio_scope == "long"
         assert state.sync_audio_clap is False
         assert "긴 외부 녹음 적용" in str(status.render())
+
+
+@pytest.mark.asyncio
+async def test_pipeline_audio_browser_long_directory_selection_sets_long_scope(
+    tmp_path: Path,
+) -> None:
+    """긴 녹음 폴더 선택은 external_audio_dir와 scope=long을 함께 설정한다."""
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.audio_browser import AudioBrowserPane
+    from tubearchive.app.tui.widgets.option_panels import OptionsPane
+
+    app = TubeArchiveApp(initial_path=tmp_path)
+
+    async with app.run_test(headless=True, size=(120, 40)):
+        pane = app.query_one(PipelinePane)
+        options = pane.query_one(OptionsPane)
+
+        pane.on_audio_browser_pane_audio_selected(
+            AudioBrowserPane.AudioSelected(tmp_path.resolve(), "long-dir"),
+        )
+
+        state = options.collect_state()
+        assert state.external_audio_path == ""
+        assert state.external_audio_dir == str(tmp_path.resolve())
+        assert state.external_audio_scope == "long"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_long_directory_selection_refreshes_analyze_button(
+    tmp_path: Path,
+) -> None:
+    """영상 선택 후 긴 녹음 폴더를 고르면 사전 분석 버튼이 활성화된다."""
+    from unittest.mock import patch
+
+    from textual.widgets import Button
+
+    from tubearchive.app.tui.app import TubeArchiveApp
+    from tubearchive.app.tui.widgets.audio_browser import AudioBrowserPane
+    from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
+
+    app = TubeArchiveApp(initial_path=tmp_path)
+
+    async with app.run_test(headless=True, size=(120, 40)):
+        pane = app.query_one(PipelinePane)
+        browser = pane.query_one(FileBrowserPane)
+        analyze = pane.query_one("#analyze-button", Button)
+
+        with patch.object(browser, "get_selected_targets", return_value=[tmp_path / "clip.mp4"]):
+            pane.on_audio_browser_pane_audio_selected(
+                AudioBrowserPane.AudioSelected(tmp_path.resolve(), "long-dir"),
+            )
+
+        assert analyze.disabled is False
 
 
 @pytest.mark.asyncio

@@ -5,10 +5,68 @@
 """
 
 import logging
+import math
 import shutil
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def parse_finite_float(raw: str, label: str) -> float:
+    """``raw`` 문자열을 float으로 파싱하고 유한한 수인지 검증한다.
+
+    Args:
+        raw: 파싱할 문자열 (공백 포함 가능)
+        label: 오류 메시지에 노출할 파라미터/필드 이름
+
+    Returns:
+        파싱된 유한한 float 값
+
+    Raises:
+        ValueError: 숫자가 아니거나 inf/nan인 경우
+    """
+    try:
+        value = float(raw.strip())
+    except ValueError as exc:
+        raise ValueError(f"{label} 값이 숫자가 아닙니다: {raw!r}") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"{label} 값은 유한한 수여야 합니다: {raw!r}")
+    return value
+
+
+def parse_clip_adjust_list(
+    items: list[str],
+    *,
+    format_hint: str = "패턴:초",
+    context: str = "clip-adjust",
+) -> dict[str, float]:
+    """``"패턴:초"`` 형식의 문자열 목록을 ``{pattern: seconds}`` 딕셔너리로 파싱한다.
+
+    Args:
+        items: "패턴:초" 형식의 문자열 목록. 빈 문자열은 무시된다.
+        format_hint: 오류 메시지에 표시할 형식 힌트 (기본: "패턴:초")
+        context: 오류 메시지에 표시할 파라미터/필드 이름 (기본: "clip-adjust")
+
+    Returns:
+        ``{pattern: offset_seconds}`` 딕셔너리
+
+    Raises:
+        ValueError: 형식이 잘못되었거나 초 값이 유한한 수가 아닐 경우
+    """
+    result: dict[str, float] = {}
+    for raw in items:
+        raw = raw.strip()
+        if not raw:
+            continue
+        if ":" not in raw:
+            raise ValueError(f"{context} 형식이 올바르지 않습니다 ({format_hint}): {raw!r}")
+        pattern, _, seconds_str = raw.partition(":")
+        pattern = pattern.strip()
+        seconds_str = seconds_str.strip()
+        if not pattern:
+            raise ValueError(f"{context} 패턴이 비어있습니다: {raw!r}")
+        result[pattern] = parse_finite_float(seconds_str, f"{context} 초 값")
+    return result
 
 
 # 지원되는 비디오 확장자

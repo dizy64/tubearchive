@@ -1,6 +1,6 @@
 [project]
 name = "tubearchive"
-version = "0.6.1"
+version = "0.6.2"
 description = "4K 영상 표준화 및 병합 CLI 도구 (Project Komorebi)"
 authors = [
     {name = "Donggeun Lee", email = "i@dizy.me"}
@@ -30,6 +30,7 @@ dev = [
     "pytest-cov>=4.1.0",
     "mypy>=1.8.0",
     "ruff>=0.1.0",
+    "pip>=26.1.2",
     "pip-audit>=2.7.0",
     "radon>=6.0.0",
     "textual-dev>=1.0.0",

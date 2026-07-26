@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import logging
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -21,10 +22,12 @@ from textual.widgets import Button, Label
 from tubearchive.app.cli.context import PipelineContext
 from tubearchive.app.cli.pipeline import run_pipeline
 from tubearchive.app.tui.models import TuiOptionState
+from tubearchive.app.tui.widgets.audio_analysis_panel import AudioAnalysisPanel
 from tubearchive.app.tui.widgets.audio_browser import AudioBrowserPane
 from tubearchive.app.tui.widgets.file_browser import FileBrowserPane
 from tubearchive.app.tui.widgets.file_progress_panel import FileProgressPanel
 from tubearchive.app.tui.widgets.option_panels import OptionsPane
+from tubearchive.domain.services.external_audio import analyze_long_audio_segments
 from tubearchive.infra.notification.notifier import Notifier
 
 logger = logging.getLogger(__name__)
@@ -107,6 +110,9 @@ class PipelinePane(Widget):
         padding: 0 2;
     }
     #run-button {
+        margin-right: 1;
+    }
+    #analyze-button {
         margin-right: 2;
     }
     #pipeline-status {
@@ -141,6 +147,12 @@ class PipelinePane(Widget):
             yield FileProgressPanel(id="pipeline-progress")
             with Horizontal(id="pipeline-footer"):
                 yield Button("실행", id="run-button", variant="primary", disabled=True)
+                yield Button(
+                    "사전 분석",
+                    id="analyze-button",
+                    variant="default",
+                    disabled=True,
+                )
                 yield Label(
                     "파일을 선택한 후 실행 버튼을 누르세요.",
                     id="pipeline-status",
@@ -190,6 +202,11 @@ class PipelinePane(Widget):
             options.set_field_value("external_audio_scope", "long")
             options.set_field_value("sync_audio_clap", False)
             message = f"긴 외부 녹음 적용: {event.path.name}"
+        elif event.target == "long-dir":
+            options.set_field_value("external_audio_path", "")
+            options.set_field_value("external_audio_dir", str(event.path))
+            options.set_field_value("external_audio_scope", "long")
+            message = f"긴 외부 오디오 폴더 적용: {event.path.name}"
         else:
             options.set_field_value("external_audio_path", "")
             options.set_field_value("external_audio_dir", str(event.path))
@@ -197,6 +214,7 @@ class PipelinePane(Widget):
             message = f"외부 오디오 후보 폴더 적용: {event.path}"
 
         self.query_one("#pipeline-status", Label).update(message)
+        self._refresh_analyze_button(self.query_one(FileBrowserPane).get_selected_targets())
 
     # ------------------------------------------------------------------
     # 버튼 이벤트
@@ -205,6 +223,8 @@ class PipelinePane(Widget):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "run-button":
             self._launch_pipeline()
+        elif event.button.id == "analyze-button":
+            self._launch_audio_analysis()
 
     # ------------------------------------------------------------------
     # 내부 헬퍼
@@ -216,19 +236,120 @@ class PipelinePane(Widget):
         browser = self.query_one(FileBrowserPane)
         targets = browser.get_selected_targets()
         has_target = bool(targets)
-        btn = self.query_one("#run-button", Button)
-        btn.disabled = not has_target
+        self.query_one("#run-button", Button).disabled = not has_target
+        self._refresh_analyze_button(targets)
         status = self.query_one("#pipeline-status", Label)
         if has_target:
             status.update(f"준비됨 ({len(targets)}개): {targets[0]}")
         else:
             status.update("파일을 선택한 후 실행 버튼을 누르세요.")
 
+    def _refresh_analyze_button(self, targets: list[Path]) -> None:
+        """scope=long이고 외부 오디오 디렉토리가 설정된 경우에만 사전 분석 버튼 활성화."""
+        options = self.query_one(OptionsPane)
+        state = options.collect_state()
+        can_analyze = (
+            bool(targets)
+            and state.external_audio_scope == "long"
+            and bool(state.external_audio_dir.strip())
+            and not self._pipeline_active
+        )
+        self.query_one("#analyze-button", Button).disabled = not can_analyze
+
     def _show_progress_view(self) -> None:
         """옵션 뷰 → 진행률 뷰로 전환."""
         self.query_one("#pipeline-body").display = False
         self.query_one("#pipeline-progress").display = True
         self.query_one("#run-button", Button).disabled = True
+        self.query_one("#analyze-button", Button).disabled = True
+
+    def _launch_audio_analysis(self) -> None:
+        """외부 오디오 사전 분석 worker 실행."""
+        from tubearchive.app.cli.pipeline import get_temp_dir
+
+        browser = self.query_one(FileBrowserPane)
+        options = self.query_one(OptionsPane)
+        targets = browser.get_selected_targets()
+        state = options.collect_state()
+        wav_dir = Path(state.external_audio_dir.strip()).expanduser()
+        temp_dir = get_temp_dir()
+        # run_pipeline과 동일한 필터를 사전 분석에도 적용해 제외 대상(템플릿/타임랩스 등)이
+        # 분석에 포함되지 않도록 한다.
+        exclude_patterns = [p.strip() for p in state.exclude_patterns.split(",") if p.strip()]
+        include_only_patterns = [
+            p.strip() for p in state.include_only_patterns.split(",") if p.strip()
+        ]
+
+        status = self.query_one("#pipeline-status", Label)
+        status.update("오디오 사전 분석 중…")
+        self.query_one("#analyze-button", Button).disabled = True
+        self._run_audio_analysis_worker(
+            targets,
+            wav_dir,
+            temp_dir,
+            exclude_patterns,
+            include_only_patterns,
+            state.external_audio_wav_offset,
+        )
+
+    @work(thread=True)
+    def _run_audio_analysis_worker(
+        self,
+        targets: list[Path],
+        wav_dir: Path,
+        temp_dir: Path,
+        exclude_patterns: list[str],
+        include_only_patterns: list[str],
+        wav_start_offset_seconds: float,
+    ) -> None:
+        """worker 스레드에서 외부 오디오 세그먼트 분석 실행."""
+        try:
+            segments = analyze_long_audio_segments(
+                targets,
+                wav_dir,
+                temp_dir,
+                exclude_patterns=exclude_patterns or None,
+                include_only_patterns=include_only_patterns or None,
+                wav_start_offset_seconds=wav_start_offset_seconds,
+            )
+            self.app.call_from_thread(self._on_analysis_done, segments)
+        except Exception as exc:
+            self.app.call_from_thread(self._on_analysis_error, str(exc))
+        finally:
+            try:
+                shutil.rmtree(temp_dir)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                logger.warning(
+                    "오디오 사전 분석 임시 디렉터리 정리 실패: %s", temp_dir, exc_info=True
+                )
+
+    def _on_analysis_done(self, segments: object) -> None:
+        from tubearchive.domain.media.audio_sync import ExternalAudioSegment
+
+        status = self.query_one("#pipeline-status", Label)
+        status.update("분석 완료 — 결과를 확인하세요.")
+        self._refresh_analyze_button(self.query_one(FileBrowserPane).get_selected_targets())
+
+        if not isinstance(segments, dict):
+            return
+
+        typed: dict[Path, ExternalAudioSegment] = {
+            k: v for k, v in segments.items() if isinstance(v, ExternalAudioSegment)
+        }
+
+        def _apply(result: str | None) -> None:
+            if result is not None:
+                options = self.query_one(OptionsPane)
+                options.set_field_value("external_audio_clip_adjustments_raw", result)
+                self.query_one("#pipeline-status", Label).update(f"보정값 적용됨: {result}")
+
+        self.app.push_screen(AudioAnalysisPanel(typed), _apply)
+
+    def _on_analysis_error(self, message: str) -> None:
+        self.query_one("#pipeline-status", Label).update(f"[red]분석 오류: {message}[/]")
+        self._refresh_analyze_button(self.query_one(FileBrowserPane).get_selected_targets())
 
     def _launch_pipeline(self) -> None:
         """ValidatedArgs 빌드 → worker 실행."""
