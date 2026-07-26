@@ -185,11 +185,12 @@ class FFmpegExecutor:
             seek = seek_start or 0.0
             if external_audio_start is not None or seek_start:
                 start = (external_audio_start or 0.0) + seek
-                cmd.extend(["-ss", f"{start:g}"])
+                cmd.extend(["-ss", f"{start:.15g}"])
             if external_audio_duration is not None:
-                cmd.extend(["-t", f"{max(0.0, external_audio_duration - seek):g}"])
+                duration = max(0.0, external_audio_duration - seek)
+                cmd.extend(["-t", f"{duration:.15g}"])
             if external_audio_offset:
-                cmd.extend(["-itsoffset", f"{external_audio_offset:g}"])
+                cmd.extend(["-itsoffset", f"{external_audio_offset:.15g}"])
             cmd.extend(["-i", str(external_audio_path)])
 
         # 오디오 스트림이 없으면 lavfi 무음 입력 추가 (concat 호환성)

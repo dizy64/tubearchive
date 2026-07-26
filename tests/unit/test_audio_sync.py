@@ -492,6 +492,44 @@ def test_long_external_audio_sorts_unsorted_video_inputs_by_timestamp() -> None:
     envelope_mapper.assert_not_called()
 
 
+def test_timestamp_long_external_audio_allows_video_without_camera_audio() -> None:
+    """타임스탬프 정렬은 카메라 오디오가 없는 영상도 허용한다."""
+    from tubearchive.domain.services.external_audio import analyze_long_external_audio
+
+    video_path = Path("silent.mp4")
+    video_file = MagicMock(path=video_path)
+    metadata = MagicMock(duration_seconds=10.0, has_audio=False)
+    segment = ExternalAudioSegment(Path("rec.wav"), 0.0, 10.0, 1.0)
+
+    with (
+        patch(
+            "tubearchive.domain.services.external_audio.get_video_creation_time",
+            return_value=datetime(2026, 1, 1, 0, 0, 0),
+        ),
+        patch(
+            "tubearchive.domain.services.external_audio._auto_detect_wav_offset",
+            return_value=0.0,
+        ),
+        patch(
+            "tubearchive.domain.services.external_audio.calculate_external_audio_segments_from_timestamps",
+            return_value={video_path: segment},
+        ) as timestamp_mapper,
+        patch(
+            "tubearchive.domain.services.external_audio.calculate_external_audio_segments"
+        ) as envelope_mapper,
+    ):
+        result = analyze_long_external_audio(
+            [video_file],
+            Path("rec.wav"),
+            min_confidence=0.35,
+            metadata_cache={video_path: metadata},
+        )
+
+    assert result == {video_path: segment}
+    timestamp_mapper.assert_called_once()
+    envelope_mapper.assert_not_called()
+
+
 def test_external_audio_dir_service_forwards_wav_offset() -> None:
     """서비스 경로가 external-audio-dir의 WAV 보정값을 매퍼에 전달한다."""
     from tubearchive.domain.services.external_audio import analyze_long_external_audio_from_dir

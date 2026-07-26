@@ -112,10 +112,6 @@ def analyze_long_external_audio(
     if not video_files:
         raise AudioSyncError("분석할 영상 파일이 없습니다.")
 
-    reference_durations = _build_reference_durations(
-        video_files, metadata_cache, require_audio=True
-    )
-
     logger.info("Analyzing long external audio: %s", external_audio_path)
 
     # 타임스탬프 기반 계산 시도
@@ -135,6 +131,12 @@ def analyze_long_external_audio(
         if len(set(ordered_ts)) < len(ordered_ts):
             logger.warning("타임스탬프 중복 감지 → envelope/transient 매칭으로 폴백")
             reference_timestamps = {}
+
+    reference_durations = _build_reference_durations(
+        video_files,
+        metadata_cache,
+        require_audio=not bool(reference_timestamps),
+    )
 
     if reference_timestamps:
         effective_offset = wav_start_offset_seconds

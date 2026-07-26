@@ -234,6 +234,33 @@ class TestFFmpegExecutor:
         assert ss_val == pytest.approx(405.554 + 24.237, abs=0.01)
         assert t_val == pytest.approx(2423.72 - 24.237, abs=0.01)
 
+    def test_build_command_preserves_large_external_audio_time_precision(
+        self, executor: FFmpegExecutor
+    ) -> None:
+        """긴 녹음의 큰 시각 인자도 밀리초 이하 정밀도를 보존한다."""
+        cmd = executor.build_transcode_command(
+            input_path=Path("/input/video.mp4"),
+            output_path=Path("/output/video.mp4"),
+            profile=PROFILE_SDR,
+            video_filter="scale=3840:2160",
+            external_audio_path=Path("/input/recorder.wav"),
+            external_audio_start=12345.678901,
+            external_audio_duration=12346.789012,
+            external_audio_offset=4973.123456,
+        )
+
+        external_input_index = cmd.index("/input/recorder.wav")
+        assert cmd[external_input_index - 7 : external_input_index + 1] == [
+            "-ss",
+            "12345.678901",
+            "-t",
+            "12346.789012",
+            "-itsoffset",
+            "4973.123456",
+            "-i",
+            "/input/recorder.wav",
+        ]
+
     def test_build_command_external_audio_duration_only_seek_correction(
         self, executor: FFmpegExecutor
     ) -> None:
